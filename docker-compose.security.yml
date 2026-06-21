@@ -2,8 +2,9 @@
 #   podman-compose -f docker-compose.yml -f docker-compose.security.yml up -d --build
 #
 # Podman users: ensure the default network created by the base compose is available.
-# The toolchain container is intentionally minimal — it receives exec calls from
-# the MCP servers and writes output to /workspaces (shared volume).
+# Services:
+#   toolchain   — Kali sidecar; MCP servers exec tools into it
+#   spiderfoot  — SpiderFoot OSINT server; MCP server talks to its REST API on port 5001
 
 services:
   toolchain:
@@ -18,7 +19,6 @@ services:
     networks:
       - odysseus-net
     restart: unless-stopped
-    # Drop all capabilities; MCP servers only need exec access, not privilege
     cap_drop:
       - ALL
     cap_add:
@@ -27,9 +27,31 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  spiderfoot:
+    image: smicallef/spiderfoot:latest
+    container_name: odysseus-spiderfoot
+    hostname: odysseus-spiderfoot
+    # Port 5001 is intentionally NOT published to the host — only MCP servers
+    # on the internal network need to reach it. To access the SpiderFoot web UI
+    # directly, temporarily add: ports: ["127.0.0.1:5001:5001"]
+    volumes:
+      - spiderfoot-data:/var/spiderfoot
+    networks:
+      - odysseus-net
+    restart: unless-stopped
+    environment:
+      # Pass API keys through so SpiderFoot modules can use them.
+      # These are read from your .env file by compose.
+      SHODAN_API_KEY: "${SHODAN_API_KEY:-}"
+      VIRUSTOTAL_API_KEY: "${VIRUSTOTAL_API_KEY:-}"
+      OTX_API_KEY: "${OTX_API_KEY:-}"
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   toolchain-workspaces:
   toolchain-reports:
+  spiderfoot-data:
 
 networks:
   odysseus-net:
