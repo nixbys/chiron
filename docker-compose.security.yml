@@ -1,13 +1,34 @@
 # Overlay this on top of the base docker-compose.yml:
 #   podman-compose -f docker-compose.yml -f docker-compose.security.yml up -d --build
 #
-# Podman users: ensure the default network created by the base compose is available.
-# Services:
-#   toolchain   — Kali sidecar; MCP servers exec tools into it
+# Services added:
+#   toolchain   — Kali sidecar exposing an internal exec API on :8088
 #   spiderfoot  — SpiderFoot OSINT server; MCP server talks to its REST API on port 5001
 #   bentopdf    — BentoPDF client-side PDF toolkit; web UI at http://localhost:3000
+#
+# The odysseus service is extended to receive security env vars so the MCP servers
+# running inside it can reach the toolchain exec API and external intelligence APIs.
 
 services:
+  # ── extend upstream odysseus with security env vars ───────────────────────
+  odysseus:
+    environment:
+      # Toolchain exec API — MCP servers call this instead of podman exec
+      ODYSSEUS_TOOLCHAIN_API: "http://odysseus-toolchain:8088"
+      # Threat intelligence API keys (fill in .env)
+      SHODAN_API_KEY: "${SHODAN_API_KEY:-}"
+      VIRUSTOTAL_API_KEY: "${VIRUSTOTAL_API_KEY:-}"
+      OTX_API_KEY: "${OTX_API_KEY:-}"
+      NVD_API_KEY: "${NVD_API_KEY:-}"
+      # SpiderFoot REST endpoint
+      SPIDERFOOT_URL: "${SPIDERFOOT_URL:-http://odysseus-spiderfoot:5001}"
+      SPIDERFOOT_USERNAME: "${SPIDERFOOT_USERNAME:-}"
+      SPIDERFOOT_PASSWORD: "${SPIDERFOOT_PASSWORD:-}"
+      # PDF / BentoPDF
+      BENTOPDF_URL: "${BENTOPDF_URL:-http://localhost:3000}"
+      ODYSSEUS_DATA_DIR: "${ODYSSEUS_DATA_DIR:-./data}"
+
+  # ── Kali sidecar ──────────────────────────────────────────────────────────
   toolchain:
     build:
       context: ./docker/toolchain
@@ -17,8 +38,6 @@ services:
     volumes:
       - toolchain-workspaces:/workspaces
       - toolchain-reports:/reports
-    networks:
-      - odysseus-net
     restart: unless-stopped
     cap_drop:
       - ALL
@@ -28,8 +47,9 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # ── SpiderFoot OSINT ──────────────────────────────────────────────────────
   spiderfoot:
-    image: smicallef/spiderfoot:latest
+    image: docker.io/fopina/spiderfoot:latest
     container_name: odysseus-spiderfoot
     hostname: odysseus-spiderfoot
     # Port 5001 is intentionally NOT published to the host — only MCP servers
@@ -37,30 +57,22 @@ services:
     # directly, temporarily add: ports: ["127.0.0.1:5001:5001"]
     volumes:
       - spiderfoot-data:/var/spiderfoot
-    networks:
-      - odysseus-net
     restart: unless-stopped
     environment:
-      # Pass API keys through so SpiderFoot modules can use them.
-      # These are read from your .env file by compose.
       SHODAN_API_KEY: "${SHODAN_API_KEY:-}"
       VIRUSTOTAL_API_KEY: "${VIRUSTOTAL_API_KEY:-}"
       OTX_API_KEY: "${OTX_API_KEY:-}"
     security_opt:
       - no-new-privileges:true
 
+  # ── BentoPDF ──────────────────────────────────────────────────────────────
   bentopdf:
     image: ghcr.io/alam00000/bentopdf-simple:latest
     container_name: odysseus-bentopdf
     hostname: odysseus-bentopdf
     # Exposed on localhost only — users open http://localhost:3000 for the interactive UI.
-    # Advanced features (PyMuPDF, Ghostscript, CoherentPDF) load WASM from jsDelivr CDN
-    # by default. For an air-gapped deployment, run the bundled offline setup script and
-    # override VITE_WASM_PYMUPDF_URL / VITE_WASM_GS_URL / VITE_WASM_CPDF_URL in .env.
     ports:
       - "127.0.0.1:3000:8080"
-    networks:
-      - odysseus-net
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -69,11 +81,3 @@ volumes:
   toolchain-workspaces:
   toolchain-reports:
   spiderfoot-data:
-
-networks:
-  odysseus-net:
-    # Attach to the network the base compose already creates.
-    # Name may vary — check `podman network ls` after base stack is up
-    # and update this name if needed.
-    external: true
-    name: odysseus-red_default
