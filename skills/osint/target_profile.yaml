@@ -1,0 +1,47 @@
+name: target_profile
+version: "1.0"
+description: >
+  Passive OSINT profile builder for a target organization or individual.
+  Aggregates data from public sources only — no active scanning.
+
+inputs:
+  domain:
+    type: string
+    description: "Primary domain to investigate"
+  username:
+    type: string
+    required: false
+    description: "Optional username to search across platforms"
+
+steps:
+  - id: dns_records
+    tool: dns_enum
+    args:
+      domain: "{{ domain }}"
+    description: "Enumerate all DNS records"
+
+  - id: whois
+    tool: whois_lookup
+    args:
+      target: "{{ domain }}"
+    description: "WHOIS registration and registrar info"
+
+  - id: harvester
+    tool: harvester
+    args:
+      domain: "{{ domain }}"
+      sources: "bing,google,dnsdumpster,crtsh,hunter"
+    description: "Email, subdomain, and employee name harvest"
+
+  - id: shodan_intel
+    tool: shodan_host
+    args:
+      ip: "{{ resolved_ip }}"
+    description: "Internet exposure and known CVEs from Shodan"
+
+  - id: username_hunt
+    condition: "{{ username }}"
+    tool: username_search
+    args:
+      username: "{{ username }}"
+    description: "Cross-platform username enumeration"
