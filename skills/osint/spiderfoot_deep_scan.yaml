@@ -1,0 +1,72 @@
+name: spiderfoot_deep_scan
+version: "1.0"
+description: >
+  Comprehensive OSINT deep scan using SpiderFoot's 200+ correlated modules.
+  Runs passive collection first, then optionally escalates to active investigation.
+  All findings are grouped by type and summarised for the agent to reason over.
+  Passive mode is safe for external authorized targets with no active probing.
+
+authorization_prompt: >
+  Confirm you have authorization to collect OSINT on {{ target }}.
+  SpiderFoot passive mode does not actively probe the target but will
+  query third-party databases (Shodan, VirusTotal, HIBP, etc.).
+  Type AUTHORIZED to proceed.
+
+inputs:
+  target:
+    type: string
+    description: "Domain, IP, email, username, or subnet"
+  usecase:
+    type: string
+    enum: [passive, investigate, footprint]
+    default: passive
+    description: "passive = no active probing; investigate = balanced; footprint = full surface mapping"
+  timeout:
+    type: integer
+    default: 600
+    description: "Max seconds to wait for scan completion"
+  focus:
+    type: string
+    default: ""
+    description: "Optional SpiderFoot event type to focus results on (e.g. EMAILADDR, VULNERABILITY_CVE_CRITICAL)"
+
+steps:
+  - id: start_scan
+    tool: sf_scan_start
+    args:
+      target: "{{ target }}"
+      scan_name: "deep-osint: {{ target }}"
+      usecase: "{{ usecase }}"
+    description: "Initiate SpiderFoot scan — returns scan_id immediately"
+
+  - id: wait_and_fetch
+    tool: sf_quick_scan
+    args:
+      target: "{{ target }}"
+      usecase: "{{ usecase }}"
+      timeout: "{{ timeout }}"
+      event_type: "{{ focus }}"
+    description: "Wait for completion and retrieve correlated findings"
+
+  - id: critical_vulns
+    condition: "{{ usecase != 'passive' }}"
+    tool: sf_scan_results
+    args:
+      scan_id: "{{ start_scan.scan_id }}"
+      event_type: "VULNERABILITY_CVE_CRITICAL"
+    description: "Extract critical CVEs from findings (investigate/footprint only)"
+
+  - id: breach_data
+    tool: sf_scan_results
+    args:
+      scan_id: "{{ start_scan.scan_id }}"
+      event_type: "DATA_BREACH"
+    description: "Extract any data breach mentions"
+
+  - id: generate_report
+    tool: report_builder
+    args:
+      template: osint_summary
+      target: "{{ target }}"
+      findings: "{{ steps }}"
+    description: "Compile correlated findings into structured Markdown report"
