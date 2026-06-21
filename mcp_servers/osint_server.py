@@ -7,9 +7,10 @@ DNS enumeration, and WHOIS. All tools run inside the odysseus-toolchain sidecar.
 
 import asyncio
 import os
-import subprocess
 import sys
 from pathlib import Path
+
+import requests
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -19,8 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 server = Server("osint")
 
-TOOLCHAIN_CONTAINER = os.environ.get("ODYSSEUS_TOOLCHAIN_CONTAINER", "odysseus-toolchain")
-_RUNTIME = os.environ.get("ODYSSEUS_CONTAINER_RUNTIME", "podman")
+_TOOLCHAIN_API = os.environ.get("ODYSSEUS_TOOLCHAIN_API", "http://odysseus-toolchain:8088")
 
 TOOLS = [
     Tool(
@@ -84,12 +84,19 @@ TOOLS = [
 
 
 def _exec(cmd: list[str], timeout: int = 120) -> str:
-    full_cmd = [_RUNTIME, "exec", TOOLCHAIN_CONTAINER] + cmd
     try:
-        result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout)
-        out = (result.stdout or "") + (f"\n[stderr]\n{result.stderr}" if result.stderr else "")
+        resp = requests.post(
+            f"{_TOOLCHAIN_API}/exec",
+            json={"args": cmd, "timeout": timeout},
+            timeout=timeout + 5,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        out = (data.get("stdout") or "") + (
+            f"\n[stderr]\n{data['stderr']}" if data.get("stderr") else ""
+        )
         return out.strip() or "(no output)"
-    except subprocess.TimeoutExpired:
+    except requests.exceptions.Timeout:
         return f"[timeout] Command exceeded {timeout}s."
     except Exception as exc:  # noqa: BLE001
         return f"[error] {exc}"

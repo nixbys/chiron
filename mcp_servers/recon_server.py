@@ -8,9 +8,10 @@ The caller is responsible for obtaining written authorization before targeting a
 
 import asyncio
 import os
-import subprocess
 import sys
 from pathlib import Path
+
+import requests
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -20,10 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 server = Server("recon")
 
-# Runtime: name of the running toolchain container. Override via env.
-TOOLCHAIN_CONTAINER = os.environ.get("ODYSSEUS_TOOLCHAIN_CONTAINER", "odysseus-toolchain")
-# Prefer podman on Bazzite/Fedora hosts; fall back to docker.
-_RUNTIME = os.environ.get("ODYSSEUS_CONTAINER_RUNTIME", "podman")
+_TOOLCHAIN_API = os.environ.get("ODYSSEUS_TOOLCHAIN_API", "http://odysseus-toolchain:8088")
 
 TOOLS = [
     Tool(
@@ -73,23 +71,21 @@ TOOLS = [
 
 
 def _exec_in_toolchain(cmd: list[str], timeout: int = 300) -> str:
-    """Run a command inside the toolchain sidecar and return combined stdout+stderr."""
-    full_cmd = [_RUNTIME, "exec", TOOLCHAIN_CONTAINER] + cmd
+    """Call the toolchain exec API and return combined stdout+stderr."""
     try:
-        result = subprocess.run(
-            full_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+        resp = requests.post(
+            f"{_TOOLCHAIN_API}/exec",
+            json={"args": cmd, "timeout": timeout},
+            timeout=timeout + 5,
         )
-        output = result.stdout or ""
-        if result.stderr:
-            output += f"\n[stderr]\n{result.stderr}"
-        return output.strip() or "(no output)"
-    except subprocess.TimeoutExpired:
+        resp.raise_for_status()
+        data = resp.json()
+        out = (data.get("stdout") or "") + (
+            f"\n[stderr]\n{data['stderr']}" if data.get("stderr") else ""
+        )
+        return out.strip() or "(no output)"
+    except requests.exceptions.Timeout:
         return f"[timeout] Scan exceeded {timeout}s and was terminated."
-    except FileNotFoundError:
-        return f"[error] Container runtime '{_RUNTIME}' not found. Is podman/docker installed?"
     except Exception as exc:  # noqa: BLE001
         return f"[error] {exc}"
 

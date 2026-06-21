@@ -1,4 +1,4 @@
-FROM kalilinux/kali-rolling:latest
+FROM docker.io/kalilinux/kali-rolling:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -23,7 +23,9 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     censys \
     requests \
     dnspython \
-    python-whois
+    python-whois \
+    hashid \
+    sherlock-project
 
 # nuclei (Go binary)
 RUN curl -sL https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_linux_amd64.zip \
@@ -33,7 +35,11 @@ RUN curl -sL https://github.com/projectdiscovery/nuclei/releases/latest/download
     chmod +x /usr/local/bin/nuclei && \
     nuclei -update-templates -silent || true
 
+# Exec API — MCP servers call this instead of podman exec
+COPY exec_api.py /exec_api.py
+
 WORKDIR /workspaces
 
-# Keep container alive; Odysseus MCP servers exec into it
-CMD ["tail", "-f", "/dev/null"]
+# The exec API keeps the container alive and handles all tool invocations
+# from the MCP servers running inside the Odysseus container.
+CMD ["python3", "/exec_api.py"]
