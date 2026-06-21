@@ -28,9 +28,10 @@
 
 Odysseus Red layers a complete cybersecurity toolchain on top of the [Odysseus](https://github.com/pewdiepie-archdaemon/odysseus) self-hosted AI workspace. The base platform provides chat, agents, memory, deep research, documents, and MCP — this fork adds:
 
-- **6 cybersecurity MCP servers** wired to a Kali-based sidecar and SpiderFoot OSINT platform
-- **Pre-built agent skill workflows** for reconnaissance, OSINT, web assessment, and reporting
+- **7 cybersecurity MCP servers** wired to a Kali-based sidecar, SpiderFoot OSINT platform, and BentoPDF
+- **Pre-built agent skill workflows** for reconnaissance, OSINT, web assessment, PDF intelligence, and reporting
 - **SpiderFoot** (200+ correlated OSINT modules) running as a persistent REST API sidecar
+- **BentoPDF** — client-side PDF toolkit for metadata extraction, report assembly, and interactive editing
 - **Pentest report templates** aligned to PTES and the OWASP Testing Guide
 
 Everything runs locally. No telemetry. All tool execution stays on your own infrastructure.
@@ -66,37 +67,36 @@ Native installs, GPU notes, Windows/macOS instructions, and HTTPS are covered in
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                  Odysseus Red (port 7000)            │
-│         Chat · Agents · Research · Documents         │
-│              MCP client built-in                     │
-└──────────┬──────────────┬───────────────────────────┘
-           │ MCP stdio    │ MCP stdio
-           ▼              ▼
-┌──────────────────┐  ┌──────────────────────────────┐
-│  mcp_servers/    │  │  mcp_servers/                │
-│  recon_server    │  │  spiderfoot_server           │
-│  osint_server    │  │  (REST client)               │
-│  web_vuln_server │  └──────────────┬───────────────┘
-│  intel_server    │                 │ HTTP :5001
-│  hashcrack_server│  ┌──────────────▼───────────────┐
-└──────────┬───────┘  │  odysseus-spiderfoot          │
-           │ podman   │  smicallef/spiderfoot:latest  │
-           │ exec     │  200+ OSINT modules           │
-           ▼          │  REST API on internal network │
-┌──────────────────┐  └──────────────────────────────┘
-│  odysseus-       │
-│  toolchain       │
-│  (Kali Rolling)  │
-│  nmap · masscan  │
-│  nikto · gobuster│
-│  sqlmap · nuclei │
-│  theHarvester    │
-│  john · hydra    │
-└──────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                   Odysseus Red (port 7000)                    │
+│          Chat · Agents · Research · Documents · MCP           │
+└────┬──────────────┬──────────────┬────────────────────────────┘
+     │ MCP stdio    │ MCP stdio    │ MCP stdio
+     ▼              ▼              ▼
+┌─────────────┐ ┌──────────────┐ ┌──────────────────────────┐
+│ mcp_servers/│ │ mcp_servers/ │ │ mcp_servers/             │
+│ recon       │ │ spiderfoot   │ │ pdf_server               │
+│ osint       │ │ (REST client)│ │ (pypdf — no extra deps)  │
+│ web_vuln    │ └──────┬───────┘ └──────────────────────────┘
+│ intel       │        │ HTTP :5001   ▲ url handed to user
+│ hashcrack   │ ┌──────▼───────────┐  │
+└──────┬──────┘ │ odysseus-        │ ┌┴──────────────────────┐
+       │ podman │ spiderfoot        │ │ odysseus-bentopdf     │
+       │ exec   │ 200+ OSINT modules│ │ localhost:3000        │
+       ▼        │ REST :5001        │ │ client-side WASM/JS   │
+┌─────────────┐ │ internal net only │ │ edit · redact · sign  │
+│ odysseus-   │ └───────────────────┘ └───────────────────────┘
+│ toolchain   │
+│ (Kali)      │
+│ nmap masscan│
+│ nikto gobust│
+│ sqlmap nucle│
+│ theHarvester│
+│ john hydra  │
+└─────────────┘
 ```
 
-The Odysseus core image is **not modified**. Both sidecars are managed via `docker-compose.security.yml` and attach to the same internal network.
+The Odysseus core image is **not modified**. All three sidecars are managed via `docker-compose.security.yml` and attach to the same internal network.
 
 ---
 
@@ -156,6 +156,19 @@ The Odysseus core image is **not modified**. Both sidecars are managed via `dock
 
 SpiderFoot use cases: `passive` (no active probing), `investigate` (balanced), `footprint` (full surface mapping), `all`.
 
+### `pdf_server` — PDF Intelligence and Report Assembly
+
+| Tool | Description |
+|------|-------------|
+| `pdf_metadata` | Extract author, company, software, and timestamps — OSINT goldmine |
+| `pdf_extract_text` | Pull text content from collected PDFs for keyword analysis |
+| `pdf_info` | Page count, encryption status, embedded files — quick triage |
+| `pdf_merge` | Assemble a final pentest report from per-tool output PDFs |
+| `pdf_extract_pages` | Carve specific pages from a large document |
+| `pdf_bentopdf_url` | Return the BentoPDF UI URL for interactive editing tasks |
+
+Uses `pypdf` (already in `requirements.txt`) — no additional dependencies. For interactive work (redaction, compression, format conversion, signing), the agent hands users the BentoPDF URL at `http://localhost:3000`.
+
 ---
 
 ## Skills
@@ -167,6 +180,7 @@ Pre-built agent workflows in [`skills/`](skills/):
 | [`recon/full_recon`](skills/recon/full_recon.yaml) | Port scan → web enum → vuln scan → report |
 | [`osint/target_profile`](skills/osint/target_profile.yaml) | DNS + WHOIS + theHarvester + Shodan passive profile |
 | [`osint/spiderfoot_deep_scan`](skills/osint/spiderfoot_deep_scan.yaml) | Full SpiderFoot correlated scan with CVE and breach extraction |
+| [`osint/pdf_intel`](skills/osint/pdf_intel.yaml) | Metadata + text extraction from collected PDFs, with entity correlation |
 | [`web_assessment/web_full`](skills/web_assessment/web_full.yaml) | nikto + gobuster + sqlmap + nuclei chain |
 | [`reporting/pentest_report`](skills/reporting/pentest_report.md) | PTES/OWASP-aligned Markdown report template |
 
@@ -188,6 +202,18 @@ SPIDERFOOT_URL=http://odysseus-spiderfoot:5001
 SPIDERFOOT_USERNAME=
 SPIDERFOOT_PASSWORD=
 
+# --- BentoPDF ---
+BENTOPDF_URL=http://localhost:3000
+# Advanced WASM modules (PyMuPDF, Ghostscript, CoherentPDF) load from
+# jsDelivr CDN by default. For air-gapped deployments, run the offline
+# setup script and override these:
+# VITE_WASM_PYMUPDF_URL=http://localhost:3000/wasm/pymupdf.js
+# VITE_WASM_GS_URL=http://localhost:3000/wasm/gs.js
+# VITE_WASM_CPDF_URL=http://localhost:3000/wasm/cpdf.js
+
+# --- PDF server ---
+ODYSSEUS_DATA_DIR=./data  # pdf_server resolves file paths relative to this
+
 # --- Container runtime (default: podman; set to docker on non-Fedora hosts) ---
 ODYSSEUS_CONTAINER_RUNTIME=podman
 ODYSSEUS_TOOLCHAIN_CONTAINER=odysseus-toolchain
@@ -207,10 +233,13 @@ odysseus-red/
 │   ├── osint_server.py          # theHarvester, Sherlock, DNS, WHOIS
 │   ├── web_vuln_server.py       # nikto, gobuster, sqlmap, nuclei
 │   ├── hashcrack_server.py      # hashid, john
-│   └── spiderfoot_server.py     # SpiderFoot REST API client
+│   ├── spiderfoot_server.py     # SpiderFoot REST API client
+│   └── pdf_server.py            # PDF intel + report assembly (pypdf)
 ├── skills/
 │   ├── recon/full_recon.yaml
-│   ├── osint/{target_profile,spiderfoot_deep_scan}.yaml
+│   ├── osint/target_profile.yaml
+│   ├── osint/spiderfoot_deep_scan.yaml
+│   ├── osint/pdf_intel.yaml
 │   ├── web_assessment/web_full.yaml
 │   └── reporting/pentest_report.md
 ├── modules/
@@ -219,13 +248,14 @@ odysseus-red/
 │   └── report_builder/          # in development
 ├── docker/
 │   └── toolchain/Dockerfile     # Kali Rolling sidecar image
-├── docker-compose.security.yml  # Compose overlay: toolchain + SpiderFoot
+├── docker-compose.security.yml  # Compose overlay: toolchain + SpiderFoot + BentoPDF
 ├── docs/adr/                    # Architecture decision records
 │   ├── 001-toolchain-sidecar-isolation.md
 │   ├── 002-podman-over-docker.md
-│   └── 003-spiderfoot-integration.md
+│   ├── 003-spiderfoot-integration.md
+│   └── 004-bentopdf-integration.md
 └── tests/
-    └── mcp_servers/             # Unit tests (subprocess/HTTP fully mocked)
+    └── mcp_servers/             # Unit tests (subprocess/HTTP/pypdf fully mocked)
 ```
 
 Everything under `mcp_servers/`, `skills/`, `modules/`, `docker/toolchain/`, and `docs/adr/` is specific to this fork. All other files are upstream Odysseus — kept unmodified to make merging upstream changes straightforward.
@@ -260,7 +290,7 @@ pytest tests/mcp_servers/ -v
 bandit -r mcp_servers/recon_server.py mcp_servers/intel_server.py \
           mcp_servers/osint_server.py mcp_servers/web_vuln_server.py \
           mcp_servers/hashcrack_server.py mcp_servers/spiderfoot_server.py \
-          modules/ -ll
+          mcp_servers/pdf_server.py modules/ -ll
 
 # Install pre-commit hooks
 pre-commit install
@@ -278,7 +308,7 @@ Active tools in this repo can cause significant impact on target systems. Before
 2. Understand the rules of engagement.
 3. Use `passive` SpiderFoot use case for external targets unless active probing is explicitly authorized.
 
-Keep Odysseus auth enabled. Do not expose the SpiderFoot port (5001) or toolchain container ports to the public internet — both are internal-network only by default.
+Keep Odysseus auth enabled. Do not expose the SpiderFoot port (5001) or toolchain container ports to the public internet — both are internal-network only by default. BentoPDF is bound to `127.0.0.1:3000` and processes all files client-side — no document content passes through the container.
 
 For Odysseus platform security notes see the upstream [SECURITY.md](SECURITY.md) and [THREAT_MODEL.md](THREAT_MODEL.md).
 
@@ -289,3 +319,5 @@ For Odysseus platform security notes see the upstream [SECURITY.md](SECURITY.md)
 AGPL-3.0-or-later — see [LICENSE](LICENSE) and [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
 
 SpiderFoot ([`smicallef/spiderfoot`](https://github.com/smicallef/spiderfoot)) is MIT licensed.
+
+BentoPDF ([`alam00000/bentopdf`](https://github.com/alam00000/bentopdf)) is AGPL-3.0 licensed.
