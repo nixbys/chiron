@@ -39,6 +39,12 @@ try:
 except ImportError:
     _PYPDF_AVAILABLE = False
 
+try:
+    from fpdf import FPDF
+    _FPDF_AVAILABLE = True
+except ImportError:
+    _FPDF_AVAILABLE = False
+
 server = Server("pdf")
 
 # Base directory all file paths are resolved against.
@@ -147,6 +153,40 @@ TOOLS = [
                 },
             },
             "required": ["file_path", "pages", "output_file"],
+        },
+    ),
+    Tool(
+        name="generate_report",
+        description=(
+            "Generate a formatted PDF report from markdown or plain text content. "
+            "Use this to produce OSINT summaries, pentest findings, or research reports. "
+            "The PDF is saved to the Odysseus data directory and the file path is returned. "
+            "Supports headings (#, ##, ###), bullet lists (- item), bold (**text**), "
+            "horizontal rules (---), and plain paragraphs."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Report title shown on the cover/header",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Markdown-formatted report body",
+                },
+                "output_file": {
+                    "type": "string",
+                    "description": "Output filename under the data directory (e.g. 'reports/osint_report.pdf')",
+                    "default": "reports/report.pdf",
+                },
+                "author": {
+                    "type": "string",
+                    "description": "Author name shown in the report header",
+                    "default": "Odysseus",
+                },
+            },
+            "required": ["title", "content"],
         },
     ),
     Tool(
@@ -350,6 +390,103 @@ def _pdf_extract_pages(file_path: str, pages: str, output_file: str) -> str:
         return f"[error] {exc}"
 
 
+def _generate_report(title: str, content: str, output_file: str, author: str) -> str:
+    """Render markdown-ish content to a PDF using fpdf2."""
+    if not _FPDF_AVAILABLE:
+        return "[error] fpdf2 not installed. Run: pip install fpdf2"
+
+    out_path = _resolve(output_file)
+    if isinstance(out_path, str):
+        return out_path
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    import re
+    from datetime import datetime
+    from fpdf.enums import XPos, YPos
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # Header banner
+    pdf.set_fill_color(30, 30, 30)
+    pdf.rect(0, 0, 210, 28, style="F")
+    pdf.set_text_color(220, 50, 50)
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_xy(10, 6)
+    pdf.cell(0, 10, title, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_text_color(180, 180, 180)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_x(10)
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    pdf.cell(0, 6, f"Author: {author}    Generated: {stamp}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(6)
+
+    def _render_line(line: str) -> None:
+        line = line.rstrip()
+        if not line:
+            pdf.ln(3)
+            return
+
+        # Headings
+        if line.startswith("### "):
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.set_text_color(60, 60, 60)
+            pdf.multi_cell(0, 6, line[4:])
+            pdf.set_text_color(0, 0, 0)
+            return
+        if line.startswith("## "):
+            pdf.set_font("Helvetica", "B", 13)
+            pdf.set_text_color(30, 30, 30)
+            pdf.set_fill_color(240, 240, 240)
+            pdf.multi_cell(0, 7, line[3:], fill=True)
+            pdf.set_text_color(0, 0, 0)
+            pdf.ln(1)
+            return
+        if line.startswith("# "):
+            pdf.set_font("Helvetica", "B", 15)
+            pdf.set_text_color(20, 20, 20)
+            pdf.multi_cell(0, 8, line[2:])
+            pdf.set_draw_color(200, 200, 200)
+            pdf.line(pdf.get_x(), pdf.get_y(), 200, pdf.get_y())
+            pdf.set_text_color(0, 0, 0)
+            pdf.ln(2)
+            return
+
+        # Horizontal rule
+        if re.match(r"^-{3,}$", line) or re.match(r"^={3,}$", line):
+            pdf.set_draw_color(180, 180, 180)
+            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+            pdf.ln(3)
+            return
+
+        # Bullet list
+        if line.startswith("- ") or line.startswith("* "):
+            pdf.set_font("Helvetica", "", 10)
+            pdf.set_x(14)
+            text = line[2:]
+            text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+            pdf.multi_cell(0, 5, f"•  {text}")
+            return
+
+        # Plain paragraph — strip inline bold markers
+        pdf.set_font("Helvetica", "", 10)
+        text = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
+        pdf.multi_cell(0, 5, text)
+
+    for line in content.splitlines():
+        _render_line(line)
+
+    pdf.output(str(out_path))
+    size_kb = out_path.stat().st_size // 1024
+    return (
+        f"Report saved: {out_path.name}  ({size_kb} KB)\n"
+        f"Full path: {out_path}\n"
+        f"Open in browser: {_BENTOPDF_URL} (use 'Merge/View' to open the file)"
+    )
+
+
 # ---------------------------------------------------------------------------
 # MCP handlers
 # ---------------------------------------------------------------------------
@@ -370,7 +507,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if not _PYPDF_AVAILABLE:
         return [TextContent(type="text", text="[error] pypdf not installed. Run: pip install pypdf")]
 
-    if name == "pdf_metadata":
+    if name == "generate_report":
+        text = _generate_report(
+            title=arguments["title"],
+            content=arguments["content"],
+            output_file=arguments.get("output_file", "reports/report.pdf"),
+            author=arguments.get("author", "Odysseus"),
+        )
+
+    elif name == "pdf_metadata":
         text = _pdf_metadata(arguments["file_path"])
 
     elif name == "pdf_extract_text":

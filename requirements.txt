@@ -7,6 +7,7 @@ pydantic>=2.13.4
 pydantic-settings>=2.14.1
 SQLAlchemy
 pypdf
+fpdf2
 beautifulsoup4
 charset-normalizer
 numpy
