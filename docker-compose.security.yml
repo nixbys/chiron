@@ -2,17 +2,18 @@
 #   podman-compose -f docker-compose.yml -f docker-compose.security.yml up -d --build
 #
 # Services added:
+#   ollama      — local LLM runtime (AMD ROCm / RX 6950 XT); API at :11434
 #   toolchain   — Kali sidecar exposing an internal exec API on :8088
 #   spiderfoot  — SpiderFoot OSINT server; MCP server talks to its REST API on port 5001
 #   bentopdf    — BentoPDF client-side PDF toolkit; web UI at http://localhost:3000
-#
-# The odysseus service is extended to receive security env vars so the MCP servers
-# running inside it can reach the toolchain exec API and external intelligence APIs.
 
 services:
-  # ── extend upstream odysseus with security env vars ───────────────────────
+  # ── extend upstream odysseus with security + LLM env vars ────────────────
   odysseus:
     environment:
+      # Ollama inside the compose stack
+      OLLAMA_BASE_URL: "http://odysseus-ollama:11434/v1"
+      LLM_HOST: "odysseus-ollama"
       # Toolchain exec API — MCP servers call this instead of podman exec
       ODYSSEUS_TOOLCHAIN_API: "http://odysseus-toolchain:8088"
       # Threat intelligence API keys (fill in .env)
@@ -27,6 +28,30 @@ services:
       # PDF / BentoPDF
       BENTOPDF_URL: "${BENTOPDF_URL:-http://localhost:3000}"
       ODYSSEUS_DATA_DIR: "${ODYSSEUS_DATA_DIR:-./data}"
+
+  # ── Ollama local LLM runtime ──────────────────────────────────────────────
+  ollama:
+    # CPU image — works reliably in a container on a desktop system.
+    #
+    # GPU note (RX 6950 XT / Navi 21): ROCm in an isolated container fails
+    # with "Memory in use" because the Wayland compositor holds GPU VA ranges
+    # that ROCm's page-table walk treats as already mapped. GPU inference
+    # requires running Ollama directly on the host (or inside a toolbox with
+    # host namespaces). To use the host Ollama GPU instance instead, stop this
+    # service and set OLLAMA_BASE_URL=http://host.docker.internal:11434/v1 in
+    # the odysseus service above.
+    image: docker.io/ollama/ollama:latest
+    container_name: odysseus-ollama
+    hostname: odysseus-ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: "0.0.0.0:11434"
+    security_opt:
+      - no-new-privileges:true
 
   # ── Kali sidecar ──────────────────────────────────────────────────────────
   toolchain:
@@ -70,7 +95,6 @@ services:
     image: ghcr.io/alam00000/bentopdf-simple:latest
     container_name: odysseus-bentopdf
     hostname: odysseus-bentopdf
-    # Exposed on localhost only — users open http://localhost:3000 for the interactive UI.
     ports:
       - "127.0.0.1:3000:8080"
     restart: unless-stopped
@@ -78,6 +102,7 @@ services:
       - no-new-privileges:true
 
 volumes:
+  ollama-models:
   toolchain-workspaces:
   toolchain-reports:
   spiderfoot-data:
