@@ -1,0 +1,110 @@
+name: CI (odysseus-red)
+
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - "mcp_servers/recon_server.py"
+      - "mcp_servers/osint_server.py"
+      - "mcp_servers/web_vuln_server.py"
+      - "mcp_servers/intel_server.py"
+      - "mcp_servers/hashcrack_server.py"
+      - "modules/**"
+      - "skills/**"
+      - "tests/mcp_servers/**"
+      - "tests/integration/**"
+      - "docker/toolchain/**"
+      - "docker-compose.security.yml"
+  pull_request:
+    paths:
+      - "mcp_servers/recon_server.py"
+      - "mcp_servers/osint_server.py"
+      - "mcp_servers/web_vuln_server.py"
+      - "mcp_servers/intel_server.py"
+      - "mcp_servers/hashcrack_server.py"
+      - "modules/**"
+      - "skills/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-red-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bandit:
+    name: Security lint (bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.11"
+      - run: pip install bandit[toml]
+      # Only scan our additions — not upstream files we don't maintain
+      - run: |
+          bandit -r \
+            mcp_servers/recon_server.py \
+            mcp_servers/osint_server.py \
+            mcp_servers/web_vuln_server.py \
+            mcp_servers/intel_server.py \
+            mcp_servers/hashcrack_server.py \
+            modules/ \
+            -ll -f json -o bandit-report.json 2>/dev/null || \
+          bandit -r \
+            mcp_servers/recon_server.py \
+            mcp_servers/osint_server.py \
+            mcp_servers/web_vuln_server.py \
+            mcp_servers/intel_server.py \
+            mcp_servers/hashcrack_server.py \
+            modules/ \
+            -ll
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-report
+          path: bandit-report.json
+
+  mcp-unit-tests:
+    name: MCP server unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+      - run: python -m pytest tests/mcp_servers/ -v --tb=short
+
+  toolchain-build:
+    name: Toolchain Dockerfile build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - name: Build toolchain image
+        run: docker build -t odysseus-toolchain:ci ./docker/toolchain/
+
+  upstream-drift:
+    name: Upstream sync drift check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: git fetch https://github.com/pewdiepie-archdaemon/odysseus.git dev
+      - name: Report commits behind upstream
+        run: |
+          BEHIND=$(git rev-list --count HEAD..FETCH_HEAD)
+          echo "Commits behind upstream/dev: $BEHIND"
+          if [ "$BEHIND" -gt 50 ]; then
+            echo "::warning::Fork is $BEHIND commits behind upstream — sync overdue"
+          fi

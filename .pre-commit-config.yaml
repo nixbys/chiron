@@ -1,0 +1,32 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.10
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(mcp_servers/recon_server|mcp_servers/osint_server|mcp_servers/web_vuln_server|mcp_servers/intel_server|mcp_servers/hashcrack_server|modules/)
+
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks:
+      - id: black
+        files: ^(mcp_servers/recon_server|mcp_servers/osint_server|mcp_servers/web_vuln_server|mcp_servers/intel_server|mcp_servers/hashcrack_server|modules/)
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.9
+    hooks:
+      - id: bandit
+        args: [-ll, -r]
+        files: ^(mcp_servers/recon_server|mcp_servers/osint_server|mcp_servers/web_vuln_server|mcp_servers/intel_server|mcp_servers/hashcrack_server|modules/)
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      - id: check-yaml
+      - id: end-of-file-fixer
+        files: ^(mcp_servers/|modules/|skills/|docker/)
+      - id: trailing-whitespace
+        files: ^(mcp_servers/|modules/|skills/|docker/)

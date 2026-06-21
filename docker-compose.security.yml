@@ -1,0 +1,40 @@
+# Overlay this on top of the base docker-compose.yml:
+#   podman-compose -f docker-compose.yml -f docker-compose.security.yml up -d --build
+#
+# Podman users: ensure the default network created by the base compose is available.
+# The toolchain container is intentionally minimal — it receives exec calls from
+# the MCP servers and writes output to /workspaces (shared volume).
+
+services:
+  toolchain:
+    build:
+      context: ./docker/toolchain
+      dockerfile: Dockerfile
+    container_name: odysseus-toolchain
+    hostname: odysseus-toolchain
+    volumes:
+      - toolchain-workspaces:/workspaces
+      - toolchain-reports:/reports
+    networks:
+      - odysseus-net
+    restart: unless-stopped
+    # Drop all capabilities; MCP servers only need exec access, not privilege
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW      # required by nmap/masscan for raw socket scans
+      - NET_ADMIN    # required for some network tooling
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  toolchain-workspaces:
+  toolchain-reports:
+
+networks:
+  odysseus-net:
+    # Attach to the network the base compose already creates.
+    # Name may vary — check `podman network ls` after base stack is up
+    # and update this name if needed.
+    external: true
+    name: odysseus-red_default
