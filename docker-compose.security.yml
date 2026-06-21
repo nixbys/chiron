@@ -5,6 +5,7 @@
 # Services:
 #   toolchain   — Kali sidecar; MCP servers exec tools into it
 #   spiderfoot  — SpiderFoot OSINT server; MCP server talks to its REST API on port 5001
+#   bentopdf    — BentoPDF client-side PDF toolkit; web UI at http://localhost:3000
 
 services:
   toolchain:
@@ -45,6 +46,22 @@ services:
       SHODAN_API_KEY: "${SHODAN_API_KEY:-}"
       VIRUSTOTAL_API_KEY: "${VIRUSTOTAL_API_KEY:-}"
       OTX_API_KEY: "${OTX_API_KEY:-}"
+    security_opt:
+      - no-new-privileges:true
+
+  bentopdf:
+    image: ghcr.io/alam00000/bentopdf-simple:latest
+    container_name: odysseus-bentopdf
+    hostname: odysseus-bentopdf
+    # Exposed on localhost only — users open http://localhost:3000 for the interactive UI.
+    # Advanced features (PyMuPDF, Ghostscript, CoherentPDF) load WASM from jsDelivr CDN
+    # by default. For an air-gapped deployment, run the bundled offline setup script and
+    # override VITE_WASM_PYMUPDF_URL / VITE_WASM_GS_URL / VITE_WASM_CPDF_URL in .env.
+    ports:
+      - "127.0.0.1:3000:8080"
+    networks:
+      - odysseus-net
+    restart: unless-stopped
     security_opt:
       - no-new-privileges:true
 
