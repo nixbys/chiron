@@ -9,6 +9,8 @@ on:
       - "mcp_servers/web_vuln_server.py"
       - "mcp_servers/intel_server.py"
       - "mcp_servers/hashcrack_server.py"
+      - "mcp_servers/spiderfoot_server.py"
+      - "mcp_servers/pdf_server.py"
       - "modules/**"
       - "skills/**"
       - "tests/mcp_servers/**"
@@ -22,6 +24,8 @@ on:
       - "mcp_servers/web_vuln_server.py"
       - "mcp_servers/intel_server.py"
       - "mcp_servers/hashcrack_server.py"
+      - "mcp_servers/spiderfoot_server.py"
+      - "mcp_servers/pdf_server.py"
       - "modules/**"
       - "skills/**"
 
@@ -52,6 +56,8 @@ jobs:
             mcp_servers/web_vuln_server.py \
             mcp_servers/intel_server.py \
             mcp_servers/hashcrack_server.py \
+            mcp_servers/spiderfoot_server.py \
+            mcp_servers/pdf_server.py \
             modules/ \
             -ll -f json -o bandit-report.json 2>/dev/null || \
           bandit -r \
@@ -60,6 +66,8 @@ jobs:
             mcp_servers/web_vuln_server.py \
             mcp_servers/intel_server.py \
             mcp_servers/hashcrack_server.py \
+            mcp_servers/spiderfoot_server.py \
+            mcp_servers/pdf_server.py \
             modules/ \
             -ll
       - uses: actions/upload-artifact@v4

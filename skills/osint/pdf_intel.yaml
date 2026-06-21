@@ -1,0 +1,58 @@
+name: pdf_intel
+version: "1.0"
+description: >
+  Extract and analyse intelligence from PDF documents collected during OSINT.
+  PDF metadata is frequently overlooked but reveals high-value intel: author
+  names, internal company structure, software fingerprints, and creation
+  timestamps that can confirm or contradict public information.
+
+  Common sources for OSINT PDFs:
+    - Google dorks: site:target.com filetype:pdf
+    - LinkedIn / company site published reports
+    - Government/regulatory filings
+    - Conference presentations and whitepapers
+
+inputs:
+  file_path:
+    type: string
+    description: "Path to the PDF, relative to the Odysseus data directory"
+  deep_text:
+    type: boolean
+    default: false
+    description: "Also extract full document text for keyword analysis"
+
+steps:
+  - id: triage
+    tool: pdf_info
+    args:
+      file_path: "{{ file_path }}"
+    description: "Quick triage — page count, encryption status, embedded files"
+
+  - id: metadata
+    tool: pdf_metadata
+    args:
+      file_path: "{{ file_path }}"
+    description: >
+      Extract all metadata fields. Key intel targets:
+        Author       → real employee name
+        Company      → confirms org, may reveal subsidiary/parent
+        Creator      → software version fingerprint (e.g. 'Word 2016' dates the doc)
+        Producer     → PDF library used (reveals internal toolchain)
+        CreationDate → when the doc was originally created vs. ModDate (edited later?)
+        Internal paths in Creator field → may expose share/drive structure
+
+  - id: text_extract
+    condition: "{{ deep_text }}"
+    tool: pdf_extract_text
+    args:
+      file_path: "{{ file_path }}"
+      max_chars: 12000
+    description: "Full text extraction for keyword and entity analysis"
+
+  - id: correlate
+    description: >
+      Agent analysis step — correlate findings:
+        - Cross-reference Author name with LinkedIn/theHarvester results
+        - Software version in Creator → check for known CVEs (cve_lookup)
+        - CreationDate discrepancy with publication date → possible redated doc
+        - Embedded files → extract and analyse separately
