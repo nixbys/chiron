@@ -12,11 +12,13 @@ RUN apt-get update -q && apt-get install -y -q --no-install-recommends \
     # Password / hash
     john hydra \
     # Utilities
-    python3 python3-pip jq git ca-certificates \
+    python3 python3-pip jq git ca-certificates unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Python-based tools not in apt
-RUN pip3 install --no-cache-dir \
+# Python-based tools not in apt.
+# --break-system-packages is required: Kali Rolling enforces PEP 668, which
+# blocks bare pip3 installs outside a venv. Inside a container this is safe.
+RUN pip3 install --no-cache-dir --break-system-packages \
     shodan \
     censys \
     requests \
