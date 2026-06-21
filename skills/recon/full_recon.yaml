@@ -1,0 +1,50 @@
+name: full_recon
+version: "1.0"
+description: >
+  Complete active reconnaissance chain for an authorized target.
+  Runs port discovery, service fingerprinting, and web asset enumeration
+  in sequence. Requires a confirmed authorized scope before execution.
+
+authorization_prompt: >
+  Before running: confirm you have written authorization to scan {{ target }}.
+  Type AUTHORIZED to proceed.
+
+inputs:
+  target:
+    type: string
+    description: "IP, hostname, or CIDR range"
+  include_web:
+    type: boolean
+    default: true
+    description: "Run web enumeration against discovered HTTP/HTTPS ports"
+
+steps:
+  - id: port_scan
+    tool: nmap_scan
+    args:
+      target: "{{ target }}"
+      flags: "-sV -T4 --open -p-"
+    description: "Full port + service version scan"
+
+  - id: web_enum
+    condition: "{{ include_web }}"
+    tool: gobuster_dir
+    args:
+      url: "{{ discovered_web_url }}"
+      wordlist: "/usr/share/wordlists/dirb/common.txt"
+      threads: 20
+    description: "Directory enumeration on discovered web services"
+
+  - id: vuln_scan
+    tool: nuclei_scan
+    args:
+      url: "{{ discovered_web_url }}"
+      severity: "critical,high,medium"
+    description: "Template-based vulnerability detection"
+
+  - id: generate_report
+    tool: report_builder
+    args:
+      template: pentest_standard
+      findings: "{{ steps }}"
+    description: "Compile findings into structured Markdown report"

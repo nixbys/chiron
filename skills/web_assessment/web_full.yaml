@@ -1,0 +1,48 @@
+name: web_full
+version: "1.0"
+description: >
+  Full web application assessment chain: server scan, directory brute-force,
+  SQLi detection, and template-based vulnerability scanning.
+  Authorized targets only.
+
+inputs:
+  url:
+    type: string
+    description: "Base URL of the authorized web target"
+  sqli_params:
+    type: string
+    required: false
+    description: "POST data for sqlmap (optional, e.g. 'user=test&pass=test')"
+
+steps:
+  - id: nikto
+    tool: nikto_scan
+    args:
+      url: "{{ url }}"
+    description: "Web server misconfiguration and version scan"
+
+  - id: dir_brute
+    tool: gobuster_dir
+    args:
+      url: "{{ url }}"
+      wordlist: "/usr/share/wordlists/dirb/big.txt"
+      extensions: "php,html,js,txt,bak,zip"
+      threads: 30
+    description: "Directory and file discovery"
+
+  - id: sqli
+    condition: "{{ sqli_params }}"
+    tool: sqlmap_scan
+    args:
+      url: "{{ url }}"
+      data: "{{ sqli_params }}"
+      level: 2
+      risk: 1
+    description: "SQL injection detection (non-destructive)"
+
+  - id: nuclei
+    tool: nuclei_scan
+    args:
+      url: "{{ url }}"
+      severity: "critical,high,medium,low"
+    description: "Nuclei template scan — all severities"
