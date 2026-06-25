@@ -39,6 +39,7 @@ caldav
 cryptography
 bcrypt
 mcp
+requests
 pyotp
 qrcode[pil]
 croniter

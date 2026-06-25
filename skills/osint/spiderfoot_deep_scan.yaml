@@ -64,7 +64,7 @@ steps:
     description: "Extract any data breach mentions"
 
   - id: generate_report
-    tool: report_builder
+    tool: generate_report
     args:
       template: osint_summary
       target: "{{ target }}"

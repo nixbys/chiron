@@ -1,9 +1,9 @@
 """
 intel_server.py
 
-MCP server for threat intelligence lookups: Shodan, VirusTotal, CVE/NVD, and AlienVault OTX.
-All lookups are passive/read-only — no active scanning occurs here.
-API keys are read from environment variables; missing keys disable the relevant tool gracefully.
+MCP server for threat intelligence lookups: Shodan, VirusTotal, CVE/NVD, OTX, and Censys.
+All lookups are passive/read-only. API keys are read from environment variables;
+missing keys disable the relevant tool gracefully.
 """
 
 import asyncio
@@ -18,15 +18,18 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from mcp_servers.common import mcp_error
 
 server = Server("intel")
 
 _SHODAN_KEY = os.environ.get("SHODAN_API_KEY", "")
 _VT_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "")
 _OTX_KEY = os.environ.get("OTX_API_KEY", "")
-_NVD_KEY = os.environ.get("NVD_API_KEY", "")  # optional — NVD rate-limits without key
+_NVD_KEY = os.environ.get("NVD_API_KEY", "")
+_CENSYS_ID = os.environ.get("CENSYS_API_ID", "")
+_CENSYS_SECRET = os.environ.get("CENSYS_API_SECRET", "")
 
-_REQUEST_TIMEOUT = 15  # seconds
+_REQUEST_TIMEOUT = 15
 
 TOOLS = [
     Tool(
@@ -44,7 +47,10 @@ TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "indicator": {"type": "string", "description": "Hash (MD5/SHA1/SHA256), URL, domain, or IP"},
+                "indicator": {
+                    "type": "string",
+                    "description": "Hash (MD5/SHA1/SHA256), URL, domain, or IP",
+                },
                 "kind": {
                     "type": "string",
                     "enum": ["file", "url", "domain", "ip"],
@@ -60,7 +66,10 @@ TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "CVE ID or keyword (e.g. 'apache log4j')"},
+                "query": {
+                    "type": "string",
+                    "description": "CVE ID or keyword (e.g. 'apache log4j')",
+                },
                 "limit": {"type": "integer", "default": 10},
             },
             "required": ["query"],
@@ -81,32 +90,68 @@ TOOLS = [
             "required": ["indicator", "kind"],
         },
     ),
+    Tool(
+        name="censys_host",
+        description=(
+            "Look up a host IP on Censys. Returns open services, TLS certificates, "
+            "and autonomous system info."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "ip": {"type": "string", "description": "IPv4 address to look up"},
+            },
+            "required": ["ip"],
+        },
+    ),
+    Tool(
+        name="censys_search",
+        description=(
+            "Search Censys for hosts matching a query. "
+            "Uses Censys Search Language (e.g. 'services.port=8080 and services.transport_protocol=TCP')."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Censys search query"},
+                "limit": {"type": "integer", "default": 10},
+            },
+            "required": ["query"],
+        },
+    ),
 ]
 
 
 def _require_key(name: str, value: str) -> str | None:
     if not value:
-        return f"[error] {name} API key not set. Add it to your .env file."
+        return mcp_error("no_api_key", f"{name} not set — add it to your .env file")
     return None
 
 
-def _get(url: str, headers: dict | None = None, params: dict | None = None) -> dict:
+def _get(url: str, headers: dict | None = None, params: dict | None = None,
+         auth: tuple | None = None) -> dict:
     try:
-        resp = requests.get(url, headers=headers or {}, params=params or {}, timeout=_REQUEST_TIMEOUT)
+        resp = requests.get(
+            url,
+            headers=headers or {},
+            params=params or {},
+            auth=auth,
+            timeout=_REQUEST_TIMEOUT,
+        )
         resp.raise_for_status()
         return resp.json()
     except requests.HTTPError as exc:
-        return {"error": f"HTTP {exc.response.status_code}: {exc.response.text[:300]}"}
+        return {"_mcp_error": f"HTTP {exc.response.status_code}: {exc.response.text[:300]}"}
     except Exception as exc:  # noqa: BLE001
-        return {"error": str(exc)}
+        return {"_mcp_error": str(exc)}
 
 
 def _shodan_host(ip: str) -> str:
     if err := _require_key("SHODAN_API_KEY", _SHODAN_KEY):
         return err
     data = _get(f"https://api.shodan.io/shodan/host/{ip}", params={"key": _SHODAN_KEY})
-    if "error" in data:
-        return f"[shodan error] {data['error']}"
+    if "_mcp_error" in data:
+        return mcp_error("shodan", data["_mcp_error"])
     ports = data.get("ports", [])
     org = data.get("org", "unknown")
     country = data.get("country_name", "unknown")
@@ -116,8 +161,7 @@ def _shodan_host(ip: str) -> str:
         f"Open ports: {ports}",
         f"CVEs (Shodan): {vulns or 'none reported'}",
     ]
-    hostnames = data.get("hostnames", [])
-    if hostnames:
+    if hostnames := data.get("hostnames", []):
         lines.append(f"Hostnames: {hostnames}")
     return "\n".join(lines)
 
@@ -131,13 +175,11 @@ def _vt_lookup(indicator: str, kind: str) -> str:
         "domain": f"https://www.virustotal.com/api/v3/domains/{indicator}",
         "ip": f"https://www.virustotal.com/api/v3/ip_addresses/{indicator}",
     }
-    url = endpoints.get(kind, "")
-    if not url:
-        return f"[error] Unknown indicator kind: {kind}"
-    headers = {"x-apikey": _VT_KEY}
-    data = _get(url, headers=headers)
-    if "error" in data and isinstance(data["error"], dict):
-        return f"[VT error] {data['error'].get('message', data['error'])}"
+    if kind not in endpoints:
+        return mcp_error("invalid_kind", f"Unknown indicator kind: {kind}")
+    data = _get(endpoints[kind], headers={"x-apikey": _VT_KEY})
+    if "_mcp_error" in data:
+        return mcp_error("virustotal", data["_mcp_error"])
     attrs = data.get("data", {}).get("attributes", {})
     stats = attrs.get("last_analysis_stats", {})
     return (
@@ -154,10 +196,10 @@ def _nvd_lookup(query: str, limit: int = 10) -> str:
         params["cveId"] = query.upper()
     else:
         params["keywordSearch"] = query
-    headers = {}
-    if _NVD_KEY:
-        headers["apiKey"] = _NVD_KEY
+    headers = {"apiKey": _NVD_KEY} if _NVD_KEY else {}
     data = _get("https://services.nvd.nist.gov/rest/json/cves/2.0", headers=headers, params=params)
+    if "_mcp_error" in data:
+        return mcp_error("nvd", data["_mcp_error"])
     vulns = data.get("vulnerabilities", [])
     if not vulns:
         return "No CVEs found."
@@ -172,8 +214,7 @@ def _nvd_lookup(query: str, limit: int = 10) -> str:
         metrics = cve.get("metrics", {})
         score = "?"
         for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
-            entries = metrics.get(key, [])
-            if entries:
+            if entries := metrics.get(key, []):
                 score = entries[0].get("cvssData", {}).get("baseScore", "?")
                 break
         lines.append(f"{cve_id}  CVSS:{score}  {desc[:120]}")
@@ -183,14 +224,64 @@ def _nvd_lookup(query: str, limit: int = 10) -> str:
 def _otx_lookup(indicator: str, kind: str) -> str:
     if err := _require_key("OTX_API_KEY", _OTX_KEY):
         return err
-    url = f"https://otx.alienvault.com/api/v1/indicators/{kind}/{indicator}/general"
-    headers = {"X-OTX-API-KEY": _OTX_KEY}
-    data = _get(url, headers=headers)
-    if "error" in data:
-        return f"[OTX error] {data['error']}"
+    data = _get(
+        f"https://otx.alienvault.com/api/v1/indicators/{kind}/{indicator}/general",
+        headers={"X-OTX-API-KEY": _OTX_KEY},
+    )
+    if "_mcp_error" in data:
+        return mcp_error("otx", data["_mcp_error"])
     pulse_count = data.get("pulse_info", {}).get("count", 0)
     reputation = data.get("reputation", 0)
     return f"OTX pulses: {pulse_count}  Reputation score: {reputation}"
+
+
+def _censys_host(ip: str) -> str:
+    if not _CENSYS_ID or not _CENSYS_SECRET:
+        return mcp_error("no_api_key", "CENSYS_API_ID and CENSYS_API_SECRET not set — add them to .env")
+    data = _get(
+        f"https://search.censys.io/api/v2/hosts/{ip}",
+        auth=(_CENSYS_ID, _CENSYS_SECRET),
+    )
+    if "_mcp_error" in data:
+        return mcp_error("censys", data["_mcp_error"])
+    result = data.get("result", {})
+    services = result.get("services", [])
+    asn = result.get("autonomous_system", {})
+    lines = [
+        f"IP: {ip}  AS: {asn.get('asn', '?')} ({asn.get('name', '?')})  Country: {result.get('location', {}).get('country', '?')}",
+        f"Services ({len(services)}):",
+    ]
+    for svc in services[:10]:
+        port = svc.get("port", "?")
+        proto = svc.get("transport_protocol", "?")
+        name = svc.get("service_name", "unknown")
+        lines.append(f"  {port}/{proto}  {name}")
+    return "\n".join(lines)
+
+
+def _censys_search(query: str, limit: int = 10) -> str:
+    if not _CENSYS_ID or not _CENSYS_SECRET:
+        return mcp_error("no_api_key", "CENSYS_API_ID and CENSYS_API_SECRET not set — add them to .env")
+    try:
+        resp = requests.post(
+            "https://search.censys.io/api/v2/hosts/search",
+            auth=(_CENSYS_ID, _CENSYS_SECRET),
+            json={"q": query, "per_page": min(limit, 100)},
+            timeout=_REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        return mcp_error("censys", str(exc))
+    hits = data.get("result", {}).get("hits", [])
+    if not hits:
+        return "No results."
+    lines = [f"Results for: {query}"]
+    for h in hits:
+        ip = h.get("ip", "?")
+        services = [f"{s.get('port')}/{s.get('transport_protocol')}" for s in h.get("services", [])]
+        lines.append(f"  {ip}  {', '.join(services[:5])}")
+    return "\n".join(lines)
 
 
 @server.list_tools()
@@ -208,8 +299,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         result = _nvd_lookup(arguments["query"], int(arguments.get("limit", 10)))
     elif name == "otx_indicator":
         result = _otx_lookup(arguments["indicator"], arguments["kind"])
+    elif name == "censys_host":
+        result = _censys_host(arguments["ip"])
+    elif name == "censys_search":
+        result = _censys_search(arguments["query"], int(arguments.get("limit", 10)))
     else:
-        result = f"[error] Unknown tool: {name}"
+        result = mcp_error("unknown_tool", name)
     return [TextContent(type="text", text=result)]
 
 

@@ -16,11 +16,16 @@ services:
       LLM_HOST: "odysseus-ollama"
       # Toolchain exec API — MCP servers call this instead of podman exec
       ODYSSEUS_TOOLCHAIN_API: "http://odysseus-toolchain:8088"
+      # Shared bearer token for exec API auth (must match toolchain service below)
+      EXEC_API_TOKEN: "${EXEC_API_TOKEN:-}"
       # Threat intelligence API keys (fill in .env)
       SHODAN_API_KEY: "${SHODAN_API_KEY:-}"
       VIRUSTOTAL_API_KEY: "${VIRUSTOTAL_API_KEY:-}"
       OTX_API_KEY: "${OTX_API_KEY:-}"
       NVD_API_KEY: "${NVD_API_KEY:-}"
+      # Censys API credentials (https://search.censys.io/account/api)
+      CENSYS_API_ID: "${CENSYS_API_ID:-}"
+      CENSYS_API_SECRET: "${CENSYS_API_SECRET:-}"
       # SpiderFoot REST endpoint
       SPIDERFOOT_URL: "${SPIDERFOOT_URL:-http://odysseus-spiderfoot:5001}"
       SPIDERFOOT_USERNAME: "${SPIDERFOOT_USERNAME:-}"
@@ -28,6 +33,10 @@ services:
       # PDF / BentoPDF
       BENTOPDF_URL: "${BENTOPDF_URL:-http://localhost:3000}"
       ODYSSEUS_DATA_DIR: "${ODYSSEUS_DATA_DIR:-./data}"
+      # OpenSearch findings persistence
+      OPENSEARCH_URL: "${OPENSEARCH_URL:-http://odysseus-opensearch:9200}"
+      OPENSEARCH_USER: "${OPENSEARCH_USER:-admin}"
+      OPENSEARCH_PASSWORD: "${OPENSEARCH_PASSWORD:-admin}"
 
   # ── Ollama local LLM runtime ──────────────────────────────────────────────
   ollama:
@@ -64,6 +73,9 @@ services:
       - toolchain-workspaces:/workspaces
       - toolchain-reports:/reports
     restart: unless-stopped
+    environment:
+      # Shared bearer token — set a strong random value in .env
+      EXEC_API_TOKEN: "${EXEC_API_TOKEN:-}"
     cap_drop:
       - ALL
     cap_add:
@@ -101,8 +113,34 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # ── OpenSearch — persistent findings index ────────────────────────────────
+  opensearch:
+    image: docker.io/opensearchproject/opensearch:2.17.0
+    container_name: odysseus-opensearch
+    hostname: odysseus-opensearch
+    # Port is intentionally NOT published to the host — only MCP servers on the
+    # internal network need to reach it. Temporarily add ports for Dashboards.
+    environment:
+      discovery.type: single-node
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: "${OPENSEARCH_PASSWORD:-admin}"
+      # Disable security plugin for dev; set OPENSEARCH_PASSWORD in .env for prod
+      plugins.security.disabled: "${OPENSEARCH_SECURITY_DISABLED:-false}"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+
 volumes:
   ollama-models:
   toolchain-workspaces:
   toolchain-reports:
   spiderfoot-data:
+  opensearch-data:

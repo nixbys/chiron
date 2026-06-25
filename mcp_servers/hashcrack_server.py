@@ -1,26 +1,33 @@
 """
 hashcrack_server.py
 
-MCP server for password hash identification and cracking using hashid, john, and hashcat.
-Runs inside the odysseus-toolchain sidecar. For authorized CTF/assessment use only.
+MCP server for password hash identification and offline cracking.
+Runs inside the odysseus-toolchain sidecar. Authorized assessment use only.
 """
 
 import asyncio
-import os
+import re
 import sys
 from pathlib import Path
-
-import requests
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from mcp_servers.common import exec_in_toolchain, mcp_error
 
 server = Server("hashcrack")
 
-_TOOLCHAIN_API = os.environ.get("ODYSSEUS_TOOLCHAIN_API", "http://odysseus-toolchain:8088")
+# Allowlist of safe wordlist paths inside toolchain container
+_WORDLIST_ALLOWLIST = {
+    "/usr/share/wordlists/rockyou.txt",
+    "/usr/share/wordlists/dirb/common.txt",
+    "/usr/share/wordlists/dirb/big.txt",
+    "/usr/share/wordlists/fasttrack.txt",
+}
+
+_HASH_RE = re.compile(r"^[a-fA-F0-9$./]{8,}$")
 
 TOOLS = [
     Tool(
@@ -28,7 +35,9 @@ TOOLS = [
         description="Identify the hash type of a given hash string using hashid.",
         inputSchema={
             "type": "object",
-            "properties": {"hash": {"type": "string", "description": "Hash string to identify"}},
+            "properties": {
+                "hash": {"type": "string", "description": "Hash string to identify"}
+            },
             "required": ["hash"],
         },
     ),
@@ -41,37 +50,24 @@ TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "hash_file": {"type": "string", "description": "Filename under /workspaces/ in toolchain"},
+                "hash_file": {
+                    "type": "string",
+                    "description": "Filename under /workspaces/ in toolchain (no path traversal)",
+                },
                 "wordlist": {
                     "type": "string",
                     "default": "/usr/share/wordlists/rockyou.txt",
                 },
-                "format": {"type": "string", "description": "John format string (optional, e.g. 'md5crypt')"},
+                "format": {
+                    "type": "string",
+                    "description": "John format string (optional, e.g. 'md5crypt')",
+                },
                 "timeout": {"type": "integer", "default": 120},
             },
             "required": ["hash_file"],
         },
     ),
 ]
-
-
-def _exec(cmd: list[str], timeout: int = 120) -> str:
-    try:
-        resp = requests.post(
-            f"{_TOOLCHAIN_API}/exec",
-            json={"args": cmd, "timeout": timeout},
-            timeout=timeout + 5,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        out = (data.get("stdout") or "") + (
-            f"\n[stderr]\n{data['stderr']}" if data.get("stderr") else ""
-        )
-        return out.strip() or "(no output)"
-    except requests.exceptions.Timeout:
-        return f"[timeout] Command exceeded {timeout}s."
-    except Exception as exc:  # noqa: BLE001
-        return f"[error] {exc}"
 
 
 @server.list_tools()
@@ -82,22 +78,32 @@ async def list_tools() -> list[Tool]:
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "identify_hash":
-        result = _exec(["hashid", arguments["hash"]], timeout=10)
+        h = arguments["hash"]
+        if not _HASH_RE.match(h.strip()):
+            return [TextContent(type="text", text=mcp_error("invalid_hash", "Input does not look like a hash string"))]
+        result = exec_in_toolchain(["hashid", h.strip()], timeout=10)
 
     elif name == "john_crack":
-        hash_file = f"/workspaces/{arguments['hash_file']}"
+        # Block path traversal in hash_file
+        raw = arguments["hash_file"]
+        if "/" in raw or ".." in raw:
+            return [TextContent(type="text", text=mcp_error("invalid_path", "hash_file must be a plain filename, not a path"))]
+        hash_file = f"/workspaces/{raw}"
+
         wordlist = arguments.get("wordlist", "/usr/share/wordlists/rockyou.txt")
+        if wordlist not in _WORDLIST_ALLOWLIST:
+            return [TextContent(type="text", text=mcp_error("invalid_wordlist", f"Wordlist must be one of: {sorted(_WORDLIST_ALLOWLIST)}"))]
+
         timeout = int(arguments.get("timeout", 120))
         cmd = ["john", hash_file, f"--wordlist={wordlist}"]
         if fmt := arguments.get("format"):
             cmd.append(f"--format={fmt}")
-        result = _exec(cmd, timeout=timeout)
-        # Also show cracked passwords
-        show_result = _exec(["john", hash_file, "--show"], timeout=10)
-        result = f"[crack]\n{result}\n\n[cracked]\n{show_result}"
+        crack_out = exec_in_toolchain(cmd, timeout=timeout)
+        show_out = exec_in_toolchain(["john", hash_file, "--show"], timeout=10)
+        result = f"[crack]\n{crack_out}\n\n[cracked passwords]\n{show_out}"
 
     else:
-        result = f"[error] Unknown tool: {name}"
+        result = mcp_error("unknown_tool", name)
 
     return [TextContent(type="text", text=result)]
 

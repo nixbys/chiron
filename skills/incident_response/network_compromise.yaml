@@ -1,0 +1,113 @@
+name: network_compromise
+version: "1.0"
+description: >
+  Incident response playbook for a suspected or confirmed network intrusion.
+  Covers lateral movement detection, credential theft assessment, C2 identification,
+  persistence mechanism discovery, and post-incident hardening recommendations.
+
+inputs:
+  suspected_entry_point:
+    type: string
+    description: "IP, hostname, or service suspected as the initial access vector"
+  internal_subnet:
+    type: string
+    required: false
+    description: "CIDR of the affected internal subnet (e.g. 10.0.1.0/24)"
+  observed_ips:
+    type: list
+    required: false
+    description: "External IPs from firewall/SIEM alerts suspected as attacker infrastructure"
+  incident_id:
+    type: string
+    required: false
+    description: "Ticket / case reference ID"
+
+steps:
+  - id: entry_point_scan
+    tool: nmap_scan
+    args:
+      target: "{{ suspected_entry_point }}"
+      flags: "-sV -sC -p- --open -T4"
+    description: >
+      Comprehensive port and service scan of the suspected entry point.
+      Version detection (-sV) and default scripts (-sC) to identify exploitable services.
+
+  - id: web_vuln_check
+    tool: nuclei_scan
+    args:
+      target: "{{ suspected_entry_point }}"
+      templates: "cves,exposures,misconfiguration"
+    description: >
+      Nuclei template scan against the entry point for known CVEs and misconfigurations
+      that may have been exploited for initial access.
+
+  - id: c2_intel
+    tool: shodan_host
+    args:
+      ip: "{{ observed_ips | first }}"
+    description: >
+      Shodan lookup on suspected attacker IP — banner, ASN, co-hosted domains,
+      and SSL certificate data for C2 infrastructure fingerprinting.
+
+  - id: otx_c2
+    tool: otx_indicator
+    args:
+      indicators: "{{ observed_ips }}"
+    description: >
+      OTX threat intelligence on observed external IPs — existing pulses,
+      associated threat groups, and campaign context.
+
+  - id: domain_pivot
+    tool: subdomain_enum
+    args:
+      domain: "{{ suspected_entry_point }}"
+    description: >
+      Passive subdomain enumeration of the entry point domain.
+      Identifies exposed internal services or forgotten internet-facing assets.
+
+  - id: lateral_movement_ttps
+    tool: attck_map
+    args:
+      technique_ids:
+        - "T1078"   # Valid Accounts
+        - "T1021"   # Remote Services
+        - "T1047"   # Windows Management Instrumentation
+        - "T1548"   # Abuse Elevation Control Mechanism
+        - "T1555"   # Credentials from Password Stores
+        - "T1110"   # Brute Force
+        - "T1003"   # OS Credential Dumping
+        - "T1059"   # Command and Scripting Interpreter
+      context: "network intrusion - {{ incident_id }}"
+    description: >
+      Map observed lateral movement and credential theft TTPs to ATT&CK.
+      Extend the list with any additional observed behaviors.
+
+  - id: asset_risk
+    tool: risk_summary
+    args:
+      min_severity: medium
+    description: >
+      Risk-scored findings summary to identify which assets are most at risk
+      from lateral movement given the confirmed entry point.
+
+  - id: spiderfoot_c2
+    tool: sf_scan_start
+    args:
+      target: "{{ observed_ips | first }}"
+      modules: "sfp_ipinfo,sfp_whois,sfp_shodan,sfp_virustotal,sfp_alienvault,sfp_threatcrowd"
+    description: >
+      Deep OSINT expansion on primary attacker IP via SpiderFoot.
+      Correlates infrastructure to known threat actors and campaigns.
+
+  - id: ir_report
+    tool: generate_report
+    args:
+      template: network_compromise_ir
+      incident_id: "{{ incident_id }}"
+      entry_point: "{{ suspected_entry_point }}"
+      observed_ips: "{{ observed_ips }}"
+      findings: "{{ steps }}"
+      format: pdf
+    description: >
+      Full incident report: attack timeline, entry vector, TTPs observed,
+      attacker infrastructure map, blast radius, and remediation roadmap.
