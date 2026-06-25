@@ -22,6 +22,10 @@
   <img src="https://img.shields.io/badge/upstream-pewdiepie--archdaemon%2Fodysseus-purple" alt="Upstream">
 </p>
 
+<p align="center">
+  <img src="docs/odysseus-browser.jpg" alt="Odysseus interface">
+</p>
+
 ---
 
 ## What This Is
