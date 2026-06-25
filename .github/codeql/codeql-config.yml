@@ -1,0 +1,16 @@
+# CodeQL analysis configuration for odysseus-red.
+#
+# Focus analysis on this fork's additions only. Upstream Odysseus files
+# (routes/, src/, services/, static/) are not modified here — alerts in
+# those paths would need to be addressed upstream.
+name: "Odysseus Red CodeQL Config"
+
+paths:
+  - mcp_servers
+  - modules
+  - docker/toolchain
+  - tests
+
+paths-ignore:
+  - "static/lib"
+  - "node_modules"
