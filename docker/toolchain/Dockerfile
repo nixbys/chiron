@@ -46,33 +46,44 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     yara-python
 
 # ── Go-based security tools (ProjectDiscovery suite + Amass) ──────────────────
-RUN set -e && \
-    # nuclei — template-based vulnerability scanner
-    curl -sL https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_linux_amd64.zip \
-        -o /tmp/nuclei.zip && \
-    unzip -q /tmp/nuclei.zip nuclei -d /usr/local/bin/ && \
-    chmod +x /usr/local/bin/nuclei && rm /tmp/nuclei.zip && \
-    nuclei -update-templates -silent 2>/dev/null || true && \
-    # httpx — fast HTTP probing and banner grabbing
-    curl -sL https://github.com/projectdiscovery/httpx/releases/latest/download/httpx_linux_amd64.zip \
-        -o /tmp/httpx.zip && \
-    unzip -q /tmp/httpx.zip httpx -d /usr/local/bin/ && \
-    chmod +x /usr/local/bin/httpx && rm /tmp/httpx.zip && \
-    # subfinder — fast passive subdomain enumeration
-    curl -sL https://github.com/projectdiscovery/subfinder/releases/latest/download/subfinder_linux_amd64.zip \
-        -o /tmp/subfinder.zip && \
-    unzip -q /tmp/subfinder.zip subfinder -d /usr/local/bin/ && \
-    chmod +x /usr/local/bin/subfinder && rm /tmp/subfinder.zip && \
-    # amass — comprehensive subdomain enumeration and attack surface mapping
-    curl -sL https://github.com/owasp-amass/amass/releases/latest/download/amass_Linux_amd64.zip \
-        -o /tmp/amass.zip && \
-    unzip -q /tmp/amass.zip -d /tmp/amass_out/ && \
-    find /tmp/amass_out/ -name amass -type f -exec mv {} /usr/local/bin/amass \; && \
-    chmod +x /usr/local/bin/amass && rm -rf /tmp/amass.zip /tmp/amass_out/ && \
+# Each tool is installed independently with retries. A single download failure
+# does not abort the image build — the tool is simply skipped. Verify presence
+# with `docker run odysseus-toolchain which nuclei` before production use.
+RUN _install_zip() { \
+        name="$1"; url="$2"; bin="$3"; \
+        curl --retry 3 --retry-delay 5 -fsSL "$url" -o "/tmp/${name}.zip" 2>/dev/null \
+        && unzip -q "/tmp/${name}.zip" "$bin" -d /usr/local/bin/ \
+        && chmod +x "/usr/local/bin/$bin" \
+        && rm -f "/tmp/${name}.zip" \
+        && echo "Installed $bin" \
+        || { echo "WARNING: failed to install $bin — skipping"; rm -f "/tmp/${name}.zip"; }; \
+    } && \
+    _install_zip nuclei \
+        "https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_linux_amd64.zip" \
+        nuclei && \
+    (which nuclei && nuclei -update-templates -silent 2>/dev/null || true) && \
+    _install_zip httpx \
+        "https://github.com/projectdiscovery/httpx/releases/latest/download/httpx_linux_amd64.zip" \
+        httpx && \
+    _install_zip subfinder \
+        "https://github.com/projectdiscovery/subfinder/releases/latest/download/subfinder_linux_amd64.zip" \
+        subfinder && \
+    # amass ships its binary inside a versioned sub-directory in the zip
+    ( curl --retry 3 --retry-delay 5 -fsSL \
+        "https://github.com/owasp-amass/amass/releases/latest/download/amass_Linux_amd64.zip" \
+        -o /tmp/amass.zip 2>/dev/null \
+      && unzip -q /tmp/amass.zip -d /tmp/amass_out/ \
+      && find /tmp/amass_out/ -name amass -type f -exec mv {} /usr/local/bin/amass \; \
+      && chmod +x /usr/local/bin/amass \
+      || echo "WARNING: failed to install amass — skipping" \
+    ) && rm -rf /tmp/amass.zip /tmp/amass_out/ && \
     # trivy — container/filesystem vulnerability scanner
-    curl -sL https://github.com/aquasecurity/trivy/releases/latest/download/trivy_linux_amd64.tar.gz \
-        | tar -xz -C /usr/local/bin/ trivy && \
-    chmod +x /usr/local/bin/trivy
+    ( curl --retry 3 --retry-delay 5 -fsSL \
+        "https://github.com/aquasecurity/trivy/releases/latest/download/trivy_linux_amd64.tar.gz" \
+        | tar -xz -C /usr/local/bin/ trivy \
+      && chmod +x /usr/local/bin/trivy \
+      || echo "WARNING: failed to install trivy — skipping" \
+    )
 
 # ── Exec API — MCP servers call this instead of podman exec ───────────────────
 COPY exec_api.py /exec_api.py
