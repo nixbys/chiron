@@ -1,0 +1,7 @@
+# Allowlisted gitleaks findings — one fingerprint per line.
+# Add entries here for known false positives in git history that cannot be
+# retroactively amended (e.g. fixtures introduced before # gitleaks:allow was added).
+
+# jwt.io canonical demo token in test_transform_server.py (commit 36edb229).
+# This is the public example payload from jwt.io, not a real credential.
+36edb229e342b627114ed20b0efee61c0feb5053:tests/mcp_servers/test_transform_server.py:jwt:86
