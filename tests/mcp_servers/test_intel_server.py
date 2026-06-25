@@ -18,7 +18,7 @@ def _mock_get(return_value: dict):
 def test_shodan_missing_key(monkeypatch):
     monkeypatch.setattr(intel, "_SHODAN_KEY", "")
     result = intel._shodan_host("1.2.3.4")
-    assert "API key" in result
+    assert "[error:no_api_key]" in result
 
 
 def test_nvd_lookup_by_cve_id():
@@ -46,7 +46,7 @@ def test_nvd_no_results():
 def test_vt_missing_key(monkeypatch):
     monkeypatch.setattr(intel, "_VT_KEY", "")
     result = intel._vt_lookup("abc123", "file")
-    assert "API key" in result
+    assert "[error:no_api_key]" in result
 
 
 @pytest.mark.asyncio
