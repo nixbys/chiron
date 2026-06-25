@@ -7,3 +7,19 @@
 # multiple named owners per line) is being worked out in issue #593; once
 # agreed it replaces this file. Until then, required reviews and the security
 # CI gate (docs/security-ci.md) remain in force via branch protection.
+#
+# --- Odysseus Red additions ---
+# These paths are owned by the fork maintainer; changes here trigger review.
+/mcp_servers/ @nixbys
+/docker/toolchain/ @nixbys
+/skills/recon/ @nixbys
+/skills/osint/ @nixbys
+/skills/web_assessment/ @nixbys
+/skills/incident_response/ @nixbys
+/skills/threat_hunting/ @nixbys
+/skills/malware_analysis/ @nixbys
+/docker-compose.security.yml @nixbys
+/.github/workflows/ci-security.yml @nixbys
+/.github/codeql/ @nixbys
+/docs/develop-mcp-servers.md @nixbys
+/docs/reverse-proxy.md @nixbys

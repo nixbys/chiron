@@ -103,3 +103,7 @@ compound.config.json
 _scratch/
 /odysseus/
 .agents/
+
+# Odysseus-red additions
+*.jsonl
+data/attck_enterprise.json
