@@ -38,3 +38,42 @@ Only `.env.example`, docs, source, tests, and static assets should be committed.
 ## Reporting
 
 Please report vulnerabilities privately via GitHub security advisories if available, or by opening a minimal issue that does not disclose exploit details.
+
+---
+
+## Odysseus Red — Additional Security Guidance
+
+This fork adds a Kali Linux sidecar, OpenSearch, and 14 MCP servers that execute security tools. The following guidance applies in addition to everything above.
+
+### Toolchain Authorization
+
+**All active tools require explicit written authorization for any target.** The MCP servers will execute nmap, sqlmap, nuclei, hydra, john, and other tools precisely as instructed. This is intentional — but it means a compromised Odysseus session can harm external systems.
+
+Before any active scan:
+
+1. Confirm written authorization covers the target IP ranges, domains, and test types.
+2. Prefer `passive` SpiderFoot use case for external targets unless active probing is authorized.
+3. Lock down the toolchain container: do not publish port 8088 beyond the internal Docker network.
+4. Set `EXEC_API_TOKEN` to a strong random value (`openssl rand -hex 32`) — the default placeholder is not safe for any deployment.
+
+### Toolchain Container Hardening
+
+- The exec API (`/exec_api.py`) accepts arbitrary command arrays over HTTP. Restrict access to the internal `odysseus-security` network only.
+- Log rotation: `exec_api.jsonl` grows unbounded; rotate or cap it in production.
+- The Kali image runs as root by default. For higher-assurance deployments, create a dedicated non-root user and restrict capabilities with `--security-opt no-new-privileges`.
+
+### OpenSearch
+
+- The bundled OpenSearch instance uses default credentials (`admin`/`admin`) — change `OPENSEARCH_USER`/`OPENSEARCH_PASSWORD` before any shared deployment.
+- Do not expose port 9200 outside the internal network.
+
+### Additional Secrets
+
+In addition to `.env`, protect:
+- `data/assets.db` — asset inventory and findings (SQLite)
+- `data/attck_enterprise.json` — cached ATT&CK STIX data (no secrets, but large)
+- `exec_api.jsonl` — exec API audit log (may contain command arguments with target data)
+
+### Reporting Issues in Fork Additions
+
+For vulnerabilities in MCP servers (`mcp_servers/`), the Dockerfile, or the exec API, open a GitHub security advisory on this repo (`nixbys/odysseus-red`). For vulnerabilities in upstream Odysseus code (`routes/`, `src/`, etc.), report to `pewdiepie-archdaemon/odysseus` upstream.

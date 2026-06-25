@@ -131,3 +131,65 @@ Do not post secrets, API keys, private logs, personal documents, or public IPs i
 
 For security reports, follow [SECURITY.md](SECURITY.md).
 
+---
+
+## Contributing to Odysseus Red (Fork-specific)
+
+Odysseus Red is a security-focused fork of [`pewdiepie-archdaemon/odysseus`](https://github.com/pewdiepie-archdaemon/odysseus). The fork adds MCP servers, a Kali toolchain sidecar, incident response skills, and threat-intelligence integrations.
+
+If you are contributing to the base Odysseus platform (chat, agents, research, documents), follow the upstream guidelines above and consider whether your contribution belongs upstream instead.
+
+### Setup for Fork Development
+
+```bash
+git clone https://github.com/nixbys/odysseus-red.git
+cd odysseus-red
+cp .env.example .env
+# Fill in EXEC_API_TOKEN and any API keys you need for testing
+podman-compose -f docker-compose.yml -f docker-compose.security.yml up -d --build
+```
+
+For MCP server development only (no containers needed):
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt pytest pytest-asyncio bandit
+pytest tests/mcp_servers/ -v
+```
+
+### Adding a New MCP Server
+
+See [`docs/develop-mcp-servers.md`](docs/develop-mcp-servers.md) for the full guide including the minimal template, error format, input validation, security checklist, and testing patterns.
+
+The short version:
+
+1. Create `mcp_servers/my_server.py` following the template.
+2. Use `exec_in_toolchain()` from `mcp_servers.common` for any Kali binary call.
+3. Use `mcp_error(code, message)` for all error returns — no bare strings.
+4. Validate all user-supplied paths, IPs, and domains using helpers from `mcp_servers.common`.
+5. Add unit tests in `tests/mcp_servers/test_my_server.py` — mock `mcp_servers.common.requests.post`.
+6. Add the server to the bandit list in `.github/workflows/ci-security.yml`.
+
+### Commit and PR Conventions
+
+Fork commits follow the upstream Conventional Commits style (`feat(yara): ...`, `fix(common): ...`, `chore(ci): ...`).
+
+PR descriptions must:
+- Identify whether the change is in fork-specific code or upstream code.
+- Include test output (`pytest tests/mcp_servers/ -v`).
+- For new MCP servers: list all tools, their inputs, and the corresponding Kali binary/API.
+- For skill YAML changes: verify the skill runs end-to-end against an authorized test target.
+
+### Upstream Sync
+
+This fork tracks `pewdiepie-archdaemon/odysseus` `dev` branch. Sync when the upstream-drift CI job warns:
+
+```bash
+git fetch https://github.com/pewdiepie-archdaemon/odysseus.git dev
+git merge FETCH_HEAD --no-ff -m "chore: sync upstream dev $(date +%Y-%m-%d)"
+git push origin dev
+```
+
+Conflicts are rare — fork additions live in paths that upstream doesn't touch (`mcp_servers/`, `skills/`, `docker/toolchain/`, `docs/adr/`). The most likely conflict is `README.md` since both upstream and this fork maintain it; resolve by keeping our security sections and incorporating upstream's changes above the "What This Is" heading.
+

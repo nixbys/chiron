@@ -32,10 +32,14 @@
 
 Odysseus Red layers a complete cybersecurity toolchain on top of the [Odysseus](https://github.com/pewdiepie-archdaemon/odysseus) self-hosted AI workspace. The base platform provides chat, agents, memory, deep research, documents, and MCP — this fork adds:
 
-- **7 cybersecurity MCP servers** wired to a Kali-based sidecar, SpiderFoot OSINT platform, and BentoPDF
-- **Pre-built agent skill workflows** for reconnaissance, OSINT, web assessment, PDF intelligence, and reporting
+- **14 cybersecurity MCP servers** wired to a Kali-based sidecar, SpiderFoot OSINT platform, OpenSearch, and BentoPDF
+- **Pre-built agent skill workflows** for reconnaissance, OSINT, incident response, threat hunting, malware analysis, web assessment, and reporting
 - **SpiderFoot** (200+ correlated OSINT modules) running as a persistent REST API sidecar
 - **BentoPDF** — client-side PDF toolkit for metadata extraction, report assembly, and interactive editing
+- **Asset inventory** with SQLite-backed tracking of hosts, services, and findings
+- **MITRE ATT&CK mapping** — STIX-based technique lookup and TTP correlation
+- **CVSS risk scoring** — aggregated risk summaries and prioritized remediation plans
+- **OpenSearch findings persistence** — index, search, and track findings across engagements
 - **Pentest report templates** aligned to PTES and the OWASP Testing Guide
 
 Everything runs locally. No telemetry. All tool execution stays on your own infrastructure.
@@ -71,36 +75,38 @@ Native installs, GPU notes, Windows/macOS instructions, and HTTPS are covered in
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                   Odysseus Red (port 7000)                    │
-│          Chat · Agents · Research · Documents · MCP           │
-└────┬──────────────┬──────────────┬────────────────────────────┘
-     │ MCP stdio    │ MCP stdio    │ MCP stdio
-     ▼              ▼              ▼
-┌─────────────┐ ┌──────────────┐ ┌──────────────────────────┐
-│ mcp_servers/│ │ mcp_servers/ │ │ mcp_servers/             │
-│ recon       │ │ spiderfoot   │ │ pdf_server               │
-│ osint       │ │ (REST client)│ │ (pypdf — no extra deps)  │
-│ web_vuln    │ └──────┬───────┘ └──────────────────────────┘
-│ intel       │        │ HTTP :5001   ▲ url handed to user
-│ hashcrack   │ ┌──────▼───────────┐  │
-└──────┬──────┘ │ odysseus-        │ ┌┴──────────────────────┐
-       │ podman │ spiderfoot        │ │ odysseus-bentopdf     │
-       │ exec   │ 200+ OSINT modules│ │ localhost:3000        │
-       ▼        │ REST :5001        │ │ client-side WASM/JS   │
-┌─────────────┐ │ internal net only │ │ edit · redact · sign  │
-│ odysseus-   │ └───────────────────┘ └───────────────────────┘
-│ toolchain   │
-│ (Kali)      │
-│ nmap masscan│
-│ nikto gobust│
-│ sqlmap nucle│
-│ theHarvester│
-│ john hydra  │
-└─────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                    Odysseus Red (port 7000)                       │
+│           Chat · Agents · Research · Documents · MCP              │
+└──┬──────────────┬──────────────┬──────────────┬───────────────────┘
+   │ MCP stdio    │ MCP stdio    │ MCP stdio    │ MCP stdio
+   ▼              ▼              ▼              ▼
+┌──────────────┐ ┌────────────┐ ┌────────────┐ ┌──────────────────┐
+│ mcp_servers/ │ │mcp_servers/│ │mcp_servers/│ │ mcp_servers/     │
+│ recon        │ │ spiderfoot │ │ asset      │ │ pdf_server       │
+│ osint        │ │(REST client│ │ attck      │ │ (pypdf)          │
+│ web_vuln     │ └─────┬──────┘ │ risk       │ └──────────────────┘
+│ intel        │       │:5001   │ findings   │
+│ hashcrack    │ ┌─────▼──────┐ └─────┬──────┘
+│ yara         │ │odysseus-   │       │ HTTP
+│ exploit      │ │spiderfoot  │ ┌─────▼──────────┐
+│ transform    │ │200+ modules│ │ OpenSearch     │
+└──────┬───────┘ └────────────┘ │ :9200          │
+       │ HTTP :8088             │ findings index  │
+       ▼                        └────────────────┘
+┌──────────────────────┐   ┌───────────────────────┐
+│ odysseus-toolchain   │   │ odysseus-bentopdf      │
+│ (Kali Rolling)       │   │ localhost:3000          │
+│ nmap  masscan  ffuf  │   │ client-side WASM/JS     │
+│ nikto gobuster sqlmap│   │ edit · redact · sign    │
+│ nuclei  subfinder    │   └───────────────────────┘
+│ john  hydra  yara    │
+│ theHarvester recon-ng│
+│ exploitdb  trivy     │
+└──────────────────────┘
 ```
 
-The Odysseus core image is **not modified**. All three sidecars are managed via `docker-compose.security.yml` and attach to the same internal network.
+The Odysseus core image is **not modified**. All sidecars are managed via `docker-compose.security.yml` and attach to the same internal network.
 
 ---
 
@@ -173,11 +179,96 @@ SpiderFoot use cases: `passive` (no active probing), `investigate` (balanced), `
 
 Uses `pypdf` (already in `requirements.txt`) — no additional dependencies. For interactive work (redaction, compression, format conversion, signing), the agent hands users the BentoPDF URL at `http://localhost:3000`.
 
+### `yara_server` — YARA Malware Detection
+
+| Tool | Description |
+|------|-------------|
+| `yara_scan` | Scan a file or directory against stored YARA rules |
+| `yara_rule_write` | Save a new YARA rule to the rules directory |
+| `yara_list_rules` | List all available YARA rules |
+
+Rules are stored under `/workspaces/yara_rules/` inside the Kali container.
+
+### `exploit_server` — Exploit Database
+
+| Tool | Description |
+|------|-------------|
+| `searchsploit` | Search Exploit-DB by keyword via searchsploit |
+| `exploit_db_lookup` | Fetch exploit details by EDB ID |
+| `cve_to_exploit` | Find all known exploits for a CVE identifier |
+
+Uses the local `exploitdb` package installed in the Kali container — no network required.
+
+### `transform_server` — Data Transformation
+
+| Tool | Description |
+|------|-------------|
+| `encode` | Base64, hex, URL, or HTML encode |
+| `decode` | Reverse of encode |
+| `hash_data` | MD5, SHA1, SHA256, SHA512, bcrypt hash |
+| `gzip_compress` | Compress data to base64-encoded gzip |
+| `gzip_decompress` | Decompress base64-encoded gzip |
+| `regex_extract` | Extract all regex matches from text |
+| `jwt_decode` | Decode and inspect a JWT (no verification) |
+| `xor` | XOR a string against a single-byte or multi-byte key |
+
+All transforms run in-process — no toolchain call required.
+
+### `asset_server` — Asset Inventory
+
+| Tool | Description |
+|------|-------------|
+| `asset_add` | Register a host in the inventory |
+| `asset_list` | List all tracked assets with metadata |
+| `asset_get` | Retrieve a specific asset by IP |
+| `service_add` | Record an open service on a tracked asset |
+| `service_list` | List services for a given asset |
+| `finding_add` | Log a security finding against an asset |
+| `finding_list` | List findings, optionally filtered by asset or severity |
+
+Backed by a WAL-mode SQLite database at `$ODYSSEUS_DATA_DIR/assets.db`.
+
+### `attck_server` — MITRE ATT&CK
+
+| Tool | Description |
+|------|-------------|
+| `attck_update` | Refresh the local ATT&CK STIX dataset (7-day TTL cache) |
+| `attck_technique` | Look up a technique by ID (e.g., T1059.001) |
+| `attck_tactic` | List all techniques under a tactic |
+| `attck_search` | Free-text search across technique names and descriptions |
+| `attck_map` | Map a list of technique IDs to their full details |
+
+STIX data sourced from `github.com/mitre/cti`, cached locally.
+
+### `risk_server` — CVSS Risk Scoring
+
+| Tool | Description |
+|------|-------------|
+| `risk_score_finding` | Score a finding: CVSS base × criticality × exploitability |
+| `asset_risk` | Aggregate risk score for a single asset |
+| `risk_summary` | Full risk summary across all tracked assets |
+| `remediation_plan` | Prioritized remediation list sorted by risk score |
+
+Risk formula: `CVSS_base × criticality_multiplier × exploitability_factor`, capped at 30.0.
+
+### `findings_server` — OpenSearch Findings Persistence
+
+| Tool | Description |
+|------|-------------|
+| `finding_index` | Index a finding into OpenSearch |
+| `finding_search` | Full-text search across all indexed findings |
+| `finding_stats` | Count findings by severity and status |
+| `finding_update_status` | Update the remediation status of a finding |
+
+Index: `odysseus-findings` in the `opensearch` service (see `docker-compose.security.yml`).
+
 ---
 
 ## Skills
 
 Pre-built agent workflows in [`skills/`](skills/):
+
+**Reconnaissance & OSINT**
 
 | Skill | Description |
 |-------|-------------|
@@ -185,45 +276,68 @@ Pre-built agent workflows in [`skills/`](skills/):
 | [`osint/target_profile`](skills/osint/target_profile.yaml) | DNS + WHOIS + theHarvester + Shodan passive profile |
 | [`osint/spiderfoot_deep_scan`](skills/osint/spiderfoot_deep_scan.yaml) | Full SpiderFoot correlated scan with CVE and breach extraction |
 | [`osint/pdf_intel`](skills/osint/pdf_intel.yaml) | Metadata + text extraction from collected PDFs, with entity correlation |
+
+**Web Assessment**
+
+| Skill | Description |
+|-------|-------------|
 | [`web_assessment/web_full`](skills/web_assessment/web_full.yaml) | nikto + gobuster + sqlmap + nuclei chain |
+
+**Incident Response**
+
+| Skill | Description |
+|-------|-------------|
+| [`incident_response/ransomware_response`](skills/incident_response/ransomware_response.yaml) | Host triage → IOC extraction → ATT&CK mapping → remediation plan |
+| [`incident_response/network_compromise`](skills/incident_response/network_compromise.yaml) | Entry point scan → C2 intel → lateral movement TTPs → report |
+| [`incident_response/credential_breach`](skills/incident_response/credential_breach.yaml) | Attacker intel → exposed service scan → credential-focused TTPs |
+| [`incident_response/ioc_triage`](skills/incident_response/ioc_triage.yaml) | Rapid IOC triage against threat intel |
+| [`incident_response/threat_actor_profile`](skills/incident_response/threat_actor_profile.yaml) | Build a threat actor dossier from OSINT and ATT&CK data |
+
+**Threat Hunting**
+
+| Skill | Description |
+|-------|-------------|
+| [`threat_hunting/ioc_hunt`](skills/threat_hunting/ioc_hunt.yaml) | Hunt for IOCs across the asset inventory |
+| [`threat_hunting/network_exposure_audit`](skills/threat_hunting/network_exposure_audit.yaml) | Identify unexpected network exposure on known assets |
+
+**Malware Analysis**
+
+| Skill | Description |
+|-------|-------------|
+| [`malware_analysis/file_triage`](skills/malware_analysis/file_triage.yaml) | Static file triage: hashes, strings, YARA, exiftool |
+
+**Reporting**
+
+| Skill | Description |
+|-------|-------------|
 | [`reporting/pentest_report`](skills/reporting/pentest_report.md) | PTES/OWASP-aligned Markdown report template |
 
 ---
 
 ## Configuration
 
-Copy `.env.example` to `.env` and populate:
+Copy `.env.example` to `.env` and populate the security overlay section:
 
 ```bash
-# --- Threat intelligence API keys (intel_server + SpiderFoot) ---
+# Shared secret for the Kali toolchain exec API
+EXEC_API_TOKEN=change_me_before_deploy   # openssl rand -hex 32
+
+# Threat intelligence APIs
 SHODAN_API_KEY=
 VIRUSTOTAL_API_KEY=
 OTX_API_KEY=
-NVD_API_KEY=              # optional — removes NVD rate limits
 
-# --- SpiderFoot (if auth is enabled on the SpiderFoot container) ---
-SPIDERFOOT_URL=http://odysseus-spiderfoot:5001
-SPIDERFOOT_USERNAME=
-SPIDERFOOT_PASSWORD=
+# Censys (censys_server)
+CENSYS_API_ID=
+CENSYS_API_SECRET=
 
-# --- BentoPDF ---
-BENTOPDF_URL=http://localhost:3000
-# Advanced WASM modules (PyMuPDF, Ghostscript, CoherentPDF) load from
-# jsDelivr CDN by default. For air-gapped deployments, run the offline
-# setup script and override these:
-# VITE_WASM_PYMUPDF_URL=http://localhost:3000/wasm/pymupdf.js
-# VITE_WASM_GS_URL=http://localhost:3000/wasm/gs.js
-# VITE_WASM_CPDF_URL=http://localhost:3000/wasm/cpdf.js
-
-# --- PDF server ---
-ODYSSEUS_DATA_DIR=./data  # pdf_server resolves file paths relative to this
-
-# --- Container runtime (default: podman; set to docker on non-Fedora hosts) ---
-ODYSSEUS_CONTAINER_RUNTIME=podman
-ODYSSEUS_TOOLCHAIN_CONTAINER=odysseus-toolchain
+# OpenSearch (findings_server)
+OPENSEARCH_URL=http://opensearch:9200
+OPENSEARCH_USER=admin
+OPENSEARCH_PASSWORD=admin
 ```
 
-All other Odysseus configuration options (model endpoints, auth, HTTPS, etc.) are documented in the upstream [setup guide](docs/setup.md).
+All Odysseus platform options (model endpoints, auth, HTTPS, RAG, GPU) are documented in the upstream [setup guide](docs/setup.md). See `.env.example` for the complete annotated reference.
 
 ---
 
@@ -232,37 +346,48 @@ All other Odysseus configuration options (model endpoints, auth, HTTPS, etc.) ar
 ```
 odysseus-red/
 ├── mcp_servers/
+│   ├── common.py                # Shared: exec_in_toolchain, mcp_error, validators
 │   ├── recon_server.py          # nmap, masscan
 │   ├── intel_server.py          # Shodan, VirusTotal, CVE/NVD, OTX
 │   ├── osint_server.py          # theHarvester, Sherlock, DNS, WHOIS
 │   ├── web_vuln_server.py       # nikto, gobuster, sqlmap, nuclei
 │   ├── hashcrack_server.py      # hashid, john
 │   ├── spiderfoot_server.py     # SpiderFoot REST API client
-│   └── pdf_server.py            # PDF intel + report assembly (pypdf)
+│   ├── pdf_server.py            # PDF intel + report assembly (pypdf)
+│   ├── yara_server.py           # YARA scan, rule management
+│   ├── exploit_server.py        # searchsploit, Exploit-DB lookup
+│   ├── transform_server.py      # encode/decode, hash, JWT, XOR (in-process)
+│   ├── asset_server.py          # SQLite asset + findings inventory
+│   ├── attck_server.py          # MITRE ATT&CK STIX lookup
+│   ├── risk_server.py           # CVSS scoring + remediation plans
+│   └── findings_server.py       # OpenSearch findings persistence
 ├── skills/
 │   ├── recon/full_recon.yaml
-│   ├── osint/target_profile.yaml
-│   ├── osint/spiderfoot_deep_scan.yaml
-│   ├── osint/pdf_intel.yaml
+│   ├── osint/                   # target_profile, spiderfoot_deep_scan, pdf_intel
 │   ├── web_assessment/web_full.yaml
+│   ├── incident_response/       # ransomware_response, network_compromise,
+│   │                            # credential_breach, ioc_triage, threat_actor_profile
+│   ├── threat_hunting/          # ioc_hunt, network_exposure_audit
+│   ├── malware_analysis/        # file_triage
 │   └── reporting/pentest_report.md
 ├── modules/
 │   ├── engagement_manager/      # in development
 │   ├── finding_tracker/         # in development
 │   └── report_builder/          # in development
 ├── docker/
-│   └── toolchain/Dockerfile     # Kali Rolling sidecar image
-├── docker-compose.security.yml  # Compose overlay: toolchain + SpiderFoot + BentoPDF
-├── docs/adr/                    # Architecture decision records
-│   ├── 001-toolchain-sidecar-isolation.md
-│   ├── 002-podman-over-docker.md
-│   ├── 003-spiderfoot-integration.md
-│   └── 004-bentopdf-integration.md
+│   └── toolchain/
+│       ├── Dockerfile           # Kali Rolling sidecar image
+│       └── exec_api.py          # HTTP exec API (Bearer auth + structured logging)
+├── docker-compose.security.yml  # Compose overlay: toolchain + SpiderFoot + OpenSearch + BentoPDF
+├── docs/
+│   ├── adr/                     # Architecture decision records (ADR 001–004)
+│   ├── develop-mcp-servers.md   # Guide for adding new MCP servers
+│   └── reverse-proxy.md         # HTTPS + Caddy/nginx/Traefik examples
 └── tests/
-    └── mcp_servers/             # Unit tests (subprocess/HTTP/pypdf fully mocked)
+    └── mcp_servers/             # Unit tests (all outbound HTTP/subprocess mocked)
 ```
 
-Everything under `mcp_servers/`, `skills/`, `modules/`, `docker/toolchain/`, and `docs/adr/` is specific to this fork. All other files are upstream Odysseus — kept unmodified to make merging upstream changes straightforward.
+Everything under `mcp_servers/`, `skills/`, `modules/`, `docker/toolchain/`, and `docs/adr/` is specific to this fork. All other files are upstream Odysseus — kept unmodified to simplify future upstream merges.
 
 ---
 
@@ -290,17 +415,16 @@ pip install -r requirements.txt pytest pytest-asyncio bandit ruff black pre-comm
 # Run MCP server unit tests
 pytest tests/mcp_servers/ -v
 
-# Run security lint on our additions only
-bandit -r mcp_servers/recon_server.py mcp_servers/intel_server.py \
-          mcp_servers/osint_server.py mcp_servers/web_vuln_server.py \
-          mcp_servers/hashcrack_server.py mcp_servers/spiderfoot_server.py \
-          mcp_servers/pdf_server.py modules/ -ll
+# Security lint (our additions only)
+bandit -r mcp_servers/ modules/ -ll
 
 # Install pre-commit hooks
 pre-commit install
 ```
 
-CI runs on every push to `dev` and `main` via [`.github/workflows/ci-security.yml`](.github/workflows/ci-security.yml).
+See [`docs/develop-mcp-servers.md`](docs/develop-mcp-servers.md) for the guide to adding new MCP servers.
+
+CI runs on every push to `dev` and `main` via [`.github/workflows/ci-security.yml`](.github/workflows/ci-security.yml) (bandit, pip-audit, unit tests, Dockerfile build, Trivy scan, upstream-drift check).
 
 ---
 
