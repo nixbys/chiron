@@ -1,0 +1,64 @@
+name: network_exposure_audit
+version: "1.0"
+description: >
+  Blue team exposure audit for an organization's internet-facing footprint.
+  Maps discovered assets against Shodan data, checks for unintended exposure,
+  known CVEs, and default credentials. Useful for continuous attack surface
+  management and pre-engagement baseline assessment.
+
+inputs:
+  org_domain:
+    type: string
+    description: "Primary domain of the organization to audit"
+  cidr_ranges:
+    type: list
+    required: false
+    description: "Known IP ranges to include in the audit"
+
+steps:
+  - id: dns_footprint
+    tool: dns_enum
+    args:
+      domain: "{{ org_domain }}"
+    description: "Enumerate all DNS records — A, AAAA, MX, NS, TXT, CNAME, SPF, DMARC"
+
+  - id: whois_org
+    tool: whois_lookup
+    args:
+      target: "{{ org_domain }}"
+    description: "WHOIS org data — registered ASNs and netblock ownership"
+
+  - id: passive_harvest
+    tool: harvester
+    args:
+      domain: "{{ org_domain }}"
+      sources: "bing,google,dnsdumpster,crtsh,hunter,shodan"
+    description: "Passive subdomain and email enumeration"
+
+  - id: spiderfoot_surface
+    tool: sf_scan_start
+    args:
+      target: "{{ org_domain }}"
+      modules: "sfp_dnsresolve,sfp_ssl,sfp_shodan,sfp_whois,sfp_crt,sfp_hunter"
+    description: "SpiderFoot attack surface discovery"
+
+  - id: shodan_exposure
+    tool: shodan_host
+    args:
+      ip: "{{ discovered_ips }}"
+    description: "Shodan: open ports, banners, known CVEs, and geo data for all discovered IPs"
+
+  - id: cve_check
+    tool: cve_lookup
+    args:
+      products: "{{ discovered_services }}"
+    description: "CVE lookup on identified service versions"
+
+  - id: exposure_report
+    tool: generate_report
+    args:
+      template: exposure_audit
+      org: "{{ org_domain }}"
+      findings: "{{ steps }}"
+      format: markdown
+    description: "Exposure report: asset inventory, critical findings, remediation priorities"

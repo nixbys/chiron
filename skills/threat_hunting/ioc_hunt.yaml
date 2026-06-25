@@ -1,0 +1,66 @@
+name: ioc_hunt
+version: "1.0"
+description: >
+  Proactive threat hunt seeded from a known IOC or threat actor name.
+  Expands the seed across OTX, VirusTotal, and SpiderFoot to discover
+  related infrastructure, then validates exposure via Shodan and DNS.
+  Produces a hunt report with newly discovered IOCs and coverage gaps.
+
+inputs:
+  seed:
+    type: string
+    description: "Starting IOC (IP, domain, hash) or threat actor name"
+  hunt_depth:
+    type: integer
+    default: 2
+    description: "Pivot depth — 1 = direct hits only, 2 = expand related infra"
+
+steps:
+  - id: otx_seed
+    tool: otx_indicator
+    args:
+      indicators: ["{{ seed }}"]
+      include_related_pulses: true
+    description: "OTX pulse lookup — identifies known campaigns and related IOCs"
+
+  - id: vt_expand
+    tool: virustotal_lookup
+    args:
+      targets: ["{{ seed }}"]
+      relationships: true
+    description: "VirusTotal pivot — communicating files, contacted domains, sibling IPs"
+
+  - id: spiderfoot_hunt
+    tool: sf_scan_start
+    args:
+      target: "{{ seed }}"
+      modules: "sfp_threatcrowd,sfp_virustotal,sfp_alienvault,sfp_dnsresolve,sfp_whois,sfp_shodan"
+    description: "SpiderFoot multi-module expansion for infrastructure clustering"
+
+  - id: sf_results
+    tool: sf_scan_results
+    args:
+      scan_id: "{{ spiderfoot_hunt.scan_id }}"
+      wait: true
+    description: "Collect SpiderFoot results after scan completion"
+
+  - id: shodan_validation
+    tool: shodan_host
+    args:
+      ip: "{{ discovered_ips }}"
+    description: "Validate discovered IPs against Shodan — confirm live and assess exposure"
+
+  - id: dns_infra
+    tool: dns_enum
+    args:
+      domain: "{{ discovered_domains }}"
+    description: "Passive DNS on discovered domains — A, MX, NS, TXT records"
+
+  - id: hunt_report
+    tool: generate_report
+    args:
+      template: threat_hunt
+      seed: "{{ seed }}"
+      findings: "{{ steps }}"
+      format: markdown
+    description: "Hunt report: expanded IOC list, infrastructure map, coverage assessment"
