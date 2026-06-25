@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
   pull_request:
 
 # Least privilege: none of the jobs write to the repo.
@@ -26,7 +26,8 @@ jobs:
         with:
           python-version: "3.11"
       # Byte-compile sources — catches syntax errors without installing deps.
-      - run: python -m compileall -q app.py core routes src services scripts tests
+      # Includes fork-specific additions: mcp_servers/ and modules/.
+      - run: python -m compileall -q app.py core routes src services scripts tests mcp_servers modules
 
   node-syntax:
     name: JS syntax (node --check)

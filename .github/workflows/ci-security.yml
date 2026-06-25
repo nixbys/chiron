@@ -164,6 +164,61 @@ jobs:
           name: trivy-results
           path: trivy-results.txt
 
+  python-syntax:
+    name: Python syntax (compileall — fork additions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.11"
+      - run: python -m compileall -q mcp_servers/ modules/
+
+  hadolint:
+    name: Dockerfile lint (hadolint — toolchain)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - name: Lint docker/toolchain/Dockerfile
+        uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5  # v3.3.0
+        with:
+          dockerfile: docker/toolchain/Dockerfile
+          # DL3008: pinning apt versions is impractical on Kali Rolling (versions are purged).
+          # DL3013: pip packages in this Dockerfile are intentionally unpinned for tool installs.
+          # DL4006: SHELL instruction not needed for single-arg RUN forms we use.
+          ignore: DL3008,DL3013,DL4006
+
+  yaml-lint:
+    name: Skill YAML syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.11"
+      - name: Validate skill YAML files
+        run: |
+          pip install pyyaml --quiet
+          python - <<'EOF'
+          import sys, pathlib, yaml
+          errors = []
+          for p in pathlib.Path("skills").rglob("*.yaml"):
+              try:
+                  yaml.safe_load(p.read_text())
+              except yaml.YAMLError as e:
+                  errors.append(f"{p}: {e}")
+          if errors:
+              print("\n".join(errors))
+              sys.exit(1)
+          print(f"All {sum(1 for _ in pathlib.Path('skills').rglob('*.yaml'))} skill YAML files are valid.")
+          EOF
+
   upstream-drift:
     name: Upstream sync drift check
     runs-on: ubuntu-latest
