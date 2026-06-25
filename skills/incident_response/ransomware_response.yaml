@@ -1,0 +1,105 @@
+name: ransomware_response
+version: "1.0"
+description: >
+  Structured incident response playbook for an active ransomware incident.
+  Covers initial triage, network isolation assessment, IOC extraction,
+  threat actor attribution, recovery readiness check, and stakeholder report.
+  Follow each step in order; some steps can proceed in parallel once hosts
+  are isolated and triage data is collected.
+
+inputs:
+  affected_hosts:
+    type: list
+    description: "IP addresses or hostnames confirmed or suspected to be affected"
+  ransom_note_text:
+    type: string
+    required: false
+    description: "Raw ransom note text if available — used for actor attribution"
+  incident_id:
+    type: string
+    required: false
+    description: "Ticket / case reference ID"
+  encryption_extensions:
+    type: list
+    required: false
+    description: "File extensions used by the ransomware (e.g. ['.locked', '.WASTED'])"
+
+steps:
+  - id: host_triage
+    tool: nmap_scan
+    args:
+      target: "{{ affected_hosts | join(',') }}"
+      flags: "-sV -p 135,139,445,3389,5985,22 --open"
+    description: >
+      Quick port scan of affected hosts to understand still-accessible services.
+      Lateral movement commonly occurs over SMB (445), WMI (135), and RDP (3389).
+
+  - id: shodan_exposure
+    tool: shodan_host
+    args:
+      ip: "{{ affected_hosts | filter_type('ip') }}"
+    description: >
+      Check Shodan for internet exposure of affected IPs — if these hosts were
+      directly internet-exposed, document the initial access vector.
+
+  - id: ioc_extraction
+    tool: otx_indicator
+    args:
+      indicators: "{{ affected_hosts | filter_type('ip') }}"
+    description: >
+      Check OTX for any existing threat intelligence on observed IPs.
+      May surface known ransomware C2 infrastructure.
+
+  - id: vt_hashes
+    tool: virustotal_lookup
+    args:
+      targets: "{{ affected_hosts }}"
+    description: >
+      If sample hashes are available, check VirusTotal for detections,
+      behavior sandbox results, and related IOC graph.
+
+  - id: attck_mapping
+    tool: attck_map
+    args:
+      technique_ids:
+        - "T1486"   # Data Encrypted for Impact
+        - "T1490"   # Inhibit System Recovery
+        - "T1485"   # Data Destruction
+        - "T1489"   # Service Stop
+        - "T1562"   # Impair Defenses
+        - "T1070"   # Indicator Removal
+      context: "ransomware incident - {{ incident_id }}"
+    description: >
+      Map common ransomware TTPs to MITRE ATT&CK. Extend technique_ids
+      with any additional observed behaviors before running.
+
+  - id: risk_summary
+    tool: risk_summary
+    args:
+      min_severity: high
+      limit: 20
+    description: >
+      Pull current risk-scored open findings from the asset inventory
+      to understand pre-existing exposure that may have enabled the attack.
+
+  - id: remediation_plan
+    tool: remediation_plan
+    args:
+      limit_per_tier: 10
+    description: >
+      Generate a prioritized remediation plan for all open findings.
+      Use this to drive recovery prioritization and prevent re-compromise.
+
+  - id: ir_report
+    tool: generate_report
+    args:
+      template: ransomware_ir
+      incident_id: "{{ incident_id }}"
+      affected_hosts: "{{ affected_hosts }}"
+      encryption_extensions: "{{ encryption_extensions }}"
+      ransom_note: "{{ ransom_note_text }}"
+      findings: "{{ steps }}"
+      format: pdf
+    description: >
+      Executive and technical IR report: timeline, blast radius, actor attribution,
+      IoC list, recovery steps, and remediation roadmap.

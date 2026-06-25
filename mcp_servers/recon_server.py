@@ -7,21 +7,17 @@ The caller is responsible for obtaining written authorization before targeting a
 """
 
 import asyncio
-import os
 import sys
 from pathlib import Path
-
-import requests
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from mcp_servers.common import exec_in_toolchain, mcp_error, validate_ip
 
 server = Server("recon")
-
-_TOOLCHAIN_API = os.environ.get("ODYSSEUS_TOOLCHAIN_API", "http://odysseus-toolchain:8088")
 
 TOOLS = [
     Tool(
@@ -61,33 +57,17 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "target": {"type": "string", "description": "IP or CIDR (authorized only)"},
-                "ports": {"type": "string", "description": "Port range, e.g. '1-65535' or '80,443,8080'", "default": "1-1000"},
+                "ports": {
+                    "type": "string",
+                    "description": "Port range, e.g. '1-65535' or '80,443,8080'",
+                    "default": "1-1000",
+                },
                 "rate": {"type": "integer", "description": "Packets per second", "default": 1000},
             },
             "required": ["target"],
         },
     ),
 ]
-
-
-def _exec_in_toolchain(cmd: list[str], timeout: int = 300) -> str:
-    """Call the toolchain exec API and return combined stdout+stderr."""
-    try:
-        resp = requests.post(
-            f"{_TOOLCHAIN_API}/exec",
-            json={"args": cmd, "timeout": timeout},
-            timeout=timeout + 5,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        out = (data.get("stdout") or "") + (
-            f"\n[stderr]\n{data['stderr']}" if data.get("stderr") else ""
-        )
-        return out.strip() or "(no output)"
-    except requests.exceptions.Timeout:
-        return f"[timeout] Scan exceeded {timeout}s and was terminated."
-    except Exception as exc:  # noqa: BLE001
-        return f"[error] {exc}"
 
 
 @server.list_tools()
@@ -99,22 +79,27 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "nmap_scan":
         target = arguments["target"]
+        if err := validate_ip(target):
+            return [TextContent(type="text", text=err)]
         flags = arguments.get("flags", "-sV -T4 --open").split()
         timeout = int(arguments.get("timeout", 300))
-        output = _exec_in_toolchain(["nmap"] + flags + [target], timeout=timeout)
-        return [TextContent(type="text", text=output)]
+        result = exec_in_toolchain(["nmap"] + flags + [target], timeout=timeout)
 
-    if name == "masscan_scan":
+    elif name == "masscan_scan":
         target = arguments["target"]
+        if err := validate_ip(target):
+            return [TextContent(type="text", text=err)]
         ports = arguments.get("ports", "1-1000")
         rate = int(arguments.get("rate", 1000))
-        output = _exec_in_toolchain(
+        result = exec_in_toolchain(
             ["masscan", target, "-p", ports, "--rate", str(rate), "--output-format", "list"],
             timeout=600,
         )
-        return [TextContent(type="text", text=output)]
 
-    return [TextContent(type="text", text=f"[error] Unknown tool: {name}")]
+    else:
+        result = mcp_error("unknown_tool", name)
+
+    return [TextContent(type="text", text=result)]
 
 
 async def main() -> None:

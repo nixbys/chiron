@@ -13,10 +13,14 @@ inputs:
   target:
     type: string
     description: "IP, hostname, or CIDR range"
+  url:
+    type: string
+    required: false
+    description: "Base URL for web enumeration (e.g. http://target.com). Required when include_web is true."
   include_web:
     type: boolean
     default: true
-    description: "Run web enumeration against discovered HTTP/HTTPS ports"
+    description: "Run web enumeration and vuln scan against the provided URL"
 
 steps:
   - id: port_scan
@@ -27,23 +31,24 @@ steps:
     description: "Full port + service version scan"
 
   - id: web_enum
-    condition: "{{ include_web }}"
+    condition: "{{ include_web and url }}"
     tool: gobuster_dir
     args:
-      url: "{{ discovered_web_url }}"
+      url: "{{ url }}"
       wordlist: "/usr/share/wordlists/dirb/common.txt"
       threads: 20
-    description: "Directory enumeration on discovered web services"
+    description: "Directory enumeration on the target web service"
 
   - id: vuln_scan
+    condition: "{{ include_web and url }}"
     tool: nuclei_scan
     args:
-      url: "{{ discovered_web_url }}"
+      url: "{{ url }}"
       severity: "critical,high,medium"
     description: "Template-based vulnerability detection"
 
   - id: generate_report
-    tool: report_builder
+    tool: generate_report
     args:
       template: pentest_standard
       findings: "{{ steps }}"
