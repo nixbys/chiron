@@ -1,0 +1,75 @@
+# Release drafter configuration for Odysseus Red.
+#
+# Auto-drafts the next release by categorising merged pull requests by their
+# labels. The draft is updated each time a PR merges to dev and on each push
+# to main. Cut a release by promoting the draft: bump ODYSSEUS_RED_VERSION in
+# src/constants.py, update CHANGELOG.md, merge dev → main, then push a vX.Y.Z
+# tag. See CONTRIBUTING.md § "Cutting a Release".
+
+name-template: 'v$RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+
+# Map PR labels to release categories.
+categories:
+  - title: '🛡️ Security Additions'
+    labels:
+      - 'security'
+      - 'mcp-server'
+  - title: '🐛 Bug Fixes'
+    labels:
+      - 'bug'
+      - 'fix'
+  - title: '📚 Documentation'
+    labels:
+      - 'documentation'
+  - title: '🧪 Tests'
+    labels:
+      - 'test'
+  - title: '⚙️ CI / Infrastructure'
+    labels:
+      - 'ci'
+      - 'infrastructure'
+  - title: '⬆️ Dependencies'
+    labels:
+      - 'dependencies'
+  - title: '⬆️ Upstream Sync'
+    labels:
+      - 'upstream-sync'
+
+change-template: '- $TITLE @$AUTHOR (#$NUMBER)'
+change-title-escapes: '\<*_&'
+
+# SemVer bump rules based on PR labels.
+version-resolver:
+  major:
+    labels:
+      - 'breaking-change'
+  minor:
+    labels:
+      - 'enhancement'
+      - 'security'
+      - 'mcp-server'
+  patch:
+    labels:
+      - 'bug'
+      - 'fix'
+      - 'chore'
+      - 'ci'
+      - 'documentation'
+      - 'dependencies'
+      - 'upstream-sync'
+      - 'test'
+  default: patch
+
+template: |
+  ## What's Changed
+
+  $CHANGES
+
+  ---
+
+  > **Authorization requirement:** All active tools (nmap, sqlmap, nuclei, etc.) require explicit written authorization for any target. See [SECURITY.md](SECURITY.md) for the full policy.
+
+  **Upstream base:** Odysseus [`${{ env.APP_VERSION }}`](https://github.com/pewdiepie-archdaemon/odysseus)
+
+  **Full Changelog:** https://github.com/$OWNER/$REPOSITORY/blob/main/CHANGELOG.md

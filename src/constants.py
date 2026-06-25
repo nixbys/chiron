@@ -6,6 +6,11 @@ from src.runtime_paths import get_app_root, get_default_data_dir
 
 APP_VERSION = "1.0.1"
 
+# Odysseus Red fork version — tracks the security overlay independently of the
+# upstream platform version. Bumped when mcp_servers/, skills/, docker/toolchain/,
+# or SDLC artifacts change. Used by the release workflow to tag GitHub Releases.
+ODYSSEUS_RED_VERSION = "0.3.1"
+
 # Base paths
 BASE_DIR = os.path.join(get_app_root(), "")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
