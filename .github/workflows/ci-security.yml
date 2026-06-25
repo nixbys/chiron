@@ -58,6 +58,7 @@ jobs:
             mcp_servers/asset_server.py \
             mcp_servers/attck_server.py \
             mcp_servers/risk_server.py \
+            mcp_servers/findings_server.py \
             modules/ \
             -ll -f json -o bandit-report.json 2>/dev/null || \
           bandit -r \
@@ -75,6 +76,7 @@ jobs:
             mcp_servers/asset_server.py \
             mcp_servers/attck_server.py \
             mcp_servers/risk_server.py \
+            mcp_servers/findings_server.py \
             modules/ \
             -ll
       - uses: actions/upload-artifact@v7
