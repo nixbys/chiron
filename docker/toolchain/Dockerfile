@@ -25,8 +25,6 @@ RUN apt-get update -q && apt-get install -y -q --no-install-recommends \
     # Forensics & analysis
     binwalk exiftool \
     yara \
-    # Static analysis
-    semgrep \
     # Wordlists
     wordlists \
     # Utilities
@@ -45,7 +43,8 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     python-whois \
     hashid \
     sherlock-project \
-    yara-python
+    yara-python \
+    semgrep
 
 # ── Go-based security tools (ProjectDiscovery suite + Amass) ──────────────────
 RUN set -e && \
