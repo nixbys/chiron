@@ -1,27 +1,22 @@
 """
 web_vuln_server.py
 
-MCP server for web application assessment: nikto, gobuster (directory brute-force),
-sqlmap (SQL injection detection), and nuclei (template-based vulnerability scanning).
+MCP server for web application assessment: nikto, gobuster, sqlmap, nuclei, ffuf.
 All tools run inside the odysseus-toolchain sidecar. Authorized targets only.
 """
 
 import asyncio
-import os
 import sys
 from pathlib import Path
-
-import requests
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from mcp_servers.common import exec_in_toolchain, mcp_error, validate_url
 
 server = Server("web_vuln")
-
-_TOOLCHAIN_API = os.environ.get("ODYSSEUS_TOOLCHAIN_API", "http://odysseus-toolchain:8088")
 
 TOOLS = [
     Tool(
@@ -51,7 +46,11 @@ TOOLS = [
                     "description": "Path to wordlist inside toolchain container",
                     "default": "/usr/share/wordlists/dirb/common.txt",
                 },
-                "extensions": {"type": "string", "description": "File extensions (e.g. php,html,txt)", "default": ""},
+                "extensions": {
+                    "type": "string",
+                    "description": "File extensions (e.g. php,html,txt)",
+                    "default": "",
+                },
                 "threads": {"type": "integer", "default": 20},
             },
             "required": ["url"],
@@ -61,7 +60,7 @@ TOOLS = [
         name="sqlmap_scan",
         description=(
             "Run sqlmap to detect SQL injection vulnerabilities on an authorized target URL. "
-            "Uses non-destructive detection only by default (--level=1 --risk=1)."
+            "Non-destructive detection only by default (--level=1 --risk=1)."
         ),
         inputSchema={
             "type": "object",
@@ -95,26 +94,35 @@ TOOLS = [
             "required": ["url"],
         },
     ),
+    Tool(
+        name="ffuf_fuzz",
+        description=(
+            "Fast web fuzzer (ffuf) for parameter, header, and path fuzzing against an authorized target. "
+            "Use FUZZ as the placeholder in the URL."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Target URL with FUZZ placeholder (e.g. http://target.com/FUZZ)",
+                },
+                "wordlist": {
+                    "type": "string",
+                    "default": "/usr/share/wordlists/dirb/common.txt",
+                },
+                "filter_code": {
+                    "type": "string",
+                    "description": "Comma-separated HTTP status codes to filter out (e.g. 404,403)",
+                    "default": "404",
+                },
+                "threads": {"type": "integer", "default": 40},
+                "timeout": {"type": "integer", "default": 300},
+            },
+            "required": ["url"],
+        },
+    ),
 ]
-
-
-def _exec(cmd: list[str], timeout: int = 300) -> str:
-    try:
-        resp = requests.post(
-            f"{_TOOLCHAIN_API}/exec",
-            json={"args": cmd, "timeout": timeout},
-            timeout=timeout + 5,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        out = (data.get("stdout") or "") + (
-            f"\n[stderr]\n{data['stderr']}" if data.get("stderr") else ""
-        )
-        return out.strip() or "(no output)"
-    except requests.exceptions.Timeout:
-        return f"[timeout] Command exceeded {timeout}s."
-    except Exception as exc:  # noqa: BLE001
-        return f"[error] {exc}"
 
 
 @server.list_tools()
@@ -126,39 +134,62 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "nikto_scan":
         url = arguments["url"]
+        if err := validate_url(url):
+            return [TextContent(type="text", text=err)]
         timeout = int(arguments.get("timeout", 300))
-        result = _exec(["nikto", "-h", url, "-nointeractive"], timeout=timeout)
+        result = exec_in_toolchain(["nikto", "-h", url, "-nointeractive"], timeout=timeout)
 
     elif name == "gobuster_dir":
         url = arguments["url"]
+        if err := validate_url(url):
+            return [TextContent(type="text", text=err)]
         wordlist = arguments.get("wordlist", "/usr/share/wordlists/dirb/common.txt")
         threads = str(arguments.get("threads", 20))
         cmd = ["gobuster", "dir", "-u", url, "-w", wordlist, "-t", threads, "-q"]
-        ext = arguments.get("extensions", "")
-        if ext:
+        if ext := arguments.get("extensions", ""):
             cmd += ["-x", ext]
-        result = _exec(cmd, timeout=600)
+        result = exec_in_toolchain(cmd, timeout=600)
 
     elif name == "sqlmap_scan":
         url = arguments["url"]
+        if err := validate_url(url):
+            return [TextContent(type="text", text=err)]
         level = str(arguments.get("level", 1))
         risk = str(arguments.get("risk", 1))
-        cmd = ["sqlmap", "-u", url, "--level", level, "--risk", risk, "--batch", "--output-dir=/tmp/sqlmap"]
+        cmd = ["sqlmap", "-u", url, "--level", level, "--risk", risk,
+               "--batch", "--output-dir=/tmp/sqlmap"]
         if data := arguments.get("data"):
             cmd += ["--data", data]
-        result = _exec(cmd, timeout=600)
+        result = exec_in_toolchain(cmd, timeout=600)
 
     elif name == "nuclei_scan":
         url = arguments["url"]
+        if err := validate_url(url):
+            return [TextContent(type="text", text=err)]
         severity = arguments.get("severity", "critical,high")
         timeout = int(arguments.get("timeout", 300))
         cmd = ["nuclei", "-u", url, "-severity", severity, "-silent"]
         if tags := arguments.get("tags"):
             cmd += ["-tags", tags]
-        result = _exec(cmd, timeout=timeout)
+        result = exec_in_toolchain(cmd, timeout=timeout)
+
+    elif name == "ffuf_fuzz":
+        url = arguments["url"]
+        if "FUZZ" not in url:
+            return [TextContent(type="text", text=mcp_error("invalid_url", "URL must contain the FUZZ placeholder"))]
+        # Validate the base URL (strip FUZZ first)
+        base = url.replace("FUZZ", "test")
+        if err := validate_url(base):
+            return [TextContent(type="text", text=err)]
+        wordlist = arguments.get("wordlist", "/usr/share/wordlists/dirb/common.txt")
+        fc = arguments.get("filter_code", "404")
+        threads = str(arguments.get("threads", 40))
+        timeout = int(arguments.get("timeout", 300))
+        cmd = ["ffuf", "-u", url, "-w", wordlist, "-t", threads, "-fc", fc, "-s"]
+        result = exec_in_toolchain(cmd, timeout=timeout)
 
     else:
-        result = f"[error] Unknown tool: {name}"
+        result = mcp_error("unknown_tool", name)
 
     return [TextContent(type="text", text=result)]
 

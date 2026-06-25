@@ -4,6 +4,7 @@ on:
   push:
     branches: [dev, main]
     paths:
+      - "mcp_servers/common.py"
       - "mcp_servers/recon_server.py"
       - "mcp_servers/osint_server.py"
       - "mcp_servers/web_vuln_server.py"
@@ -11,23 +12,27 @@ on:
       - "mcp_servers/hashcrack_server.py"
       - "mcp_servers/spiderfoot_server.py"
       - "mcp_servers/pdf_server.py"
+      - "mcp_servers/yara_server.py"
+      - "mcp_servers/exploit_server.py"
+      - "mcp_servers/transform_server.py"
+      - "mcp_servers/asset_server.py"
+      - "mcp_servers/attck_server.py"
+      - "mcp_servers/risk_server.py"
+      - "mcp_servers/findings_server.py"
       - "modules/**"
       - "skills/**"
       - "tests/mcp_servers/**"
       - "tests/integration/**"
       - "docker/toolchain/**"
       - "docker-compose.security.yml"
+      - "requirements.txt"
   pull_request:
     paths:
-      - "mcp_servers/recon_server.py"
-      - "mcp_servers/osint_server.py"
-      - "mcp_servers/web_vuln_server.py"
-      - "mcp_servers/intel_server.py"
-      - "mcp_servers/hashcrack_server.py"
-      - "mcp_servers/spiderfoot_server.py"
-      - "mcp_servers/pdf_server.py"
+      - "mcp_servers/**"
       - "modules/**"
       - "skills/**"
+      - "docker/toolchain/**"
+      - "requirements.txt"
 
 permissions:
   contents: read
@@ -48,9 +53,9 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install bandit[toml]
-      # Only scan our additions — not upstream files we don't maintain
       - run: |
           bandit -r \
+            mcp_servers/common.py \
             mcp_servers/recon_server.py \
             mcp_servers/osint_server.py \
             mcp_servers/web_vuln_server.py \
@@ -58,9 +63,16 @@ jobs:
             mcp_servers/hashcrack_server.py \
             mcp_servers/spiderfoot_server.py \
             mcp_servers/pdf_server.py \
+            mcp_servers/yara_server.py \
+            mcp_servers/exploit_server.py \
+            mcp_servers/transform_server.py \
+            mcp_servers/asset_server.py \
+            mcp_servers/attck_server.py \
+            mcp_servers/risk_server.py \
             modules/ \
             -ll -f json -o bandit-report.json 2>/dev/null || \
           bandit -r \
+            mcp_servers/common.py \
             mcp_servers/recon_server.py \
             mcp_servers/osint_server.py \
             mcp_servers/web_vuln_server.py \
@@ -68,6 +80,12 @@ jobs:
             mcp_servers/hashcrack_server.py \
             mcp_servers/spiderfoot_server.py \
             mcp_servers/pdf_server.py \
+            mcp_servers/yara_server.py \
+            mcp_servers/exploit_server.py \
+            mcp_servers/transform_server.py \
+            mcp_servers/asset_server.py \
+            mcp_servers/attck_server.py \
+            mcp_servers/risk_server.py \
             modules/ \
             -ll
       - uses: actions/upload-artifact@v4
@@ -75,6 +93,30 @@ jobs:
         with:
           name: bandit-report
           path: bandit-report.json
+
+  pip-audit:
+    name: Dependency vulnerability audit (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.11"
+      - run: pip install pip-audit
+      - name: Audit dependencies from requirements.txt
+        run: |
+          pip-audit -r requirements.txt \
+            --output pip-audit-report.json \
+            --format json \
+            --ignore-vuln GHSA-r9dh-wcxw-q64v \
+            2>/dev/null || pip-audit -r requirements.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pip-audit-report
+          path: pip-audit-report.json
 
   mcp-unit-tests:
     name: MCP server unit tests
@@ -99,6 +141,32 @@ jobs:
           persist-credentials: false
       - name: Build toolchain image
         run: docker build -t odysseus-toolchain:ci ./docker/toolchain/
+
+  trivy-scan:
+    name: Container vulnerability scan (trivy)
+    runs-on: ubuntu-latest
+    needs: toolchain-build
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - name: Rebuild toolchain image for scanning
+        run: docker build -t odysseus-toolchain:ci ./docker/toolchain/
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: "odysseus-toolchain:ci"
+          format: "sarif"
+          output: "trivy-results.sarif"
+          # Only fail CI on critical and high severity fixable issues
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+          exit-code: "0"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-sarif
+          path: trivy-results.sarif
 
   upstream-drift:
     name: Upstream sync drift check
