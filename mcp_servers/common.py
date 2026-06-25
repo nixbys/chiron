@@ -28,7 +28,7 @@ def exec_in_toolchain(
     """Execute a command in the Kali sidecar and return combined stdout+stderr."""
     headers = {"Authorization": f"Bearer {_EXEC_TOKEN}"} if _EXEC_TOKEN else {}
     try:
-        resp = requests.post(
+        resp = requests.post(  # nosec B113 — timeout is passed as kwarg on the next line
             f"{_TOOLCHAIN_API}/exec",
             json={"args": cmd, "timeout": timeout, "stdin": stdin},
             headers=headers,

@@ -1,7 +1,9 @@
-# Pin to a specific Kali snapshot for reproducible builds.
-# To update: docker pull kalilinux/kali-rolling, then pin the new digest below.
-# Current pin: 2025.2 snapshot (update quarterly or when tools need upgrading)
-FROM docker.io/kalilinux/kali-rolling:2025.2
+# kali-rolling:latest is the only reliably published tag on Docker Hub.
+# For a fully reproducible build, pin by digest:
+#   docker pull kalilinux/kali-rolling:latest
+#   docker inspect kalilinux/kali-rolling:latest --format '{{index .RepoDigests 0}}'
+# Then replace `latest` below with `kalilinux/kali-rolling@sha256:<digest>`.
+FROM docker.io/kalilinux/kali-rolling:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 
