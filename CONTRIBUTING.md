@@ -181,6 +181,48 @@ PR descriptions must:
 - For new MCP servers: list all tools, their inputs, and the corresponding Kali binary/API.
 - For skill YAML changes: verify the skill runs end-to-end against an authorized test target.
 
+### Cutting a Release
+
+Releases follow [Semantic Versioning](https://semver.org/). The fork version (`ODYSSEUS_RED_VERSION`) tracks the security overlay independently of the upstream Odysseus `APP_VERSION`.
+
+**When to bump:**
+- `PATCH` (0.3.x) — bug fixes, CI, docs, dependency updates, SDLC improvements
+- `MINOR` (0.x.0) — new MCP server, new skill category, new sidecar service
+- `MAJOR` (x.0.0) — breaking change to MCP tool interface, major architecture change
+
+**Steps:**
+
+1. On `dev`, open a release prep commit:
+
+   ```bash
+   # 1. Bump version in src/constants.py
+   sed -i 's/ODYSSEUS_RED_VERSION = ".*"/ODYSSEUS_RED_VERSION = "X.Y.Z"/' src/constants.py
+
+   # 2. Update CHANGELOG.md — move [Unreleased] → [X.Y.Z] with today's date
+   #    Add a new empty [Unreleased] section at the top.
+
+   # 3. Commit
+   git add src/constants.py CHANGELOG.md
+   git commit -m "chore(release): bump to vX.Y.Z"
+   git push origin dev
+   ```
+
+2. Open a PR from `dev` → `main`. Wait for all CI jobs in `ci-security.yml` to pass.
+
+3. Merge the PR (squash or merge commit — either is fine).
+
+4. On `main`, create and push the tag:
+
+   ```bash
+   git checkout main && git pull origin main
+   git tag -a vX.Y.Z -m "Odysseus Red vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+5. The `release.yml` workflow triggers automatically — it extracts the `[X.Y.Z]` section from `CHANGELOG.md` and creates a GitHub Release. No manual release creation needed.
+
+> **Note:** Tags `v*` on `main` should be protected in GitHub repository settings (Settings → Branches → Add rule for `v*`) so only maintainers can push them.
+
 ### Upstream Sync
 
 This fork tracks `pewdiepie-archdaemon/odysseus` `dev` branch. Sync when the upstream-drift CI job warns:

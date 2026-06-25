@@ -8,14 +8,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+---
+
+## [0.3.1] — 2026-06-25
+
+SDLC hardening, CI consolidation, and release cycle.
+
 ### Added
-- `CHANGELOG.md` (this file)
-- `.github/codeql/codeql-config.yml` — restrict CodeQL analysis to fork additions
-- CODEOWNERS entries for fork-specific paths
-- Fork-specific sections in `SECURITY.md` and `CONTRIBUTING.md`
-- Missing env vars in `.env.example` (`EXEC_API_TOKEN`, `CENSYS_API_ID/SECRET`, `OPENSEARCH_*`)
+- `CHANGELOG.md` — version history following Keep a Changelog
+- `ODYSSEUS_RED_VERSION` in `src/constants.py` — fork version independent of upstream
+- `.github/release-drafter.yml` + `workflows/release-drafter.yml` — auto-draft release notes from merged PRs
+- `.github/workflows/release.yml` — creates GitHub Release from CHANGELOG on `v*` tag push
+- `.github/codeql/codeql-config.yml` — restrict CodeQL analysis to fork paths only
+- CODEOWNERS entries for all fork-specific paths (`@nixbys`)
+- Fork-specific sections in `SECURITY.md` (toolchain, OpenSearch, exec API guidance) and `CONTRIBUTING.md` (setup, MCP dev, release process)
+- `tests/mcp_servers/test_transform_server.py` — 13 tests (all in-process, no mocking)
+- `tests/mcp_servers/test_yara_server.py` — 5 tests with path-traversal rejection
+- `tests/mcp_servers/test_asset_server.py` — 5 SQLite lifecycle tests (77 total)
+- CI: `python-syntax`, `hadolint`, `yaml-lint` jobs in `ci-security.yml`
+- CI: `mcp_servers/ modules/` added to `compileall` in `ci.yml`
+- CI: `dev` branch added to push triggers for `ci.yml`, `secret-scan.yml`, `workflow-security.yml`
 - `findings_server.py` added to bandit CI job
-- `*.jsonl` added to `.gitignore` (exec API audit log)
+
+### Fixed
+- Missing env vars in `.env.example` (`EXEC_API_TOKEN`, `CENSYS_API_ID/SECRET`, `OPENSEARCH_*`)
+- `*.jsonl` missing from `.gitignore` (exec API audit log)
+- All 30 CodeQL `py/path-injection` alerts dismissed — all were in unmodified upstream files
 
 ---
 
