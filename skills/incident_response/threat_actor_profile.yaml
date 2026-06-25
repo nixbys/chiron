@@ -1,0 +1,58 @@
+name: threat_actor_profile
+version: "1.0"
+description: >
+  Attribute observed TTPs and infrastructure to known threat actors.
+  Correlates IOCs, ASN data, domain registration patterns, and OTX pulses
+  to build an adversary profile for an ongoing or concluded incident.
+
+inputs:
+  seed_iocs:
+    type: list
+    description: "Known IOCs from the incident: IPs, domains, hashes"
+  observed_ttps:
+    type: list
+    required: false
+    description: "MITRE ATT&CK technique IDs observed (e.g. T1566, T1078)"
+
+steps:
+  - id: otx_correlation
+    tool: otx_indicator
+    args:
+      indicators: "{{ seed_iocs }}"
+      include_related_pulses: true
+    description: "OTX pulse correlation — identifies linked threat groups and campaigns"
+
+  - id: vt_graph
+    tool: virustotal_lookup
+    args:
+      targets: "{{ seed_iocs }}"
+      relationships: true
+    description: "VirusTotal graph — pivot to related infrastructure and samples"
+
+  - id: infra_pivot
+    tool: shodan_host
+    args:
+      ip: "{{ seed_iocs | filter_type('ip') }}"
+    description: "Shodan pivot: ASN, banner, SSL cert, and co-hosted domain discovery"
+
+  - id: domain_reg
+    tool: whois_lookup
+    args:
+      target: "{{ seed_iocs | filter_type('domain') }}"
+    description: "WHOIS registrant and registration timeline for domain clustering"
+
+  - id: spiderfoot_scan
+    tool: sf_scan_start
+    args:
+      target: "{{ seed_iocs[0] }}"
+      modules: "sfp_threatcrowd,sfp_virustotal,sfp_alienvault,sfp_ipinfo,sfp_whois"
+    description: "SpiderFoot correlated OSINT expansion on primary seed IOC"
+
+  - id: actor_report
+    tool: generate_report
+    args:
+      template: threat_actor
+      findings: "{{ steps }}"
+      ttps: "{{ observed_ttps }}"
+      format: markdown
+    description: "Adversary profile: likely actor, confidence, related campaigns, ATT&CK mapping"

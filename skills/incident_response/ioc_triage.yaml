@@ -1,0 +1,49 @@
+name: ioc_triage
+version: "1.0"
+description: >
+  Rapid triage of indicators of compromise (IOCs) during an active incident.
+  Validates IPs, domains, hashes, and URLs across threat intelligence feeds
+  (VirusTotal, OTX, Shodan) and produces a prioritized action report.
+
+inputs:
+  iocs:
+    type: list
+    description: "List of IOCs to triage: IPs, domains, file hashes, or URLs"
+  incident_id:
+    type: string
+    required: false
+    description: "Optional incident reference identifier for report tagging"
+
+steps:
+  - id: vt_lookup
+    tool: virustotal_lookup
+    args:
+      targets: "{{ iocs }}"
+    description: "VirusTotal hash, domain, and IP reputation checks"
+
+  - id: otx_lookup
+    tool: otx_indicator
+    args:
+      indicators: "{{ iocs }}"
+    description: "AlienVault OTX pulse and threat actor correlation"
+
+  - id: shodan_exposure
+    tool: shodan_host
+    args:
+      ip: "{{ iocs | filter_type('ip') }}"
+    description: "Shodan internet exposure check for IP-type IOCs"
+
+  - id: dns_resolution
+    tool: dns_enum
+    args:
+      domain: "{{ iocs | filter_type('domain') }}"
+    description: "Passive DNS and infrastructure mapping for domain IOCs"
+
+  - id: triage_report
+    tool: generate_report
+    args:
+      template: ioc_triage
+      incident_id: "{{ incident_id }}"
+      findings: "{{ steps }}"
+      format: markdown
+    description: "Prioritized IOC verdict report with confidence scores and recommended actions"
