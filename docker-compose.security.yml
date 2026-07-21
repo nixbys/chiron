@@ -1,11 +1,23 @@
 # Overlay this on top of the base docker-compose.yml:
-#   podman-compose -f docker-compose.yml -f docker-compose.security.yml up -d --build
+#   podman-compose -f docker-compose.yml -f docker-compose.security.yml --profile sidecars up -d --build
 #
 # Services added:
 #   ollama      — local LLM runtime (AMD ROCm / RX 6950 XT); API at :11434
 #   toolchain   — Kali sidecar exposing an internal exec API on :8088
 #   spiderfoot  — SpiderFoot OSINT server; MCP server talks to its REST API on port 5001
 #   bentopdf    — BentoPDF client-side PDF toolkit; web UI at http://localhost:3000
+#   opensearch  — findings persistence index
+#
+# toolchain, spiderfoot, bentopdf, and opensearch are gated behind the
+# "sidecars" Compose profile. If you already have the underlying
+# tool/service installed on this machine (e.g. nmap on PATH, a native
+# SpiderFoot/OpenSearch install), omit `--profile sidecars` to skip that
+# container and instead point the corresponding env var
+# (ODYSSEUS_TOOLCHAIN_API, SPIDERFOOT_URL, BENTOPDF_URL, OPENSEARCH_URL) at
+# your local instance — see docs/setup.md "Hybrid / local-tools mode" and
+# TOOLCHAIN_EXEC_MODE / TOOLCHAIN_EXEC_MODE_<BINARY> for per-tool control
+# over the toolchain binaries specifically. Ollama is not gated here since
+# the comment below already documents redirecting it to a host instance.
 
 services:
   # ── extend upstream odysseus with security + LLM env vars ────────────────
@@ -64,6 +76,7 @@ services:
 
   # ── Kali sidecar ──────────────────────────────────────────────────────────
   toolchain:
+    profiles: ["sidecars"]
     build:
       context: ./docker/toolchain
       dockerfile: Dockerfile
@@ -86,6 +99,7 @@ services:
 
   # ── SpiderFoot OSINT ──────────────────────────────────────────────────────
   spiderfoot:
+    profiles: ["sidecars"]
     image: docker.io/fopina/spiderfoot:latest
     container_name: odysseus-spiderfoot
     hostname: odysseus-spiderfoot
@@ -104,6 +118,7 @@ services:
 
   # ── BentoPDF ──────────────────────────────────────────────────────────────
   bentopdf:
+    profiles: ["sidecars"]
     image: ghcr.io/alam00000/bentopdf-simple:latest
     container_name: odysseus-bentopdf
     hostname: odysseus-bentopdf
@@ -115,6 +130,7 @@ services:
 
   # ── OpenSearch — persistent findings index ────────────────────────────────
   opensearch:
+    profiles: ["sidecars"]
     image: docker.io/opensearchproject/opensearch:2.17.0
     container_name: odysseus-opensearch
     hostname: odysseus-opensearch

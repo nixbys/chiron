@@ -90,6 +90,7 @@ BUILTIN_TOOL_DESCRIPTIONS: Dict[str, str] = {
     "manage_session": "Chat management: rename, archive, delete, or fork chats (the UI calls these 'chats'; internally 'sessions'). Use for 'rename my chats', 'rename this chat', 'archive/delete a chat'.",
     "manage_memory": "Memory management: list, add, edit, delete, or search persistent memories. For facts about the USER (their name, preferences, where they live). NOT for info about ANOTHER person — addresses, phones, emails belonging to a contact go in manage_contact, not memory.",
     "manage_skills": "Skill management: add, update, publish, or search reusable skills/presets.",
+    "run_skill": "Run a multi-step skills/*.yaml pipeline (e.g. full_recon, spiderfoot_deep_scan, network_exposure_audit) in one call — chains multiple recon/OSINT/scan MCP tools automatically, running independent steps in parallel. Use instead of calling each tool separately when a pre-built pipeline matches the task.",
     "manage_tasks": "Scheduled task management: list, create, edit, delete, pause, resume, or run cron tasks.",
     "manage_endpoints": "Endpoint management: list, add, delete, enable, or disable model API endpoints.",
     "manage_mcp": "MCP server management: list, add, delete, reconnect servers, or list available tools.",

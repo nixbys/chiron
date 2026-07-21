@@ -57,7 +57,7 @@ git clone https://github.com/nixbys/odysseus-red.git
 cd odysseus-red
 cp .env.example .env
 # Edit .env — add your API keys (see Configuration below)
-podman-compose -f docker-compose.yml -f docker-compose.security.yml up -d --build
+podman-compose -f docker-compose.yml -f docker-compose.security.yml --profile sidecars up -d --build
 ```
 
 Open `http://localhost:7000` once containers are healthy. The first admin password prints in:
@@ -338,6 +338,14 @@ OPENSEARCH_PASSWORD=admin
 ```
 
 All Odysseus platform options (model endpoints, auth, HTTPS, RAG, GPU) are documented in the upstream [setup guide](docs/setup.md). See `.env.example` for the complete annotated reference.
+
+### Hybrid / local-tools mode
+
+By default, `docker-compose.security.yml`'s `toolchain`, `spiderfoot`, `bentopdf`, and `opensearch` services are gated behind the `sidecars` Compose profile and started with `--profile sidecars`. If a tool or service is already installed on the machine running Odysseus Red, you can skip its container and use the local install instead, per tool or per service:
+
+- **Toolchain binaries** (`nmap`, `masscan`, `theHarvester`, `sherlock`, `dig`, `whois`, `amass`, `nikto`, `gobuster`, `sqlmap`, `nuclei`, `ffuf`, `hashid`, `john`, `yara`, `searchsploit`): set `TOOLCHAIN_EXEC_MODE=local` in `.env` to run every one of them directly on the app's own host instead of the sidecar, or set a per-binary override like `TOOLCHAIN_EXEC_MODE_NMAP=local` to switch just that one — see the commented block in `.env.example`. This requires the binary to actually be on `PATH` for the odysseus process; missing binaries return a clear `[error:not_installed]` rather than failing silently. Local mode runs the tool **unsandboxed**, without the toolchain container's `cap_drop: [ALL]` / `no-new-privileges` isolation — only enable it for tools you trust to run with the app's own privileges. Omit `toolchain` from `--profile sidecars` (or run `up` without the profile flag, then start the remaining services individually) once nothing routes through it.
+- **Services** (SpiderFoot, OpenSearch, BentoPDF, Ollama): each is already reached through a plain URL env var (`SPIDERFOOT_URL`, `OPENSEARCH_URL`, `BENTOPDF_URL`, `OLLAMA_BASE_URL`) with no hardcoded container dependency. Point the var at an already-running local/VM-native instance (e.g. `SPIDERFOOT_URL=http://localhost:5001`) and skip starting that container via the `sidecars` profile.
+- **Status check**: `GET /api/toolchain/exec-modes` reports, per toolchain binary, the resolved mode (`local`/`container`) and — for `local` — whether it was actually found on `PATH`.
 
 ---
 

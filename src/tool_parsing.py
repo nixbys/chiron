@@ -209,6 +209,8 @@ _TOOL_NAME_MAP = {
     "manage_skills": "manage_skills",
     "skills": "manage_skills",
     "skill": "manage_skills",
+    "run_skill": "run_skill",
+    "run_pipeline": "run_skill",
     "suggest_document": "suggest_document",
     "suggest": "suggest_document",
     "review_document": "suggest_document",
