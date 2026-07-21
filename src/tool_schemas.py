@@ -678,6 +678,30 @@ FUNCTION_TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "run_skill",
+            "description": (
+                "Run a multi-step skills/*.yaml pipeline (e.g. 'full_recon', "
+                "'spiderfoot_deep_scan') in one call instead of invoking each "
+                "underlying MCP tool yourself one at a time. Steps with no data "
+                "dependency on each other run in parallel automatically. If the "
+                "pipeline declares an authorization prompt, this call returns that "
+                "prompt as an error and does nothing — show it to the user, get "
+                "their explicit go-ahead, then call again with confirmed=true."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skill": {"type": "string", "description": "Pipeline name, matching a skills/*.yaml file's 'name' field (e.g. 'full_recon')."},
+                    "inputs": {"type": "object", "description": "Input values for the pipeline (e.g. {\"target\": \"10.0.0.1\"}). See the pipeline's declared inputs."},
+                    "confirmed": {"type": "boolean", "description": "Set true only after the user has explicitly authorized the pipeline's authorization_prompt (if it has one)."}
+                },
+                "required": ["skill"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "manage_endpoints",
             "description": "Manage model API endpoints: list configured endpoints, add new ones, delete, enable or disable them.",
             "parameters": {
@@ -1400,7 +1424,7 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
                     content += f" {ak}={colors[ak]}"
         else:
             content = action
-    elif tool_type in ("manage_tasks", "manage_skills", "api_call",
+    elif tool_type in ("manage_tasks", "manage_skills", "run_skill", "api_call",
                         "manage_endpoints", "manage_mcp", "manage_webhooks",
                         "manage_tokens", "manage_documents", "manage_settings"):
         content = json.dumps(args)

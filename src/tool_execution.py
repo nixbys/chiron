@@ -396,6 +396,66 @@ def _build_mcp_args(tool: str, content: str) -> Dict:
     return parser(content) if parser else {}
 
 
+def _parse_run_skill(content: str) -> Tuple[str, Dict, bool]:
+    """Parse the JSON object a run_skill block should contain:
+    {"skill": "full_recon", "inputs": {...}, "confirmed": false}"""
+    raw = (content or "").strip()
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except (json.JSONDecodeError, TypeError):
+        parsed = {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+    skill_name = str(parsed.get("skill") or parsed.get("name") or "").strip()
+    inputs = parsed.get("inputs") if isinstance(parsed.get("inputs"), dict) else {}
+    confirmed = bool(parsed.get("confirmed", False))
+    return skill_name, inputs, confirmed
+
+
+async def _run_skill_tool(
+    content: str,
+    progress_cb: Optional[Callable[[Dict], Awaitable[None]]] = None,
+) -> Dict:
+    """Execute a skills/*.yaml pipeline (src/pipeline_engine.py), streaming
+    per-step progress through the same tool_progress channel long-running
+    subprocess tools (bash/python) already use."""
+    from src import pipeline_engine
+
+    skill_name, inputs, confirmed = _parse_run_skill(content)
+    if not skill_name:
+        return {"error": "run_skill requires a JSON object with a 'skill' name.", "exit_code": 1}
+
+    mcp = get_mcp_manager()
+    if not mcp:
+        return {"error": "MCP manager not available; cannot run pipeline steps.", "exit_code": 1}
+
+    try:
+        result = await pipeline_engine.run(
+            skill_name, inputs, mcp, progress_cb=progress_cb, confirmed=confirmed,
+        )
+    except pipeline_engine.ConfirmationRequired as exc:
+        return {
+            "error": (
+                f"This pipeline requires authorization before running:\n\n{exc.prompt}\n\n"
+                "Ask the user to confirm, then call run_skill again with "
+                '"confirmed": true in the JSON args.'
+            ),
+            "exit_code": 1,
+        }
+    except pipeline_engine.PipelineError as exc:
+        return {"error": str(exc), "exit_code": 1}
+
+    lines = [f"Pipeline '{skill_name}' finished."]
+    for step_id, step_result in result["steps"].items():
+        status = "ok" if step_result.get("exit_code", 0) == 0 else "FAILED"
+        raw_out = step_result.get("stdout") or step_result.get("stderr") or step_result.get("error", "")
+        lines.append(f"\n--- {step_id} [{status}] ---\n{_truncate(raw_out, limit=2000)}")
+    if result["skipped"]:
+        lines.append(f"\nSkipped steps (condition false): {', '.join(result['skipped'])}")
+    exit_code = 1 if any(s.get("exit_code", 0) != 0 for s in result["steps"].values()) else 0
+    return {"stdout": "\n".join(lines), "stderr": "", "exit_code": exit_code}
+
+
 async def _call_mcp_tool(
     tool: str,
     content: str,
@@ -739,6 +799,10 @@ async def _execute_tool_block_impl(
     elif tool == "manage_skills":
         desc = "manage_skills"
         result = await do_manage_skills(content, owner=owner)
+    elif tool == "run_skill":
+        first_line = content.split(chr(10))[0].strip()[:60]
+        desc = f"run_skill: {first_line}" if first_line else "run_skill"
+        result = await _run_skill_tool(content, progress_cb=progress_cb)
     elif tool == "api_call":
         first_line = content.split("\n")[0].strip()[:60]
         desc = f"api_call: {first_line}"

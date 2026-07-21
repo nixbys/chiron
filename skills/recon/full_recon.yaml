@@ -50,6 +50,16 @@ steps:
   - id: generate_report
     tool: generate_report
     args:
-      template: pentest_standard
-      findings: "{{ steps }}"
+      title: "Reconnaissance Report — {{ target }}"
+      content: |
+        # Reconnaissance Report for {{ target }}
+
+        ## Port & Service Scan
+        {{ steps.port_scan.stdout }}
+
+        ## Web Directory Enumeration
+        {{ steps.web_enum.stdout if steps.web_enum is defined else "Skipped (include_web=false or no url provided)" }}
+
+        ## Vulnerability Scan
+        {{ steps.vuln_scan.stdout if steps.vuln_scan is defined else "Skipped (include_web=false or no url provided)" }}
     description: "Compile findings into structured Markdown report"

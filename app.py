@@ -749,6 +749,16 @@ set_mcp_manager(mcp_manager)
 app.include_router(setup_mcp_routes(mcp_manager))
 logger.info("MCP routes initialized")
 
+from routes.toolchain_routes import setup_toolchain_routes
+
+app.include_router(setup_toolchain_routes())
+logger.info("Toolchain exec-mode routes initialized")
+
+from routes.orchestration_routes import setup_orchestration_routes
+
+app.include_router(setup_orchestration_routes(mcp_manager))
+logger.info("Pipeline orchestration routes initialized")
+
 # AI Interaction tools (debates, pipelines, self-managing AI, UI control)
 from src.ai_interaction import set_session_manager as set_ai_session_manager, set_memory_manager as set_ai_memory_manager, set_rag_manager as set_ai_rag_manager
 set_ai_session_manager(session_manager)

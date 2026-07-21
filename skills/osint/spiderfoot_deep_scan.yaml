@@ -52,21 +52,30 @@ steps:
     condition: "{{ usecase != 'passive' }}"
     tool: sf_scan_results
     args:
-      scan_id: "{{ start_scan.scan_id }}"
+      scan_id: "{{ steps.start_scan.stdout | regex_extract('ID: (\\S+)') }}"
       event_type: "VULNERABILITY_CVE_CRITICAL"
     description: "Extract critical CVEs from findings (investigate/footprint only)"
 
   - id: breach_data
     tool: sf_scan_results
     args:
-      scan_id: "{{ start_scan.scan_id }}"
+      scan_id: "{{ steps.start_scan.stdout | regex_extract('ID: (\\S+)') }}"
       event_type: "DATA_BREACH"
     description: "Extract any data breach mentions"
 
   - id: generate_report
     tool: generate_report
     args:
-      template: osint_summary
-      target: "{{ target }}"
-      findings: "{{ steps }}"
+      title: "OSINT Deep Scan Report — {{ target }}"
+      content: |
+        # OSINT Deep Scan Report for {{ target }}
+
+        ## Correlated Findings
+        {{ steps.wait_and_fetch.stdout }}
+
+        ## Critical CVEs
+        {{ steps.critical_vulns.stdout if steps.critical_vulns is defined else "Not run (usecase=passive)" }}
+
+        ## Data Breach Mentions
+        {{ steps.breach_data.stdout }}
     description: "Compile correlated findings into structured Markdown report"

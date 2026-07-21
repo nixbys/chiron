@@ -40,6 +40,12 @@ cryptography
 bcrypt
 mcp
 requests
+# skills/*.yaml pipeline parsing (src/pipeline_engine.py) — declared
+# explicitly rather than relying on it being pulled in transitively.
+PyYAML
+# Sandboxed {{ }} templating + condition evaluation for skill pipeline steps
+# (src/pipeline_engine.py).
+jinja2
 pyotp
 qrcode[pil]
 croniter

@@ -2,7 +2,9 @@
 mcp_servers/common.py
 
 Shared utilities for odysseus-red MCP servers:
-  exec_in_toolchain() — call the Kali sidecar exec API
+  exec_in_toolchain() — run a command via the Kali sidecar exec API, or
+                        locally on this host if TOOLCHAIN_EXEC_MODE(_<BIN>)
+                        selects "local"
   mcp_error()         — standardized [error:code] message format
   validate_ip()       — validates IP address, CIDR range, or hostname
   validate_url()      — validates http/https URL
@@ -10,21 +12,65 @@ Shared utilities for odysseus-red MCP servers:
 """
 
 import ipaddress
+import logging
 import os
 import re
+import shutil
+import subprocess
 from urllib.parse import urlparse
 
 import requests
 
+logger = logging.getLogger(__name__)
+
 _TOOLCHAIN_API = os.environ.get("ODYSSEUS_TOOLCHAIN_API", "http://odysseus-toolchain:8088")
 _EXEC_TOKEN = os.environ.get("EXEC_API_TOKEN", "")
+_EXEC_MODE_DEFAULT = os.environ.get("TOOLCHAIN_EXEC_MODE", "container")
+_warned_local_binaries: set[str] = set()
 
 
-def exec_in_toolchain(
-    cmd: list[str],
-    timeout: int = 300,
-    stdin: str | None = None,
-) -> str:
+def _resolve_exec_mode(binary: str) -> str:
+    """Resolve "local" or "container" for a binary: per-tool env var wins,
+    falling back to the global TOOLCHAIN_EXEC_MODE (default: container)."""
+    per_tool = os.environ.get(f"TOOLCHAIN_EXEC_MODE_{binary.upper()}")
+    mode = (per_tool or _EXEC_MODE_DEFAULT or "container").strip().lower()
+    return "local" if mode == "local" else "container"
+
+
+def _exec_local(cmd: list[str], timeout: int, stdin: str | None) -> str:
+    """Execute a command directly on this host and return combined stdout+stderr."""
+    binary = cmd[0] if cmd else ""
+    if not shutil.which(binary):
+        return mcp_error(
+            "not_installed",
+            f"{binary!r} not found on PATH — install it locally or unset "
+            f"TOOLCHAIN_EXEC_MODE_{binary.upper()} to use the toolchain container",
+        )
+    if binary not in _warned_local_binaries:
+        _warned_local_binaries.add(binary)
+        logger.warning(
+            "TOOLCHAIN_EXEC_MODE=local for %r: running unsandboxed on this host, "
+            "outside the toolchain sidecar's capability restrictions",
+            binary,
+        )
+    try:
+        result = subprocess.run(  # nosec B603 — args are built by the calling MCP tool, not raw user input
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            input=stdin,
+            check=False,
+        )
+        out = result.stdout + (f"\n[stderr]\n{result.stderr}" if result.stderr else "")
+        return out.strip() or "(no output)"
+    except subprocess.TimeoutExpired:
+        return mcp_error("timeout", f"Command exceeded {timeout}s")
+    except Exception as exc:  # noqa: BLE001
+        return mcp_error("exec", str(exc))
+
+
+def _exec_container(cmd: list[str], timeout: int, stdin: str | None) -> str:
     """Execute a command in the Kali sidecar and return combined stdout+stderr."""
     headers = {"Authorization": f"Bearer {_EXEC_TOKEN}"} if _EXEC_TOKEN else {}
     try:
@@ -44,6 +90,18 @@ def exec_in_toolchain(
         return mcp_error("timeout", f"Command exceeded {timeout}s")
     except Exception as exc:  # noqa: BLE001
         return mcp_error("network", str(exc))
+
+
+def exec_in_toolchain(
+    cmd: list[str],
+    timeout: int = 300,
+    stdin: str | None = None,
+) -> str:
+    """Execute a command in the Kali sidecar, or locally if TOOLCHAIN_EXEC_MODE
+    (globally or per-binary via TOOLCHAIN_EXEC_MODE_<BINARY>) selects "local"."""
+    if cmd and _resolve_exec_mode(cmd[0]) == "local":
+        return _exec_local(cmd, timeout, stdin)
+    return _exec_container(cmd, timeout, stdin)
 
 
 def mcp_error(code: str, message: str) -> str:
