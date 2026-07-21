@@ -140,23 +140,41 @@ credit:
 
 ### License-compatibility notes (for the repo's own LICENSE choice)
 
-The **core ships fully permissive** (MIT-compatible), so the two copyleft
-concerns from earlier are resolved:
+Odysseus Red's own code is licensed **AGPL-3.0-or-later** (see [LICENSE](LICENSE)),
+not MIT. That choice is driven by this fork specifically, not by upstream
+Odysseus's core Python dependencies, which remain permissive on their own:
 
-- **PDF text extraction** now uses **`pypdf`** (BSD-3-Clause) and **encoding
+- **PDF text extraction** uses **`pypdf`** (BSD-3-Clause) and **encoding
   detection** uses **`charset-normalizer`** (MIT). chardet (LGPL-2.1) has been
   removed entirely.
-- **PyMuPDF (AGPL-3.0)** is no longer a core dependency. It is **optional** and
+- **PyMuPDF (AGPL-3.0)** is not a core dependency. It is **optional** and
   used *only* by the PDF form-filling feature (`src/pdf_forms.py` and the form
   endpoints in `routes/document_routes.py`), lazy-imported and listed in
-  `requirements-optional.txt`. The MIT core runs without it. If you choose to
+  `requirements-optional.txt`. Odysseus runs without it. If you choose to
   install it, AGPL's network clause then applies to *that feature* for your
   deployment (Artifex also sells a commercial PyMuPDF license that lifts this).
 - **`caldav`** (Python lib) is **dual-licensed GPL-3.0-or-later OR Apache-2.0**.
   Odysseus uses it under **Apache-2.0**, which is permissive and MIT-compatible.
 - **`markitdown`** (Microsoft) is **MIT** and used only as an *optional* dependency for Office/EPUB text
-  extraction (`src/markitdown_runtime.py`), lazy-imported with graceful fallback — the MIT core runs without
+  extraction (`src/markitdown_runtime.py`), lazy-imported with graceful fallback — Odysseus runs without
   it. The cloud `az-doc-intel` extra is deliberately **not** installed, keeping extraction fully local.
+
+If those permissive core dependencies were the whole picture, MIT would be a
+viable license for this repo too. It isn't the whole picture: **Odysseus
+Red** (this fork) bundles two AGPL-3.0 services as sidecars —
+**[SearXNG](https://github.com/searxng/searxng)** (listed above, via
+`docker-compose.yml`) and **[BentoPDF](https://github.com/alam00000/bentopdf)**
+(via `docker-compose.security.yml`, the security-tooling compose overlay this
+fork adds — see [README](README.md)). Neither is modified, and running a
+separate container that talks over the network doesn't by itself force AGPL
+onto unrelated code. But given the fork's own mission — a self-hosted
+pentest/OSINT platform meant to stay self-hosted, not get wrapped into a
+closed-source hosted service by someone else — licensing Odysseus Red's own
+code as **AGPL-3.0-or-later** matches the strongest copyleft guarantee
+already present in its bundled stack (SearXNG, BentoPDF) and closes the
+network-service loophole that a permissive or non-network copyleft license
+would leave open. See [ADR-003](docs/adr/003-spiderfoot-integration.md) for
+the parallel reasoning applied to SpiderFoot (MIT, compatible either way).
 
 ---
 
