@@ -133,6 +133,8 @@ def setup_companion_routes() -> APIRouter:
             if owner:
                 q = q.filter((ModelEndpoint.owner == owner) | (ModelEndpoint.owner == None))  # noqa: E711
             for ep in q.all():
+                # Defence in depth: never emit a row the owner rule rejects, even
+                # if the SQL filter above were ever loosened.
                 if not owner_can_see(ep.owner, owner):
                     continue
                 try:
