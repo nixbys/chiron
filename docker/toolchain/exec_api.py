@@ -12,6 +12,12 @@ Security:
   Set EXEC_API_TOKEN in environment to require Bearer auth on every request.
   All invocations are logged as JSON lines to EXEC_LOG_FILE (default
   /var/log/exec_api.jsonl) — mountable as a shared volume for audit purposes.
+  args[0] (the binary) is checked against ALLOWED_BINARIES below — only the
+  tools this image actually installs (see docker/toolchain/Dockerfile) may
+  be invoked. The MCP servers that call this API always choose args[0]
+  themselves (mcp_servers/common.py); an agent/user only ever influences the
+  trailing arguments, never which program runs. The allowlist makes that
+  assumption a hard server-side boundary instead of an implicit one.
 """
 import json
 import logging
@@ -22,6 +28,30 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 _TOKEN = os.environ.get("EXEC_API_TOKEN", "")
+
+# Keep in sync with the tools installed by docker/toolchain/Dockerfile.
+ALLOWED_BINARIES = frozenset({
+    # Network recon
+    "nmap", "masscan", "nc", "nc.traditional", "dig", "whois", "curl", "wget",
+    # Web assessment / fuzzing
+    "nikto", "gobuster", "sqlmap", "ffuf",
+    # OSINT
+    "theharvester", "theHarvester", "recon-ng", "sherlock",
+    # Password / hash
+    "john", "hydra", "hashid",
+    # Exploitation
+    "searchsploit", "msfconsole", "msfvenom",
+    # Forensics & analysis
+    "binwalk", "exiftool", "yara",
+    # Go-based recon suite
+    "nuclei", "httpx", "subfinder", "amass",
+    # Misc utilities the sidecar exposes
+    "trivy", "jq", "git", "unzip", "7z",
+    # Base coreutils/grep the MCP servers shell out to directly (yara_server's
+    # rule-file writes, exploit_server's local Metasploit module grep) —
+    # always present on the base image, not separately apt-installed.
+    "ls", "mkdir", "tee", "grep",
+})
 
 _log_path = Path(os.environ.get("EXEC_LOG_FILE", "/var/log/exec_api.jsonl"))
 _log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,6 +98,16 @@ class ExecHandler(BaseHTTPRequestHandler):
         args = body.get("args", [])
         timeout = int(body.get("timeout", 120))
         stdin_data = body.get("stdin")
+
+        binary = Path(args[0]).name if args else ""
+        if binary not in ALLOWED_BINARIES:
+            _log({"ts": time.time(), "cmd": [binary], "exit": -1,
+                  "error": "binary_not_allowed"})
+            self._send_json(400, {
+                "error": "binary_not_allowed",
+                "detail": f"{binary!r} is not in ALLOWED_BINARIES",
+            })
+            return
 
         t0 = time.time()
         try:
