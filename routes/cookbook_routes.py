@@ -1778,6 +1778,12 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append('  printf "%s\\n" "$ODYSSEUS_DIFFUSION_IMPORT_ERROR"')
                 runner_lines.append('  ODYSSEUS_PREFLIGHT_EXIT=127')
                 runner_lines.append('fi')
+            elif "scripts/diffusion_server.py" in req.cmd or ".diffusion_server.py" in req.cmd:
+                runner_lines.append('export PATH="$HOME/.local/bin:$PATH"')
+                runner_lines.append('if ! python3 -c "import torch, diffusers" 2>/dev/null; then')
+                runner_lines.append('  echo "ERROR: Diffusion serving requires PyTorch + diffusers. Open Cookbook -> Dependencies and install diffusers on this server, then launch again."')
+                runner_lines.append('  exit 127')
+                runner_lines.append('fi')
 
             handled_ollama_sidecar_probe = False
             if (not handled_ollama_serve
