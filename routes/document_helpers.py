@@ -16,6 +16,7 @@ from src.auth_helpers import _auth_disabled
 from src.upload_handler import UploadHandler
 
 logger = logging.getLogger(__name__)
+_UPLOAD_ID_RE = re.compile(r"^[0-9a-fA-F]{32}\.[A-Za-z0-9]+$")
 
 
 # ---- Request schemas ----
