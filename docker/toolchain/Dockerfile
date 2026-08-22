@@ -31,6 +31,10 @@ RUN apt-get update -q && apt-get install -y -q --no-install-recommends \
     python3 python3-pip jq git ca-certificates unzip p7zip-full \
     # Runtime deps for amass/subfinder/httpx
     libpcap0.8 \
+    # Needed to build yara-python below from source when Kali Rolling's
+    # current Python has no matching prebuilt wheel on PyPI (pip then falls
+    # back to compiling, which needs a C compiler and the Python headers).
+    build-essential python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Python-based tools ──────────────────────────────────────────────────────────
@@ -95,7 +99,7 @@ WORKDIR /workspaces
 
 # Health check: verify exec API is responsive
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -sf http://localhost:8088/health || exit 1
+    CMD ["sh", "-c", "curl -sf http://localhost:8088/health || exit 1"]
 
 # The exec API keeps the container alive and handles all tool invocations
 # from the MCP servers running inside the Odysseus container.

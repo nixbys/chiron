@@ -51,6 +51,30 @@ just composed.
 | [ChromaDB](https://github.com/chroma-core/chroma) | `chromadb/chroma:latest` | Vector store for memory / RAG | Apache-2.0 |
 | [ntfy](https://github.com/binwiederhier/ntfy) | `binwiederhier/ntfy` | Push notifications (self-hosted reminders) | Apache-2.0 / GPL-2.0 |
 
+## Bundled via `docker-compose.security.yml` (Odysseus Red security overlay)
+
+This fork layers a second compose file on top of the base one
+(`podman-compose -f docker-compose.yml -f docker-compose.security.yml
+--profile sidecars up -d --build`). These sidecars sit behind the
+`sidecars` Compose profile — opt-in, not started by a plain
+`docker compose up`. Like the table above, the images are unmodified,
+just composed:
+
+| Service | Image | Purpose | License |
+|---|---|---|---|
+| [SpiderFoot](https://github.com/smicallef/spiderfoot) (via the [`fopina/spiderfoot`](https://hub.docker.com/r/fopina/spiderfoot) image) | `docker.io/fopina/spiderfoot:latest` | 200+ correlated OSINT modules | MIT |
+| [BentoPDF](https://github.com/alam00000/bentopdf) | `ghcr.io/alam00000/bentopdf-simple:latest` | Client-side PDF toolkit (redact, sign, convert) | AGPL-3.0 |
+| [OpenSearch](https://github.com/opensearch-project/OpenSearch) | `docker.io/opensearchproject/opensearch:2.17.0` | Findings persistence index | Apache-2.0 |
+
+The `toolchain` sidecar (`odysseus-toolchain`) isn't in this table because
+it isn't a single third-party image — it's a custom image this repo builds
+from a Kali Linux base (`docker/toolchain/`), bundling many independently
+licensed security tools (nmap, sqlmap, nuclei, etc.). No single license
+applies to it as a whole; see each tool's own project for its license.
+
+**This table is where the AGPL-3.0 dependency that actually drives this
+repo's own license lives** — see the "License-compatibility notes" below.
+
 ## Bundled front-end libraries
 
 Vendored in `static/lib/` and served directly:
@@ -162,12 +186,13 @@ Odysseus's core Python dependencies, which remain permissive on their own:
 If those permissive core dependencies were the whole picture, MIT would be a
 viable license for this repo too. It isn't the whole picture: **Odysseus
 Red** (this fork) bundles two AGPL-3.0 services as sidecars —
-**[SearXNG](https://github.com/searxng/searxng)** (listed above, via
-`docker-compose.yml`) and **[BentoPDF](https://github.com/alam00000/bentopdf)**
-(via `docker-compose.security.yml`, the security-tooling compose overlay this
-fork adds — see [README](README.md)). Neither is modified, and running a
-separate container that talks over the network doesn't by itself force AGPL
-onto unrelated code. But given the fork's own mission — a self-hosted
+**[SearXNG](https://github.com/searxng/searxng)** and
+**[BentoPDF](https://github.com/alam00000/bentopdf)** — both listed in the
+tables above (`docker-compose.yml` and `docker-compose.security.yml`
+respectively, the latter being the security-tooling overlay this fork adds).
+Neither is modified, and running a separate container that talks over the
+network doesn't by itself force AGPL onto unrelated code. But given the
+fork's own mission — a self-hosted
 pentest/OSINT platform meant to stay self-hosted, not get wrapped into a
 closed-source hosted service by someone else — licensing Odysseus Red's own
 code as **AGPL-3.0-or-later** matches the strongest copyleft guarantee
