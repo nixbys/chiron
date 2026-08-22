@@ -95,7 +95,7 @@ WORKDIR /workspaces
 
 # Health check: verify exec API is responsive
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -sf http://localhost:8088/health || exit 1
+    CMD ["sh", "-c", "curl -sf http://localhost:8088/health || exit 1"]
 
 # The exec API keeps the container alive and handles all tool invocations
 # from the MCP servers running inside the Odysseus container.
