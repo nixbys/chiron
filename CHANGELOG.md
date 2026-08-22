@@ -8,6 +8,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- `ACKNOWLEDGMENTS.md` — rewrote the "License-compatibility notes" section to
+  state plainly that Odysseus Red's own code is AGPL-3.0-or-later and explain
+  why (bundled AGPL-3.0 sidecars, not the permissive core deps); added a
+  `docker-compose.security.yml` bundled-services table (SpiderFoot, BentoPDF,
+  OpenSearch) that was previously undocumented
+- `package.json` — added explicit `"license": "AGPL-3.0-or-later"` field
+
+### Fixed
+- `requirements.txt` — pinned `mcp<2.0.0`. Upstream `mcp` 2.0.0 replaced the
+  low-level `Server`'s `@server.list_tools()`/`@server.call_tool()` decorator
+  API with constructor-passed `on_list_tools`/`on_call_tool` callables; all 18
+  files in `mcp_servers/` still use the pre-2.0 decorator pattern, so an
+  unpinned install broke every MCP server at import time
+  (`AttributeError: 'Server' object has no attribute 'list_tools'`), taking
+  down the `Python tests (pytest)` and `MCP server unit tests` CI jobs via
+  collection errors. Migrating the servers to the new API is tracked as a
+  followup; pinning restores CI now.
+- `docker/toolchain/Dockerfile` — HEALTHCHECK's `CMD curl ... || exit 1` used
+  shell form, which hadolint flags (DL3025); switched to
+  `CMD ["sh", "-c", "..."]`, which keeps the `||` fallback in JSON exec form.
+- `docker/toolchain/exec_api.py` — added an `ALLOWED_BINARIES` allowlist
+  checked against `args[0]` before every `subprocess.run`, closing CodeQL
+  alert #182 (`py/command-line-injection`). The MCP servers already only
+  ever choose `args[0]` themselves (`mcp_servers/common.py`); the allowlist
+  makes that a hard server-side boundary instead of an implicit one.
+- `tests/test_readme_ascii_fenced.py` — the wordmark-title guard asserted the
+  literal upstream `alt="Odysseus"`, which this fork's own
+  `alt="Odysseus Red"` branding never matched; broadened to a prefix match so
+  the guard still catches a missing/reverted wordmark without fighting the
+  fork's identity.
+- Dismissed 6 stale-open `py/incomplete-url-substring-sanitization` CodeQL
+  alerts (#76–#81) as "used in tests" — each is a substring/membership
+  assertion on either a hardcoded test fixture or `src/agent_loop.py`'s
+  `_API_HOSTS` (an admin-configured endpoint used only to pick prompt
+  format, not a security boundary), not exploitable sanitization logic.
+
 ---
 
 ## [0.3.1] — 2026-06-25
