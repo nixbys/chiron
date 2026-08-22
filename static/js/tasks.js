@@ -363,6 +363,7 @@ const _MODEL_BACKED_ACTIONS = new Set([
   'draft_email_replies',
   'extract_email_events',
   'classify_events',
+  'mark_email_boundaries',
   'learn_sender_signatures',
   'check_email_urgency',
   'test_skills',

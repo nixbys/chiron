@@ -446,10 +446,16 @@ export const ERROR_PATTERNS = [
     pattern: /Either a revision or a version must be specified|transformers\.integrations\.hub_kernels|kernels\/layer/i,
     message: 'Transformers/kernels package mismatch.',
     fixes: [
-      { label: 'Repair kernel package', action: () => {
-        const _vp = (_envState.env === 'venv' && _envState.envPath)
-          ? `${_envState.envPath.replace(/\/+$/, '')}/bin/python3` : 'python3';
-        _launchServeTask('repair-kernels', 'pip-update', `${_vp} -m pip install --user --break-system-packages "kernels<0.15"`);
+      { label: 'Repair kernel package', action: (panel) => {
+        const taskEl = panel.closest('.cookbook-task');
+        const task = taskEl ? _loadTasks().find(t => t.sessionId === taskEl.dataset.taskId) : null;
+        const host = task?.remoteHost || '';
+        const prefix = _buildEnvPrefix();
+        const pipCmd = prefix
+          ? prefix + ' python3 -m pip install --user --break-system-packages "kernels<0.15"'
+          : 'python3 -m pip install --user --break-system-packages "kernels<0.15"';
+        const cmd = host ? _sshCmd(host, pipCmd) : pipCmd;
+        _launchServeTask('repair-kernels', 'pip-update', cmd);
       }},
       { label: 'Open Dependencies', action: () => _openCookbookDependencies('sglang') },
     ],
