@@ -29,6 +29,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `docker/toolchain/Dockerfile` — HEALTHCHECK's `CMD curl ... || exit 1` used
   shell form, which hadolint flags (DL3025); switched to
   `CMD ["sh", "-c", "..."]`, which keeps the `||` fallback in JSON exec form.
+- `docker/toolchain/Dockerfile` — added `build-essential` and `python3-dev`.
+  Kali Rolling's current Python has no prebuilt `yara-python` wheel on PyPI,
+  so pip fell back to compiling it from source; without a C compiler and the
+  Python headers that failed outright (`x86_64-linux-gnu-gcc: No such file`,
+  then `Python.h: No such file or directory`), breaking the "Toolchain
+  Dockerfile build" CI job on every PR that touches the Dockerfile. Verified
+  by building the affected `apt-get`+`pip3 install yara-python` layers in
+  isolation.
 - `docker/toolchain/exec_api.py` — added an `ALLOWED_BINARIES` allowlist
   checked against `args[0]` before every `subprocess.run`, closing CodeQL
   alert #182 (`py/command-line-injection`). The MCP servers already only
