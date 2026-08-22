@@ -38,7 +38,11 @@ python-dateutil
 caldav
 cryptography
 bcrypt
-mcp
+mcp<2.0.0  # mcp 2.0.0 replaced the low-level Server's @server.list_tools()/
+           # @server.call_tool() decorator API with constructor-passed
+           # on_list_tools/on_call_tool callables; all 18 files in
+           # mcp_servers/ still use the pre-2.0 decorator pattern. Pinned
+           # until those servers are migrated — see CHANGELOG "Fixed".
 requests
 # skills/*.yaml pipeline parsing (src/pipeline_engine.py) — declared
 # explicitly rather than relying on it being pulled in transitively.
