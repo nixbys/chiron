@@ -1779,12 +1779,6 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append('  printf "%s\\n" "$ODYSSEUS_DIFFUSION_IMPORT_ERROR"')
                 runner_lines.append('  ODYSSEUS_PREFLIGHT_EXIT=127')
                 runner_lines.append('fi')
-            elif "scripts/diffusion_server.py" in req.cmd or ".diffusion_server.py" in req.cmd:
-                runner_lines.append('export PATH="$HOME/.local/bin:$PATH"')
-                runner_lines.append('if ! python3 -c "import torch, diffusers" 2>/dev/null; then')
-                runner_lines.append('  echo "ERROR: Diffusion serving requires PyTorch + diffusers. Open Cookbook -> Dependencies and install diffusers on this server, then launch again."')
-                runner_lines.append('  exit 127')
-                runner_lines.append('fi')
 
             handled_ollama_sidecar_probe = False
             if (not handled_ollama_serve
@@ -2623,14 +2617,16 @@ def setup_cookbook_routes() -> APIRouter:
             # Add 30% headroom for KV cache, activations, etc.
             needed_vram = (est_vram * 1.3) if est_vram else None
 
-            if vram_gb > 0:
-                if needed_vram is None:
-                    # The "trending models that fit" list must be conservative:
-                    # if we cannot estimate size from the repo id/tags, do not
-                    # present it as runnable on this hardware.
-                    continue
-                if needed_vram > vram_gb:
-                    continue
+            if vram_gb > 0 and needed_vram is not None and needed_vram > vram_gb:
+                continue
+            # Unknown-size models (e.g. MiniMax-M2.7, DeepSeek-V4-Flash) have no
+            # "NB" in the repo id, so the regex above can't extract their
+            # param count. Previously we dropped them entirely, which made
+            # brand-new flagship releases silently vanish from this list even
+            # on rigs with hundreds of GB of VRAM. Adapters/LoRAs are already
+            # filtered by _is_excluded(), so what falls through here is
+            # overwhelmingly full models — keep them, just without a size
+            # badge (the frontend handles needed_vram_gb=null gracefully).
 
             out.append({
                 "repo_id": repo_id,

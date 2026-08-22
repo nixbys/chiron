@@ -3675,7 +3675,7 @@ export async function _fetchCachedModels() {
     const data = await res.json();
     _dlWp.destroy();
 
-    // CHANGELOG: 'ready' already excludes partial downloads; 
+    // CHANGELOG: 'ready' already excludes partial downloads;
     // show every complete model regardless of size/backend.
     const ready = data.models.filter(m => m.status === 'ready');
 
