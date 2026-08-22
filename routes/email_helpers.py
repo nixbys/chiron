@@ -17,6 +17,7 @@ import base64
 import time
 import imaplib
 import smtplib
+import ssl
 import email as email_mod
 import email.header
 import email.utils
@@ -179,11 +180,28 @@ def _send_smtp_message(cfg: dict, from_addr: str, recipients: list[str], message
 
     security = _smtp_security_mode(cfg)
 
-    if security == "ssl":
-        with smtplib.SMTP_SSL(host, port, timeout=timeout) as smtp:
+    def _send_starttls(starttls_port: int = 587) -> None:
+        with smtplib.SMTP(host, starttls_port, timeout=timeout) as smtp:
+            smtp.starttls()
             _auth_smtp(smtp)
             smtp.sendmail(from_addr, recipients, message)
+
+    if port == 587:
+        _send_starttls(587)
         return
+
+    if security == "ssl":
+        try:
+            with smtplib.SMTP_SSL(host, port, timeout=timeout) as smtp:
+                _auth_smtp(smtp)
+                smtp.sendmail(from_addr, recipients, message)
+            return
+        except (TimeoutError, ssl.SSLError) as e:
+            if port == 465:
+                logger.warning("SMTP implicit TLS on %s:465 failed (%s); retrying STARTTLS on 587", host, e)
+                _send_starttls(587)
+                return
+            raise
 
     with smtplib.SMTP(host, port, timeout=timeout) as smtp:
         if security == "starttls":

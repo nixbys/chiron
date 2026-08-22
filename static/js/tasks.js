@@ -622,6 +622,7 @@ const _TASK_CACHE_LABELS = {
   summarize_emails: 'email summaries',
   draft_email_replies: 'AI reply drafts',
   extract_email_events: 'email calendar cache',
+  mark_email_boundaries: 'email boundaries',
   learn_sender_signatures: 'sender signatures',
   check_email_urgency: 'email tags',
 };
