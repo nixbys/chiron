@@ -1372,6 +1372,9 @@ def setup_cookbook_routes() -> APIRouter:
         session_id = f"serve-{uuid.uuid4().hex[:8]}"
         remote = req.remote_host
         is_windows = req.platform == "windows"
+        # LOCAL execution on a native-Windows host never uses tmux (detached
+        # process path below), regardless of the UI-supplied platform.
+        local_windows = IS_WINDOWS and not remote
 
         # Ollama: if the user didn't pin a port, resolve the actual port we'll
         # bind to here (before runner construction) by probing the target host.
