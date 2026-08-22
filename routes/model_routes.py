@@ -229,54 +229,6 @@ def _rewrite_loopback_for_docker(base_url: str, *, container_local: bool = False
     return urlunparse(parsed._replace(netloc=netloc))
 
 
-def _anthropic_api_root(base: str) -> str:
-    """Return Anthropic's API root without duplicating /v1."""
-    base = (base or "").strip().rstrip("/")
-    host = urlparse(base).hostname or ""
-    if host.endswith("anthropic.com") and base.endswith("/v1"):
-        return base[:-3].rstrip("/")
-    return base
-
-
-def _ollama_api_root(base: str) -> str:
-    """Return Ollama's native API root without depending on deferred imports."""
-    base = (base or "").strip().rstrip("/")
-    parsed = urlparse(base)
-    host = parsed.hostname or ""
-    path = (parsed.path or "").rstrip("/")
-    if path.endswith("/api"):
-        return base
-    if host.endswith("ollama.com"):
-        root = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else "https://ollama.com"
-        return root.rstrip("/") + "/api"
-    return base
-
-
-def _models_url(base: str) -> str:
-    """Return provider-specific model-list URL for route-local probing."""
-    provider = _detect_provider(base)
-    host = urlparse(base).hostname or ""
-    if provider == "anthropic" or host.endswith("anthropic.com"):
-        return _anthropic_api_root(base) + "/v1/models"
-    if provider == "ollama" or host.endswith("ollama.com"):
-        return _ollama_api_root(base) + "/tags"
-    return base.rstrip("/") + "/models"
-
-
-def _provider_headers(api_key: Optional[str], base: str) -> Dict[str, str]:
-    """Build provider auth headers without depending on import-time stubs."""
-    if not api_key:
-        return {}
-    provider = _detect_provider(base)
-    host = urlparse(base).hostname or ""
-    if provider == "anthropic" or host.endswith("anthropic.com"):
-        return {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        }
-    return {"Authorization": f"Bearer {api_key}"}
-
-
 # ── Curated model lists per provider ──
 # For cloud providers that return 100+ models, only show these by default.
 # A model ID matches if it starts with or equals a curated entry.

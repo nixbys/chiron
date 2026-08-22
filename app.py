@@ -46,7 +46,6 @@ from dotenv import load_dotenv
 # utf-8-sig reads plain UTF-8 (no BOM) identically, so this is safe everywhere.
 load_dotenv(encoding="utf-8-sig")
 
-import asyncio
 import logging
 import secrets
 from datetime import datetime, timezone
