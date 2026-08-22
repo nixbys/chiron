@@ -297,6 +297,12 @@ def try_fallback_endpoint(sess, session_id: str) -> dict | None:
             else:
                 models = json.loads(ep.cached_models or "[]")
             if not models:
+                models = [
+                    m.get("name") or m.get("model")
+                    for m in (data.get("models") or [])
+                    if m.get("name") or m.get("model")
+                ]
+            if not models:
                 continue
             # Found a working endpoint — update session
             new_model = models[0]
