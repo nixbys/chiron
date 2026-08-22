@@ -4,7 +4,7 @@ python-multipart
 python-dotenv
 httpx
 pydantic>=2.13.4
-pydantic-settings>=2.14.2
+pydantic-settings>=2.15.0
 SQLAlchemy
 pypdf
 fpdf2
@@ -38,7 +38,7 @@ python-dateutil
 caldav
 cryptography
 bcrypt
-mcp<2.0.0  # mcp 2.0.0 replaced the low-level Server's @server.list_tools()/
+mcp<3.0.0  # mcp 2.0.0 replaced the low-level Server's @server.list_tools()/
            # @server.call_tool() decorator API with constructor-passed
            # on_list_tools/on_call_tool callables; all 18 files in
            # mcp_servers/ still use the pre-2.0 decorator pattern. Pinned
