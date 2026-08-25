@@ -32,6 +32,11 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
   let _emailAccountsCache = null;
   let _emailAccountsCacheAt = 0;
   let _emailHeaderManualExpandUntil = 0;
+  let _emailStreamAnimFrame = null;
+  let _emailStreamRenderedBody = '';
+  let _emailStreamTargetBody = '';
+  let _emailLocalDraftDebounce = null;
+  const _EMAIL_LOCAL_DRAFT_PREFIX = 'odysseus.email.replyDraft.v1:';
 
   // Diff mode state
   let _diffModeActive = false;
@@ -39,6 +44,8 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
   let _diffNewContent = null;
   let _diffChunks = [];          // [{id, oldLines, newLines, startLine, resolved, accepted}]
   let _diffUnresolvedCount = 0;
+  let _mdPreviewClickTimes = [];
+  let _mdPreviewHintLastAt = 0;
 
   // Language auto-detection config
   const AUTO_DETECT_DELAY = 500;
@@ -2046,9 +2053,8 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       || '';
     const isForm = _isFormBackedDoc(live);
     // Footer main button: for a doc opened from an email attachment, morph the
-    // Copy button into "Reply" (send the filled file back to the sender via the
-    // signed-reply flow). Otherwise it's the normal Copy action. The click
-    // handler branches on data-mode.
+    // Save button into "Attach" (send the filled file back to the sender via
+    // the signed-reply flow). Otherwise it forces a new saved version.
     const _copyBtn = document.getElementById('doc-footer-copy-btn');
     if (_copyBtn) {
       const _ad = docs.get(activeDocId);
@@ -2057,10 +2063,10 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
         _copyBtn.dataset.mode = 'reply';
         _copyBtn.title = 'Reply to the sender with this filled file attached';
         _copyBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>Attach';
-      } else if (!_replyable && _copyBtn.dataset.mode !== 'copy') {
-        _copyBtn.dataset.mode = 'copy';
-        _copyBtn.title = 'Copy document';
-        _copyBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy';
+      } else if (!_replyable && _copyBtn.dataset.mode !== 'save') {
+        _copyBtn.dataset.mode = 'save';
+        _copyBtn.title = 'Save new version';
+        _copyBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save';
       }
     }
     // Standalone Export PDF / PDF-toggle icon buttons are retired — for a
@@ -2181,6 +2187,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       if (mdToggle) {
         mdToggle.querySelector('[data-mdview="edit"]')?.classList.toggle('active', !_mdActive);
         mdToggle.querySelector('[data-mdview="preview"]')?.classList.toggle('active', _mdActive);
+        mdToggle.classList.toggle('is-preview-active', !!_mdActive);
       }
     } else if (lang === 'csv') {
       show = true;
@@ -2207,6 +2214,16 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     // suppress the single morph button to avoid two redundant controls.
     if (_hasViewToggle(lang)) show = false;
     actionBtn.style.display = show ? '' : 'none';
+    document.querySelectorAll('.md-toolbar-edit-only').forEach(el => {
+      el.style.display = (lang === 'markdown' && _mdActive) ? 'none' : '';
+    });
+    const mdToolbar = document.getElementById('doc-md-toolbar');
+    if (mdToolbar) {
+      mdToolbar.classList.toggle('md-preview-active', lang === 'markdown' && !!_mdActive);
+      mdToolbar.classList.toggle('md-write-active', lang === 'markdown' && !_mdActive);
+    }
+    if (_mdPreview) _mdPreview.classList.toggle('md-preview-active', lang === 'markdown' && !!_mdActive);
+    if (mdToolbar && mdToolbar._syncOverflow) requestAnimationFrame(mdToolbar._syncOverflow);
 
     // Now that the contextual buttons' visibility is settled, collapse the bar
     // if it ended up empty (the common plain-doc-on-mobile case).
@@ -2216,20 +2233,24 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
   // ── Email document type helpers ──
 
   function _parseEmailHeader(content) {
-    const empty = { to: '', cc: '', bcc: '', subject: '', inReplyTo: '', references: '', sourceUid: '', sourceFolder: '', attachments: [], body: content || '' };
+    const empty = { to: '', cc: '', bcc: '', subject: '', inReplyTo: '', references: '', sourceUid: '', sourceFolder: '', forwardAttachments: false, attachments: [], body: content || '' };
     if (!content) return empty;
     const parts = content.split(/\n---\n/);
     if (parts.length < 2) return empty;
     const header = parts[0];
     const body = parts.slice(1).join('\n---\n');
-    const fields = { to: '', cc: '', bcc: '', subject: '', inReplyTo: '', references: '', sourceUid: '', sourceFolder: '', attachments: [], body: body };
+    const fields = { to: '', cc: '', bcc: '', subject: '', inReplyTo: '', references: '', sourceUid: '', sourceFolder: '', forwardAttachments: false, attachments: [], body: body };
     for (const line of header.split('\n')) {
-      const m = line.match(/^(To|Cc|Bcc|Subject|In-Reply-To|References|X-Source-UID|X-Source-Folder|X-Attachments):\s*(.*)$/i);
+      const m = line.match(/^(To|Cc|Bcc|Subject|In-Reply-To|References|X-Source-UID|X-Source-Folder|X-Forward-Attachments|X-Attachments):\s*(.*)$/i);
       if (m) {
         let key = m[1].toLowerCase();
         if (key === 'in-reply-to') key = 'inReplyTo';
         else if (key === 'x-source-uid') key = 'sourceUid';
         else if (key === 'x-source-folder') key = 'sourceFolder';
+        else if (key === 'x-forward-attachments') {
+          fields.forwardAttachments = /^(1|true|yes)$/i.test((m[2] || '').trim());
+          continue;
+        }
         else if (key === 'x-attachments') {
           fields.attachments = m[2].trim().split('|').map(a => {
             const [index, filename, size] = a.split(':');
@@ -2253,6 +2274,95 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     if (sourceUid) header += `\nX-Source-UID: ${sourceUid}`;
     if (sourceFolder) header += `\nX-Source-Folder: ${sourceFolder}`;
     return header + '\n---\n' + body;
+  }
+
+  function _emailLocalDraftKey(sourceUid, sourceFolder, inReplyTo) {
+    const uid = String(sourceUid || '').trim();
+    if (!uid) return '';
+    const folder = String(sourceFolder || 'INBOX').trim() || 'INBOX';
+    const msg = String(inReplyTo || '').trim();
+    return _EMAIL_LOCAL_DRAFT_PREFIX + encodeURIComponent(`${folder}|${uid}|${msg}`);
+  }
+
+  function _loadEmailLocalDraft(fields) {
+    const key = _emailLocalDraftKey(fields?.sourceUid, fields?.sourceFolder, fields?.inReplyTo);
+    if (!key) return null;
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return null;
+      const draft = JSON.parse(raw);
+      if (!draft || typeof draft !== 'object') return null;
+      const updatedAt = Number(draft.updatedAt || 0);
+      if (updatedAt && Date.now() - updatedAt > 45 * 24 * 60 * 60 * 1000) {
+        localStorage.removeItem(key);
+        return null;
+      }
+      return draft;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function _emailFieldsWithLocalDraft(fields) {
+    const draft = _loadEmailLocalDraft(fields);
+    if (!draft) return fields;
+    return {
+      ...fields,
+      to: draft.to ?? fields.to,
+      cc: draft.cc ?? fields.cc,
+      bcc: draft.bcc ?? fields.bcc,
+      subject: draft.subject ?? fields.subject,
+      inReplyTo: draft.inReplyTo ?? fields.inReplyTo,
+      references: draft.references ?? fields.references,
+      sourceUid: draft.sourceUid ?? fields.sourceUid,
+      sourceFolder: draft.sourceFolder ?? fields.sourceFolder,
+      body: draft.body ?? fields.body,
+    };
+  }
+
+  function _persistEmailLocalDraftNow() {
+    const doc = activeDocId && docs.get(activeDocId);
+    if (!doc || doc.language !== 'email') return;
+    const sourceUid = document.getElementById('doc-email-source-uid')?.value || '';
+    const sourceFolder = document.getElementById('doc-email-source-folder')?.value || 'INBOX';
+    const inReplyTo = document.getElementById('doc-email-in-reply-to')?.value || '';
+    const key = _emailLocalDraftKey(sourceUid, sourceFolder, inReplyTo);
+    if (!key) return;
+    const rich = document.getElementById('doc-email-richbody');
+    const textarea = document.getElementById('doc-editor-textarea');
+    const body = (rich && rich.style.display !== 'none') ? rich.innerHTML : (textarea?.value || '');
+    const payload = {
+      to: document.getElementById('doc-email-to')?.value || '',
+      cc: document.getElementById('doc-email-cc')?.value || '',
+      bcc: document.getElementById('doc-email-bcc')?.value || '',
+      subject: document.getElementById('doc-email-subject')?.value || '',
+      inReplyTo,
+      references: document.getElementById('doc-email-references')?.value || '',
+      sourceUid,
+      sourceFolder,
+      body,
+      updatedAt: Date.now(),
+    };
+    try { localStorage.setItem(key, JSON.stringify(payload)); } catch (_) {}
+  }
+
+  function _persistEmailLocalDraftSoon() {
+    clearTimeout(_emailLocalDraftDebounce);
+    _emailLocalDraftDebounce = setTimeout(_persistEmailLocalDraftNow, 250);
+  }
+
+  function _clearEmailLocalDraft(sourceUid, sourceFolder, inReplyTo) {
+    const key = _emailLocalDraftKey(sourceUid, sourceFolder, inReplyTo);
+    if (!key) return;
+    try { localStorage.removeItem(key); } catch (_) {}
+  }
+
+  function _clearCurrentEmailLocalDraft() {
+    _clearEmailLocalDraft(
+      document.getElementById('doc-email-source-uid')?.value || '',
+      document.getElementById('doc-email-source-folder')?.value || 'INBOX',
+      document.getElementById('doc-email-in-reply-to')?.value || '',
+    );
   }
 
   // ── WYSIWYG email body helpers ──
@@ -2283,7 +2393,10 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
   function _wireEmailRichbody(rich) {
     if (rich._wired) { _syncEmailRichbody(rich); return; }
     rich._wired = true;
-    rich.addEventListener('input', () => _syncEmailRichbody(rich));
+    rich.addEventListener('input', () => {
+      _syncEmailRichbody(rich);
+      _persistEmailLocalDraftSoon();
+    });
     // Highlight toolbar buttons (B / I / S, headings, lists) when the caret
     // sits inside formatted text. queryCommandState reflects the live
     // selection — we just translate that into .is-active classes the CSS
@@ -2375,6 +2488,53 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     });
   }
 
+  function _renderStreamingEmailBody(body, { immediate = false } = {}) {
+    const rich = document.getElementById('doc-email-richbody');
+    const textarea = document.getElementById('doc-editor-textarea');
+    if (!rich) return;
+
+    _emailStreamTargetBody = body || '';
+    if (!_emailStreamRenderedBody && textarea && textarea.value) {
+      _emailStreamRenderedBody = textarea.value;
+    }
+
+    const applyBody = (value) => {
+      if (textarea) {
+        textarea.value = value;
+        textarea.scrollTop = textarea.scrollHeight;
+      }
+      rich.innerHTML = _emailBodyToHtml(value);
+      rich.scrollTop = rich.scrollHeight;
+    };
+
+    if (immediate) {
+      if (_emailStreamAnimFrame) cancelAnimationFrame(_emailStreamAnimFrame);
+      _emailStreamAnimFrame = null;
+      _emailStreamRenderedBody = _emailStreamTargetBody;
+      applyBody(_emailStreamRenderedBody);
+      return;
+    }
+
+    if (_emailStreamTargetBody.length < _emailStreamRenderedBody.length ||
+        !_emailStreamTargetBody.startsWith(_emailStreamRenderedBody)) {
+      _emailStreamRenderedBody = '';
+    }
+
+    if (_emailStreamAnimFrame) return;
+    const tick = () => {
+      const remaining = _emailStreamTargetBody.length - _emailStreamRenderedBody.length;
+      if (remaining <= 0) {
+        _emailStreamAnimFrame = null;
+        return;
+      }
+      const step = Math.max(1, Math.min(8, Math.ceil(remaining / 18)));
+      _emailStreamRenderedBody = _emailStreamTargetBody.slice(0, _emailStreamRenderedBody.length + step);
+      applyBody(_emailStreamRenderedBody);
+      _emailStreamAnimFrame = requestAnimationFrame(tick);
+    };
+    _emailStreamAnimFrame = requestAnimationFrame(tick);
+  }
+
   function _stripEmailReplyQuoteText(text) {
     const original = String(text || '');
     if (!original) return { body: '', stripped: false };
@@ -2398,6 +2558,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     syncHighlighting();
     const rich = _emailRichbodyActive();
     if (rich) rich.innerHTML = _emailBodyToHtml(textarea.value);
+    _persistEmailLocalDraftSoon();
   }
 
   async function _streamEmailBodyText(textarea, value) {
@@ -2412,6 +2573,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       const next = finalText.slice(0, i + chunk);
       textarea.value = next;
       if (rich) rich.innerHTML = _emailBodyToHtml(next);
+      _persistEmailLocalDraftSoon();
       await new Promise(resolve => requestAnimationFrame(resolve));
     }
     _setEmailBodyText(textarea, finalText);
@@ -2510,7 +2672,8 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     document.getElementById('doc-editor-textarea')?.classList.add('email-mode');
     document.getElementById('doc-editor-code')?.classList.add('email-mode');
     document.getElementById('doc-editor-highlight')?.classList.add('email-mode');
-    const fields = _parseEmailHeader(doc.content || '');
+    let fields = _parseEmailHeader(doc.content || '');
+    fields = _emailFieldsWithLocalDraft(fields);
     const toInput = document.getElementById('doc-email-to');
     const subjectInput = document.getElementById('doc-email-subject');
     const inReplyTo = document.getElementById('doc-email-in-reply-to');
@@ -2636,6 +2799,10 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     if (_rich && _srcWrap) {
       _srcWrap.style.display = 'none';
       _rich.style.display = '';
+      if (_emailStreamAnimFrame) cancelAnimationFrame(_emailStreamAnimFrame);
+      _emailStreamAnimFrame = null;
+      _emailStreamRenderedBody = fields.body || '';
+      _emailStreamTargetBody = fields.body || '';
       _rich.innerHTML = _emailBodyToHtml(fields.body);
       _wireEmailRichbody(_rich);
       setTimeout(() => {
@@ -2660,6 +2827,49 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     if (ccRow) ccRow.style.display = hasCcBcc ? '' : 'none';
     if (bccRow) bccRow.style.display = hasCcBcc ? '' : 'none';
     if (ccToggle) ccToggle.style.display = hasCcBcc ? 'none' : '';
+    _syncEmailHeaderSummary();
+    _stageForwardedSourceAttachments(fields).catch(err => console.error('Forward attachment staging failed:', err));
+  }
+
+  function _syncStreamingEmailFields(doc) {
+    if (!doc) return;
+    const fields = _parseEmailHeader(doc.content || '');
+    const rich = document.getElementById('doc-email-richbody');
+    const srcWrap = document.getElementById('doc-editor-wrap');
+    const textarea = document.getElementById('doc-editor-textarea');
+    if (!rich || rich.style.display === 'none') {
+      _showEmailFields(doc);
+      return;
+    }
+
+    const setValue = (id, value) => {
+      const el = document.getElementById(id);
+      const next = value || '';
+      if (el && el.value !== next) el.value = next;
+    };
+    setValue('doc-email-to', fields.to);
+    setValue('doc-email-subject', fields.subject);
+    setValue('doc-email-in-reply-to', fields.inReplyTo);
+    setValue('doc-email-references', fields.references);
+    setValue('doc-email-source-uid', fields.sourceUid || '');
+    setValue('doc-email-source-folder', fields.sourceFolder || '');
+    setValue('doc-email-cc', fields.cc || '');
+    setValue('doc-email-bcc', fields.bcc || '');
+
+    const unreadBtn = document.getElementById('doc-email-unread-btn');
+    if (unreadBtn) unreadBtn.style.display = fields.sourceUid ? '' : 'none';
+    const ccRow = document.getElementById('doc-email-cc-row');
+    const bccRow = document.getElementById('doc-email-bcc-row');
+    const ccToggle = document.getElementById('doc-email-show-cc');
+    const hasCcBcc = !!(fields.cc || fields.bcc);
+    if (ccRow) ccRow.style.display = hasCcBcc ? '' : 'none';
+    if (bccRow) bccRow.style.display = hasCcBcc ? '' : 'none';
+    if (ccToggle) ccToggle.style.display = hasCcBcc ? 'none' : '';
+
+    if (srcWrap) srcWrap.style.display = 'none';
+    rich.style.display = '';
+    _renderStreamingEmailBody(fields.body || '');
+    if (doc._originalBody == null) doc._originalBody = fields.body || '';
     _syncEmailHeaderSummary();
   }
 
@@ -2694,6 +2904,47 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       }
     }
     _renderComposeAttachments();
+  }
+
+  async function _stageForwardedSourceAttachments(fields) {
+    const doc = docs.get(activeDocId);
+    if (!doc || doc.language !== 'email') return;
+    if (!fields?.forwardAttachments || !fields.sourceUid || !Array.isArray(fields.attachments) || fields.attachments.length === 0) return;
+    const sourceKey = `${fields.sourceFolder || 'INBOX'}:${fields.sourceUid}:${fields.attachments.map(a => a.index).join(',')}`;
+    if (doc._forwardedAttachmentSourceKey === sourceKey) return;
+    doc._forwardedAttachmentSourceKey = sourceKey;
+    if (!doc._composeAtts) doc._composeAtts = [];
+    const existingForwarded = new Set(doc._composeAtts.filter(a => a.forwardedSourceKey === sourceKey).map(a => String(a.sourceIndex)));
+    let added = 0;
+    for (const att of fields.attachments) {
+      const sourceIndex = String(att.index);
+      if (existingForwarded.has(sourceIndex)) continue;
+      try {
+        const folderQs = encodeURIComponent(fields.sourceFolder || 'INBOX');
+        const res = await fetch(`${API_BASE}/api/email/compose-from-attachment/${encodeURIComponent(fields.sourceUid)}/${encodeURIComponent(att.index)}?folder=${folderQs}`, {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'failed');
+        doc._composeAtts.push({
+          token: data.token,
+          filename: data.filename || att.filename,
+          size: data.size || att.size || 0,
+          forwardedSourceKey: sourceKey,
+          sourceIndex,
+        });
+        added += 1;
+      } catch (err) {
+        console.error('Failed to stage forwarded attachment:', err);
+        if (uiModule) uiModule.showError(`Forward attachment failed: ${att.filename || 'attachment'}`);
+      }
+    }
+    if (added) {
+      _renderComposeAttachments();
+      clearTimeout(_autoSaveDebounce);
+      _autoSaveDebounce = setTimeout(() => { saveDocument({ silent: true }); }, 800);
+    }
   }
 
   async function _handleAttachUpload(e) {
@@ -3118,6 +3369,8 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
           in_reply_to: inReplyTo || null, references: references || null,
           attachments: attachments.length > 0 ? attachments : null,
           account_id: activeAccountId,
+          source_uid: sourceUid || null,
+          source_folder: sourceFolder || null,
           wait_for_delivery: true,
         }),
       });
@@ -3167,9 +3420,12 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
         }
         // Mark the source email as answered if this was a reply
         if (sourceUid) {
-          fetch(`${API_BASE}/api/email/mark-answered/${sourceUid}?folder=${encodeURIComponent(sourceFolder)}`, { method: 'POST' }).catch(() => {});
+          _clearEmailLocalDraft(sourceUid, sourceFolder, inReplyTo);
+          const markParams = new URLSearchParams({ folder: sourceFolder });
+          if (data.account_id || activeAccountId) markParams.set('account_id', data.account_id || activeAccountId);
+          fetch(`${API_BASE}/api/email/mark-answered/${encodeURIComponent(sourceUid)}?${markParams.toString()}`, { method: 'POST' }).catch(() => {});
           // Tell the inbox to refresh so the answered state shows
-          window.dispatchEvent(new CustomEvent('email-answered', { detail: { uid: sourceUid } }));
+          window.dispatchEvent(new CustomEvent('email-answered', { detail: { uid: sourceUid, folder: sourceFolder, account_id: data.account_id || activeAccountId || null } }));
         }
         // Delete the compose document after successful send. It was usually
         // already detached from the visible tabs so sending can finish in the
@@ -3632,6 +3888,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
         const data = await res.json();
         if (data.success) {
           if (uiModule) uiModule.showToast(`Scheduled for ${new Date(localDt).toLocaleString()}`);
+          _clearCurrentEmailLocalDraft();
           cleanup();
           // Close the document
           _closeWithoutDeleting(true);
@@ -3795,20 +4052,15 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 
   }
 
-  // Detach a doc from its chat session so it stops reappearing in that
-  // chat: docs with content are unlinked (kept in the library), empty docs
-  // are deleted. Used by both the tab × and the mobile chip-to-trash close.
+  // Close a doc tab without breaking its chat association. The chat transcript
+  // can contain durable document links, so detaching a non-empty doc from the
+  // session makes it look like the document vanished from that chat.
   function _detachDocFromSession(docId, { toast = false } = {}) {
     const doc = docs.get(docId);
     const hasContent = doc && doc.content && doc.content.trim().length > 0;
     if (hasContent) {
-      fetch(`${API_BASE}/api/document/${docId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: '' }),
-      }).then(() => {
-        if (toast && uiModule) uiModule.showToast('Document unlinked from session');
-      }).catch(() => {});
+      saveDocument({ silent: true }).catch(() => {});
+      if (toast && uiModule) uiModule.showToast('Document closed');
     } else {
       fetch(`${API_BASE}/api/document/${docId}`, { method: 'DELETE' }).catch(() => {});
     }
@@ -3916,6 +4168,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       const _rich = document.getElementById('doc-email-richbody');
       const _emailBody = (_rich && _rich.style.display !== 'none') ? _rich.innerHTML : textarea.value;
       doc.content = _buildEmailContent(to, subject, inReplyTo, references, _emailBody, sourceUid, sourceFolder, cc, bcc);
+      _persistEmailLocalDraftSoon();
     } else if (textarea) {
       // Don't clobber a PDF/form-backed doc's source when the textarea is empty
       // (it's hidden behind the rendered PDF view, so its value isn't the source
@@ -4096,8 +4349,8 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       <div class="doc-md-toolbar" id="doc-md-toolbar" style="display:none">
         <div class="md-toolbar-items" id="md-toolbar-items">
           <span class="md-view-toggle" id="doc-md-view-toggle" style="display:none" role="group" aria-label="Edit or preview">
-            <button type="button" class="md-view-opt" data-mdview="edit" title="Edit source (Ctrl+Alt+M to toggle)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
-            <button type="button" class="md-view-opt" data-mdview="preview" title="Preview (Ctrl+Alt+M to toggle)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+            <button type="button" class="md-view-opt" data-mdview="edit" title="Edit source (Ctrl+Alt+M to toggle)"><span class="md-view-label">Write</span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+            <button type="button" class="md-view-opt" data-mdview="preview" title="Preview (Ctrl+Alt+M to toggle)"><span class="md-view-label">Preview</span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </span>
           <span class="md-view-toggle" id="doc-render-view-toggle" style="display:none" role="group" aria-label="Code or run">
             <button type="button" class="md-view-opt" data-renderview="code" title="Edit code"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></button>
@@ -4106,20 +4359,20 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
           <button id="doc-email-ai-reply-btn" class="doc-action-icon-btn md-toolbar-email-only" type="button" title="Draft a reply with AI (Fast / Full + optional context)" style="display:none;align-items:center;gap:4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="color:var(--accent, var(--red));flex-shrink:0;position:relative;top:-1px;"><path d="M12 0L14.59 8.41L23 12L14.59 15.59L12 24L9.41 15.59L1 12L9.41 8.41Z"/></svg><span style="font-size:11px;">Reply</span></button>
           <button id="doc-fontsize-btn" class="doc-action-icon-btn" title="Font size" style="position:relative;width:28px;height:26px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.7;"><path d="M4 7V4h16v3"/><path d="M12 4v16"/><path d="M8 20h8"/></svg><span class="doc-fontsize-levels"><i data-sz="s">S</i><i data-sz="m">M</i><i data-sz="l">L</i></span></button>
           <button id="doc-diff-toggle-btn" class="doc-action-icon-btn" title="Compare changes" style="opacity:0.7;display:none;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M5 12H2l5-5 5 5H9"/><path d="M19 12h3l-5 5-5-5h3"/></svg></button>
-          <span class="md-toolbar-sep"></span>
-          <button type="button" data-md="bold" title="Bold (Ctrl+B)"><b>B</b></button>
-          <button type="button" data-md="italic" title="Italic (Ctrl+I)"><i>I</i></button>
-          <button type="button" data-md="strike" title="Strikethrough"><s>S</s></button>
-          <span class="md-toolbar-sep"></span>
-          <button type="button" class="md-dd-toggle" data-dd="heading" title="Heading"><b>H</b><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
-          <button type="button" class="md-dd-toggle" data-dd="list" title="List"><span style="font-variant-numeric:tabular-nums;">1.</span><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
-          <span class="md-toolbar-sep"></span>
-          <button type="button" data-md="link" title="Link"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
-          <button type="button" id="md-toolbar-attach-btn" class="md-toolbar-attach-btn" title="Insert image"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.8l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
-          <button type="button" class="md-dd-toggle md-toolbar-email-hide" data-dd="code" title="Code">\`<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
-          <button type="button" data-md="hr" title="Horizontal rule">—</button>
-          <span class="md-toolbar-sep"></span>
-          <span id="md-toolbar-emoji-slot"></span>
+          <span class="md-toolbar-sep md-toolbar-edit-only"></span>
+          <button type="button" class="md-toolbar-edit-only" data-md="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+          <button type="button" class="md-toolbar-edit-only" data-md="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+          <button type="button" class="md-toolbar-edit-only" data-md="strike" title="Strikethrough"><s>S</s></button>
+          <span class="md-toolbar-sep md-toolbar-edit-only"></span>
+          <button type="button" class="md-dd-toggle md-toolbar-edit-only" data-dd="heading" title="Heading"><b>H</b><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+          <button type="button" class="md-dd-toggle md-toolbar-edit-only" data-dd="list" title="List"><span style="font-variant-numeric:tabular-nums;">1.</span><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+          <span class="md-toolbar-sep md-toolbar-edit-only"></span>
+          <button type="button" class="md-toolbar-edit-only" data-md="link" title="Link"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+          <button type="button" id="md-toolbar-attach-btn" class="md-toolbar-attach-btn md-toolbar-edit-only" title="Insert image"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.8l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+          <button type="button" class="md-dd-toggle md-toolbar-email-hide md-toolbar-edit-only" data-dd="code" title="Code">\`<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+          <button type="button" class="md-toolbar-edit-only" data-md="hr" title="Horizontal rule">—</button>
+          <span class="md-toolbar-sep md-toolbar-edit-only"></span>
+          <span id="md-toolbar-emoji-slot" class="md-toolbar-edit-only"></span>
           <span class="md-toolbar-sep md-toolbar-pdf-only" style="display:none"></span>
           <button type="button" id="doc-pdf-add-text-btn" class="md-toolbar-pdf-only" title="Add text box (then click on PDF)" style="display:none"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg></button>
           <button type="button" id="doc-pdf-add-check-btn" class="md-toolbar-pdf-only" title="Add checkmark (then click on PDF)" style="display:none"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></button>
@@ -4174,7 +4427,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
            csv / html / pdf) is the one growing to fill. -->
       <div id="doc-actions-footer" class="doc-email-actions">
         <span class="email-send-split" id="doc-copy-export-split">
-          <button type="button" id="doc-footer-copy-btn" class="email-send-btn email-send-main" title="Copy document"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button>
+          <button type="button" id="doc-footer-copy-btn" class="email-send-btn email-send-main" title="Save new version" data-mode="save"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save</button>
           <button type="button" id="doc-footer-export-btn" class="email-send-btn email-send-caret" title="Export as…" aria-label="Export options"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 15 12 9 18 15"/></svg></button>
         </span>
       </div>
@@ -4373,7 +4626,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     document.getElementById('doc-import-btn')?.addEventListener('click', () => openLibrary());
     document.getElementById('doc-footer-copy-btn')?.addEventListener('click', (e) => {
       if (e.currentTarget.dataset.mode === 'reply') { if (activeDocId) _sendSignedReply(activeDocId); }
-      else copyDocument();
+      else saveDocument({ silent: false, forceVersion: true });
     });
     document.getElementById('doc-footer-export-btn')?.addEventListener('click', (e) => showExportMenu(null, e.currentTarget.getBoundingClientRect()));
     // Mobile footer: Close the current doc + Copy its content (replaces the
@@ -4669,7 +4922,13 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       });
     }
     ['doc-email-to', 'doc-email-cc', 'doc-email-bcc', 'doc-email-subject'].forEach(id => {
-      document.getElementById(id)?.addEventListener('input', _syncEmailHeaderSummary);
+      document.getElementById(id)?.addEventListener('input', () => {
+        _syncEmailHeaderSummary();
+        saveCurrentToMap();
+        _persistEmailLocalDraftSoon();
+        clearTimeout(_autoSaveDebounce);
+        _autoSaveDebounce = setTimeout(() => { saveDocument({ silent: true }); }, 800);
+      });
       document.getElementById(id)?.addEventListener('focus', () => _setEmailHeaderCollapsed(false, { manual: false }));
     });
     document.getElementById('doc-email-richbody')?.addEventListener('focus', _maybeAutoCollapseEmailHeader);
@@ -4750,6 +5009,9 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
         const ccToggle = document.getElementById('doc-email-show-cc');
         if (ccToggle) ccToggle.style.display = '';
         _syncEmailHeaderSummary();
+        saveCurrentToMap();
+        clearTimeout(_autoSaveDebounce);
+        _autoSaveDebounce = setTimeout(() => { saveDocument({ silent: true }); }, 800);
       });
     });
 
@@ -4788,6 +5050,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       if (wantPreview !== isPreview) toggleMarkdownPreview();
       _syncHeaderActions();
     });
+    document.getElementById('doc-md-preview')?.addEventListener('click', _handleMarkdownPreviewClickHint);
 
     // Unified Code / Run-or-View two-icon switch — language-aware: CSV flips
     // between code and the table view, Python/JS/etc. between code and run
@@ -4851,6 +5114,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       _fontIdx = (_fontIdx + 1) % 3;
       _applyDocFont();
       syncHighlighting();
+      _scheduleSelRerender();
     });
 
     // Undo button in header
@@ -4956,6 +5220,28 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
         _autoTitleDebounce = setTimeout(() => autoTitleFromContent(ta.value), 600);
         clearTimeout(_autoSaveDebounce);
         _autoSaveDebounce = setTimeout(() => { saveDocument({ silent: true }); }, 2000);
+        const doc = activeDocId && docs.get(activeDocId);
+        if (doc && doc.language === 'email') _persistEmailLocalDraftSoon();
+      });
+      ta.addEventListener('paste', (e) => {
+        if (_activeDocLanguage() !== 'markdown') return;
+        const files = Array.from(e.clipboardData?.files || []).filter(_isMarkdownImageFile);
+        if (!files.length) return;
+        e.preventDefault();
+        _uploadMarkdownImages(files);
+      });
+      ta.addEventListener('dragover', (e) => {
+        if (_activeDocLanguage() !== 'markdown') return;
+        const items = Array.from(e.dataTransfer?.items || []);
+        if (!items.some(item => item.kind === 'file' && /^image\//i.test(item.type || ''))) return;
+        e.preventDefault();
+      });
+      ta.addEventListener('drop', (e) => {
+        if (_activeDocLanguage() !== 'markdown') return;
+        const files = Array.from(e.dataTransfer?.files || []).filter(_isMarkdownImageFile);
+        if (!files.length) return;
+        e.preventDefault();
+        _uploadMarkdownImages(files);
       });
       ta.addEventListener('paste', (e) => {
         if (_activeDocLanguage() !== 'markdown') return;
@@ -5722,6 +6008,29 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     scrollLeftBtn?.addEventListener('click', () => itemsWrap.scrollTo({ left: 0, behavior: 'smooth' }));
     scrollRightBtn?.addEventListener('click', () => itemsWrap.scrollTo({ left: itemsWrap.scrollWidth, behavior: 'smooth' }));
     itemsWrap?.addEventListener('scroll', updateScrollArrows, { passive: true });
+    if (itemsWrap) {
+      let swipeStartX = 0;
+      let swipeStartY = 0;
+      let swipeStartScroll = 0;
+      itemsWrap.addEventListener('touchstart', (e) => {
+        const t = e.touches && e.touches[0];
+        if (!t) return;
+        swipeStartX = t.clientX;
+        swipeStartY = t.clientY;
+        swipeStartScroll = itemsWrap.scrollLeft;
+      }, { passive: true });
+      itemsWrap.addEventListener('touchend', (e) => {
+        const t = e.changedTouches && e.changedTouches[0];
+        if (!t) return;
+        const dx = t.clientX - swipeStartX;
+        const dy = t.clientY - swipeStartY;
+        if (Math.abs(dx) < 42 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+        const maxScroll = Math.max(0, itemsWrap.scrollWidth - itemsWrap.clientWidth);
+        const page = Math.max(90, Math.round(itemsWrap.clientWidth * 0.75));
+        const nextLeft = Math.max(0, Math.min(maxScroll, swipeStartScroll - Math.sign(dx) * page));
+        itemsWrap.scrollTo({ left: nextLeft, behavior: 'smooth' });
+      }, { passive: true });
+    }
     if (window.ResizeObserver && itemsWrap) {
       new ResizeObserver(updateScrollArrows).observe(itemsWrap);
     }
@@ -6904,39 +7213,14 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     _selResizeObserver.observe(ta);
   }
 
-  // Detect whether the textarea is currently wrapping any line. If
-  // every logical line fits on one visual row, the overlay positions
-  // are exact and pinned selections are safe regardless of fullscreen
-  // state. We compute rendered-row-count from scrollHeight/line-height
-  // and compare against the number of \n-separated lines.
-  function _textareaWraps(ta) {
-    if (!ta) return false;
-    const style = getComputedStyle(ta);
-    const lh = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) * 1.45);
-    if (!lh) return false;
-    const padTop = parseFloat(style.paddingTop) || 0;
-    const padBottom = parseFloat(style.paddingBottom) || 0;
-    const renderedRows = Math.round((ta.scrollHeight - padTop - padBottom) / lh);
-    const logicalLines = (ta.value || '').split('\n').length;
-    return renderedRows > logicalLines;
-  }
-
   /** Update selection tracking, show badge + persistent highlight.
    *  Each new selection is added (pinned). Click without selecting to clear all. */
   function updateSelectionState() {
-    // Pinned selections are safe whenever the overlay measurement can
-    // be exact. That holds in two cases: (1) fullscreen — width is
-    // stable, or (2) no line wrapping — every logical \n-line fits on
-    // one visual row, so character-precise mirror measurement isn't
-    // needed. Outside both cases, panel resizes / wrap shifts make
-    // overlays drift, so we no-op.
-    const _pane = document.querySelector('.doc-editor-pane');
-    const _isFs = !!(_pane && _pane.classList.contains('doc-fullscreen'));
-    const _ta0 = document.getElementById('doc-editor-textarea');
-    if (!_isFs && _textareaWraps(_ta0)) {
-      if (_selections.length) clearSelection();
-      return;
-    }
+    // The mirror measurement below uses the textarea's live computed metrics,
+    // so pinned selections remain valid with wrapped lines, larger font sizes,
+    // mobile widths, and non-fullscreen panes. Older code disabled selection
+    // whenever wrapping was detected; increasing the document font made that
+    // path fire constantly, so selecting text appeared to stop working.
     _ensureSelResizeObserver();
     const textarea = document.getElementById('doc-editor-textarea');
     if (!textarea) return;
@@ -7618,6 +7902,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     _renderDiffOverlay(entries);
     _renderDiffToolbar();
     _renderDiffGutter();
+    requestAnimationFrame(() => _scrollToDiffChunk(_diffChunks[0]?.id));
 
     // Update header button
     const diffBtn = document.getElementById('doc-diff-toggle-btn');
@@ -7777,6 +8062,20 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     el.textContent = `${resolved} / ${_diffChunks.length} changes resolved`;
   }
 
+  function _scrollToDiffChunk(chunkId) {
+    if (chunkId == null) return;
+    const firstEl = document.querySelector(`[data-chunk-id="${chunkId}"]`);
+    const highlight = document.getElementById('doc-editor-highlight');
+    const textarea = document.getElementById('doc-editor-textarea');
+    if (!firstEl || !highlight) return;
+    const target = Math.max(0, firstEl.offsetTop - 80);
+    highlight.scrollTop = target;
+    if (textarea) textarea.scrollTop = target;
+    const gutter = document.getElementById('doc-line-numbers');
+    const lineNums = gutter && _lineNumberContentEl(gutter);
+    if (lineNums) lineNums.style.transform = `translateY(${-target}px)`;
+  }
+
   /** Resolve a single chunk */
   function _resolveChunk(chunkId, accept) {
     const chunk = _diffChunks.find(c => c.id === chunkId);
@@ -7806,6 +8105,9 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 
     if (_diffUnresolvedCount === 0) {
       setTimeout(() => exitDiffMode(false), 300);
+    } else {
+      const nextChunk = _diffChunks.find(c => !c.resolved);
+      requestAnimationFrame(() => _scrollToDiffChunk(nextChunk?.id));
     }
   }
 
@@ -7857,6 +8159,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
   function exitDiffMode(discard) {
     if (!_diffModeActive) return;
     _diffModeActive = false;
+    const acceptedAnyDiffChunk = !discard && _diffChunks.some(chunk => chunk && chunk.resolved && chunk.accepted);
 
     const textarea = document.getElementById('doc-editor-textarea');
     const codeEl = document.getElementById('doc-editor-code');
@@ -7920,6 +8223,12 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     syncHighlighting();
     updateLineNumbers(textarea ? textarea.value : '');
     saveDocument({ silent: true });
+    if (acceptedAnyDiffChunk) {
+      const lang = ((docs.get(activeDocId)?.language) || document.getElementById('doc-language-select')?.value || '').toLowerCase();
+      if (lang === 'markdown') {
+        requestAnimationFrame(() => _setMarkdownPreviewActive(true, { remember: true }));
+      }
+    }
   }
 
   /** Check if diff mode is active */
@@ -8397,29 +8706,50 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
   }
 
   /** Save manual edits */
-  export async function saveDocument({ silent = false } = {}) {
+  export async function saveDocument({ silent = false, forceVersion = false } = {}) {
     if (!activeDocId) return;
     const textarea = document.getElementById('doc-editor-textarea');
     if (!textarea) return;
+    const savingDocId = activeDocId;
+    saveCurrentToMap();
+    const localDoc = docs.get(savingDocId);
+    const contentToSave = localDoc?.content ?? textarea.value;
 
     try {
-      const res = await fetch(`${API_BASE}/api/document/${activeDocId}`, {
+      const res = await fetch(`${API_BASE}/api/document/${savingDocId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({ content: textarea.value }),
+        body: JSON.stringify({
+          content: contentToSave,
+          force_version: !!forceVersion,
+          summary: forceVersion ? 'Saved version' : undefined,
+        }),
       });
+      if (res.status === 404) {
+        // Streaming/empty email drafts can leave a local tab pointing at a temp
+        // or already-deleted document. Do not keep surfacing autosave errors for
+        // a document the backend no longer knows about.
+        if (docs.has(savingDocId)) docs.delete(savingDocId);
+        if (activeDocId === savingDocId) {
+          activeDocId = null;
+          renderTabs();
+        }
+        _syncDocIndicator();
+        if (!silent && uiModule) uiModule.showError('Document no longer exists');
+        return;
+      }
       if (!res.ok) throw new Error(`Document save failed: HTTP ${res.status}`);
       const doc = await res.json();
       const badge = document.getElementById('doc-version-badge');
       if (badge) { const _v = doc.version_count || 1; badge.textContent = `v${_v}`; badge.style.display = _v > 1 ? '' : 'none'; }
       // Update map
-      if (docs.has(activeDocId)) {
-        docs.get(activeDocId).version = doc.version_count || 1;
-        docs.get(activeDocId).content = textarea.value;
+      if (docs.has(savingDocId)) {
+        docs.get(savingDocId).version = doc.version_count || 1;
+        docs.get(savingDocId).content = contentToSave;
       }
       _syncDocIndicator();
-      if (!silent && uiModule) uiModule.showToast('Document saved');
+      if (!silent && uiModule) uiModule.showToast(forceVersion ? 'New version saved' : 'Document saved');
     } catch (e) {
       console.error('Failed to save document:', e);
       const now = Date.now();
@@ -9455,7 +9785,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 
     if (_streamDocId === activeDocId) {
       if ((doc?.language || '').toLowerCase() === 'email') {
-        _showEmailFields(doc);
+        _syncStreamingEmailFields(doc);
         return;
       }
       const textarea = document.getElementById('doc-editor-textarea');
@@ -9486,6 +9816,11 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
    *  Returns the old _streamDocId so handleDocUpdate can migrate temp→real. */
   export function streamDocFinalize() {
     const oldId = _streamDocId;
+    const finishingDoc = oldId ? docs.get(oldId) : null;
+    if (oldId === activeDocId && (finishingDoc?.language || '').toLowerCase() === 'email') {
+      const fields = _parseEmailHeader(finishingDoc.content || '');
+      _renderStreamingEmailBody(fields.body || '', { immediate: true });
+    }
     _streamDocId = null;
     // Hide streaming indicator + cursor
     const indicator = document.getElementById('doc-stream-indicator');
@@ -9502,6 +9837,27 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
   function _isMarkdownPreviewVisible() {
     const preview = document.getElementById('doc-md-preview');
     return !!(preview && preview.style.display !== 'none');
+  }
+
+  function _handleMarkdownPreviewClickHint() {
+    if (!_isMarkdownPreviewVisible()) return;
+    const lang = ((docs.get(activeDocId)?.language) || document.getElementById('doc-language-select')?.value || '').toLowerCase();
+    if (lang !== 'markdown') return;
+
+    const now = Date.now();
+    _mdPreviewClickTimes = _mdPreviewClickTimes.filter(ts => now - ts < 2500);
+    _mdPreviewClickTimes.push(now);
+    if (_mdPreviewClickTimes.length < 3 || now - _mdPreviewHintLastAt < 5000) return;
+
+    _mdPreviewHintLastAt = now;
+    _mdPreviewClickTimes = [];
+    if (uiModule?.showToast) {
+      uiModule.showToast('Preview is read-only. Click Write to edit the document.', {
+        duration: 5000,
+        action: 'Write',
+        onAction: () => _setMarkdownPreviewActive(false, { remember: true }),
+      });
+    }
   }
 
   function _refreshMarkdownPreviewIfVisible(docId, content) {
@@ -9696,11 +10052,14 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     // Toolbar shown for every doc type — items inside self-gate on language.
     if (mdToolbar) mdToolbar.style.display = '';
     // Auto-show table view for CSV after streaming
-    if (finalLang === 'csv') {
+    const finalLangLower = (finalLang || '').toLowerCase();
+    if (finalLangLower === 'csv') {
       requestAnimationFrame(() => {
         const csvPreview = document.getElementById('doc-csv-preview');
         if (csvPreview && csvPreview.style.display === 'none') toggleCsvPreview();
       });
+    } else if (streamingId && finalLangLower === 'markdown') {
+      requestAnimationFrame(() => _setMarkdownPreviewActive(true, { remember: true }));
     }
 
     renderTabs();

@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -405,6 +406,35 @@ def setup_cookbook_routes() -> APIRouter:
         safe_chmod(key_path, 0o600)
         safe_chmod(key_path.with_suffix(".pub"), 0o644)
         return {"ok": True, "public_key": _read_cookbook_public_key()}
+
+    class CookbookSshTestRequest(BaseModel):
+        host: str
+        ssh_port: str | None = None
+
+    @router.post("/api/cookbook/test-ssh")
+    async def test_cookbook_ssh(request: Request, req: CookbookSshTestRequest):
+        """Test a configured Cookbook SSH target without using generic shell exec."""
+        require_admin(request)
+        host = validate_remote_host(req.host)
+        ssh_port = validate_ssh_port(req.ssh_port)
+        try:
+            code, stdout, stderr = await run_ssh_command_async(
+                host,
+                ssh_port,
+                "echo ok",
+                timeout=8,
+                connect_timeout=5,
+                strict_host_key_checking=False,
+            )
+        except asyncio.TimeoutError:
+            return {"stdout": "", "stderr": "SSH test timed out", "exit_code": 124}
+        except Exception as e:
+            return {"stdout": "", "stderr": str(e), "exit_code": -1}
+        return {
+            "stdout": stdout.decode("utf-8", errors="replace"),
+            "stderr": stderr.decode("utf-8", errors="replace"),
+            "exit_code": code,
+        }
 
     def _needs_binary(cmd: str, binary: str) -> bool:
         return bool(re.search(rf"(^|[\s;&|()]){re.escape(binary)}($|[\s;&|()])", cmd or ""))
@@ -1125,6 +1155,22 @@ def setup_cookbook_routes() -> APIRouter:
                 try:
                     ep = db.query(_ME).filter(_ME.id == endpoint_id).first()
                     if ep:
+                        # A scheduled serve can leave old non-zero exit markers
+                        # in tmux scrollback while the current OpenAI endpoint is
+                        # actually alive. Verify reachability before deleting the
+                        # endpoint row; otherwise chats fall back even though the
+                        # served model is ready.
+                        try:
+                            probe_url = ep.base_url.rstrip("/") + "/models"
+                            with urllib.request.urlopen(probe_url, timeout=3) as resp:
+                                if 200 <= getattr(resp, "status", 0) < 300:
+                                    logger.info(
+                                        f"crash-watchdog: serve {session_id} has exit marker {exit_code} "
+                                        f"but endpoint {ep.id} is reachable; leaving it registered"
+                                    )
+                                    return
+                        except Exception:
+                            pass
                         logger.info(
                             f"crash-watchdog: dropping endpoint {endpoint_id} "
                             f"({ep.name} @ {ep.base_url}) — serve exited {exit_code}"
@@ -1211,6 +1257,8 @@ def setup_cookbook_routes() -> APIRouter:
                 existing.is_enabled = True
                 existing.model_type = "llm"
                 existing.name = display_name
+                existing.endpoint_kind = "local"
+                existing.model_refresh_mode = "auto"
                 if is_ollama_endpoint:
                     existing.endpoint_kind = "ollama"
                     if pinned_models:
@@ -1258,7 +1306,8 @@ def setup_cookbook_routes() -> APIRouter:
                 api_key=None,
                 is_enabled=True,
                 model_type="llm",
-                endpoint_kind="ollama" if is_ollama_endpoint else "auto",
+                endpoint_kind="ollama" if is_ollama_endpoint else "local",
+                model_refresh_mode="auto",
                 cached_models=json.dumps(pinned_models) if pinned_models else None,
                 pinned_models=json.dumps(pinned_models) if pinned_models else None,
                 supports_tools=supports_tools,
@@ -2617,16 +2666,14 @@ def setup_cookbook_routes() -> APIRouter:
             # Add 30% headroom for KV cache, activations, etc.
             needed_vram = (est_vram * 1.3) if est_vram else None
 
-            if vram_gb > 0 and needed_vram is not None and needed_vram > vram_gb:
-                continue
-            # Unknown-size models (e.g. MiniMax-M2.7, DeepSeek-V4-Flash) have no
-            # "NB" in the repo id, so the regex above can't extract their
-            # param count. Previously we dropped them entirely, which made
-            # brand-new flagship releases silently vanish from this list even
-            # on rigs with hundreds of GB of VRAM. Adapters/LoRAs are already
-            # filtered by _is_excluded(), so what falls through here is
-            # overwhelmingly full models — keep them, just without a size
-            # badge (the frontend handles needed_vram_gb=null gracefully).
+            if vram_gb > 0:
+                if needed_vram is None:
+                    # The "trending models that fit" list must be conservative:
+                    # if we cannot estimate size from the repo id/tags, do not
+                    # present it as runnable on this hardware.
+                    continue
+                if needed_vram > vram_gb:
+                    continue
 
             out.append({
                 "repo_id": repo_id,

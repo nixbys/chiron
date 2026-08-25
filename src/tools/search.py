@@ -22,7 +22,7 @@ async def do_search_chats(query: str, limit: int = 20, owner: str | None = None)
     try:
         from src.session_search import search_session_messages
 
-        results = search_session_messages(query, limit=limit, owner=owner)
+        results = search_session_messages(query, limit=limit, owner=owner, context_messages=3)
         if not results:
             return {"results": f"No chats found matching \"{query}\"."}
 
@@ -36,13 +36,14 @@ async def do_search_chats(query: str, limit: int = 20, owner: str | None = None)
         for sid, result in seen_sessions.items():
             lines.append(f"- **{result.session_name}** (#{sid})")
             lines.append(f"  Link: [Open chat](#{sid})")
-            lines.append(f"  Match ({result.role}): {result.content_snippet}")
+            match_text = (result.content or result.content_snippet or "")[:600]
+            lines.append(f"  Match ({result.role}): {match_text}")
             if result.context_before:
-                before = result.context_before[-1]
-                lines.append(f"  Before ({before['role']}): {before['content'][:180]}")
+                for before in result.context_before:
+                    lines.append(f"  Before ({before['role']}): {before['content'][:500]}")
             if result.context_after:
-                after = result.context_after[0]
-                lines.append(f"  After ({after['role']}): {after['content'][:180]}")
+                for after in result.context_after:
+                    lines.append(f"  After ({after['role']}): {after['content'][:500]}")
             lines.append("")
 
         return {"results": "\n".join(lines)}

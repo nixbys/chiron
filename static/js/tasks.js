@@ -214,6 +214,66 @@ async function _saveUrgentEmailSettings(prompt) {
   });
 }
 
+const _EMAIL_ACCOUNT_ACTIONS = new Set([
+  'summarize_emails',
+  'draft_email_replies',
+  'email_auto_translate',
+  'extract_email_events',
+  'check_email_urgency',
+]);
+
+let _emailAccounts = null;
+async function _fetchEmailAccountsForTasks() {
+  if (_emailAccounts) return _emailAccounts;
+  try {
+    const res = await fetch(`${API_BASE}/api/email/accounts`, { credentials: 'same-origin' });
+    const data = await res.json();
+    _emailAccounts = Array.isArray(data.accounts) ? data.accounts : [];
+  } catch (e) {
+    _emailAccounts = [];
+  }
+  return _emailAccounts;
+}
+
+function _taskPromptConfig(prompt) {
+  const raw = (prompt || '').trim();
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    const cfg = {};
+    for (const line of raw.split(/\r?\n/)) {
+      const idx = line.indexOf('=');
+      if (idx <= 0) continue;
+      const key = line.slice(0, idx).trim();
+      const val = line.slice(idx + 1).trim();
+      if (key) cfg[key] = val;
+    }
+    return cfg;
+  }
+}
+
+async function _renderEmailActionOptions(action, existing, extra) {
+  if (!_EMAIL_ACCOUNT_ACTIONS.has(action)) return;
+  const accounts = (await _fetchEmailAccountsForTasks()).filter(a => a && a.enabled !== false);
+  const cfg = _taskPromptConfig(existing?.prompt || '');
+  const current = String(cfg.account_id || cfg.email_account_id || '');
+  const options = [
+    `<option value="" ${current ? '' : 'selected'}>All accounts</option>`,
+    ...accounts.map(a => {
+      const id = String(a.id || '');
+      const label = a.name || a.from_address || a.imap_user || id.slice(0, 8);
+      const suffix = a.is_default ? ' (default)' : '';
+      return `<option value="${_escHtml(id)}" ${id === current ? 'selected' : ''}>${_escHtml(label + suffix)}</option>`;
+    }),
+  ].join('');
+  extra.insertAdjacentHTML('afterbegin', `
+    <label class="task-form-label">Email account</label>
+    <select id="task-form-email-account" class="task-form-input">${options}</select>
+  `);
+}
+
 let _triggerEvents = null;
 async function _fetchEvents() {
   if (_triggerEvents) return _triggerEvents;
@@ -334,6 +394,7 @@ const _TASK_ICONS = {
   // Email
   summarize_emails:    '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
   draft_email_replies: '<polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>',
+  email_auto_translate:'<path d="M5 8h9"/><path d="M9 4v4"/><path d="M4 13c2.2-.2 4.2-1.1 5.5-2.8"/><path d="M10.5 13c-1.1-.6-2-1.5-2.7-2.8"/><path d="M14 20l4-9 4 9"/><path d="M15.4 17h5.2"/>',
   extract_email_events:'<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M7 14h5"/><path d="M7 18h8"/>',
   classify_events:    '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M8 15h.01M12 15h.01M16 15h.01"/>',
   learn_sender_signatures:'<path d="M20 6 9 17l-5-5"/><path d="M14 6h6v6"/>',
@@ -361,6 +422,7 @@ function _taskIcon(task) {
 const _MODEL_BACKED_ACTIONS = new Set([
   'summarize_emails',
   'draft_email_replies',
+  'email_auto_translate',
   'extract_email_events',
   'classify_events',
   'mark_email_boundaries',
@@ -506,6 +568,7 @@ const _CATEGORY_MAP = {
   extract_email_events: 'Calendar',
   summarize_emails:           'Email',
   draft_email_replies:        'Email',
+  email_auto_translate:       'Email',
   learn_sender_signatures:    'Email',
   check_email_urgency:        'Email',
   daily_brief:                'Assistant',
@@ -622,6 +685,7 @@ function _renderTaskChips() {
 const _TASK_CACHE_LABELS = {
   summarize_emails: 'email summaries',
   draft_email_replies: 'AI reply drafts',
+  email_auto_translate: 'email translations',
   extract_email_events: 'email calendar cache',
   mark_email_boundaries: 'email boundaries',
   learn_sender_signatures: 'sender signatures',
@@ -692,9 +756,9 @@ function _renderList() {
     const titleRow = document.createElement('div');
     titleRow.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;';
     const statusBadge = task.status === 'paused'
-      ? `<span class="task-status-badge task-state-badge task-paused-badge" data-task-status-action="resume" title="Paused - click to resume" style="position:relative;top:4px;"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="7 4 19 12 7 20 7 4"/></svg><span class="task-state-label">paused</span></span>`
+      ? `<span class="task-status-badge task-state-badge task-paused-badge" data-task-status-action="resume" title="Paused - click to resume" style="position:relative;top:4px;"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg><span class="task-state-label">paused</span></span>`
       : task.status === 'active'
-        ? `<span class="task-status-badge task-state-badge task-active-badge" data-task-status-action="pause" title="Active - click to pause" style="position:relative;top:4px;"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg><span class="task-state-label">active</span></span>`
+        ? `<span class="task-status-badge task-state-badge task-active-badge" data-task-status-action="pause" title="Active - click to pause" style="position:relative;top:4px;"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="7 4 19 12 7 20 7 4"/></svg><span class="task-state-label">active</span></span>`
         : '';
     const builtinBadge = task.is_builtin
       ? `<span class="task-builtin-badge${task.is_modified ? ' modified' : ''}" title="${task.is_modified ? 'Built-in task — edited from its default' : 'Built-in task'}">built-in${task.is_modified ? ' · edited' : ''}</span>`
@@ -713,8 +777,8 @@ function _renderList() {
     menuBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const items = [];
-      // Run now stays in the kebab too (alongside the new Run button on the
-      // card) for users coming from muscle-memory / mobile long-press.
+      // Run now stays in the kebab too for users coming from muscle-memory /
+      // mobile long-press. The expanded card also shows it next to Edit.
       if (task.status !== 'completed') items.push({ label: 'Run now', icon: '<polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>', action: () => _doRunNow(task.id) });
       items.push({ label: 'Edit', icon: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>', action: () => _showForm(task) });
       if (task.status === 'active') items.push({ label: 'Pause', icon: '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>', action: () => _doPause(task.id) });
@@ -730,17 +794,6 @@ function _renderList() {
       _showTaskDropdown(menuBtn, items);
     });
     actionsWrap.appendChild(menuBtn);
-    // Run now — promoted out of the kebab onto the card itself for one-click
-    // manual triggering. Hidden for completed tasks (same gate as before).
-    if (task.status !== 'completed') {
-      const runBtn = document.createElement('button');
-      runBtn.className = 'task-status-badge task-run-now-badge task-card-run-btn';
-      runBtn.title = 'Run now';
-      runBtn.style.cssText = 'position:relative;top:1px;margin-right:4px;';
-      runBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg><span>Run</span>';
-      runBtn.addEventListener('click', (e) => { e.stopPropagation(); _doRunNow(task.id); });
-      actionsWrap.insertBefore(runBtn, menuBtn);
-    }
     titleRow.appendChild(actionsWrap);
 
     // Content area
@@ -771,7 +824,29 @@ function _renderList() {
     // Expandable detail (revealed on click) — like the library doc/chat cards:
     // extra meta + last-run result + description.
     const detail = document.createElement('div');
-    detail.style.cssText = 'display:none;margin-top:7px;padding:8px 0 2px;border-top:1px solid var(--border);';
+    detail.style.cssText = 'display:none;margin-top:7px;padding:8px 0 2px;border-top:1px solid var(--border);position:relative;';
+    const detailActions = document.createElement('div');
+    detailActions.style.cssText = 'display:flex;justify-content:flex-end;gap:6px;margin-top:7px;';
+    if (task.status !== 'completed') {
+      const runBtn = document.createElement('button');
+      runBtn.className = 'memory-toolbar-btn task-detail-run-btn';
+      runBtn.title = 'Run now';
+      runBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Run';
+      runBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _doRunNow(task.id);
+      });
+      detailActions.appendChild(runBtn);
+    }
+    const editBtn = document.createElement('button');
+    editBtn.className = 'memory-toolbar-btn task-detail-edit-btn';
+    editBtn.title = 'Edit task';
+    editBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Edit';
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _showForm(task);
+    });
+    detailActions.appendChild(editBtn);
     const extra = [];
     if (task.last_run) extra.push('Last: ' + _relativeTime(task.last_run));
     if (task.output_target && task.output_target !== 'session') extra.push('→ ' + task.output_target.replace(/^mcp__/, '').replace(/__/g, ' › '));
@@ -807,6 +882,7 @@ function _renderList() {
       }
       detail.appendChild(desc);
     }
+    detail.appendChild(detailActions);
     content.appendChild(detail);
 
     // Select-mode checkbox (mirrors the library's .memory-select-cb).
@@ -1066,10 +1142,13 @@ function _showForm(existing, initTaskType, initTriggerType) {
         <option value="">None</option>
       </select>
 
-      <label class="task-form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-        <input type="checkbox" id="task-form-notif" ${existing && existing.notifications_enabled === false ? '' : 'checked'} style="margin:0;cursor:pointer;">
-        <span>Notifications</span>
-        <span style="opacity:0.55;font-weight:normal;font-size:10px;">— uncheck to silence completion notifications for this task (helpful for chatty cron jobs)</span>
+      <label class="task-form-notif-toggle">
+        <input type="checkbox" id="task-form-notif" ${existing && existing.notifications_enabled === false ? '' : 'checked'}>
+        <span class="task-form-notif-switch" aria-hidden="true"></span>
+        <span class="task-form-notif-copy">
+          <span>Notifications</span>
+          <span>Silence completion alerts for chatty cron jobs.</span>
+        </span>
       </label>
 
       <div class="task-form-actions">
@@ -1119,23 +1198,28 @@ function _showForm(existing, initTaskType, initTriggerType) {
         const sel = document.getElementById('task-form-action');
         const extra = document.getElementById('task-form-action-extra');
         if (!sel || !extra) return;
-        if (sel.value !== 'check_email_urgency') {
+        const action = sel.value;
+        if (!_EMAIL_ACCOUNT_ACTIONS.has(action)) {
           extra.innerHTML = '';
           return;
         }
-        extra.innerHTML = `
-          <label class="task-form-label">Email triage rules</label>
-          <textarea id="task-form-urgent-email-prompt" class="task-form-input task-form-textarea" rows="4" placeholder="What should count as urgent? e.g. deadlines, blockers, people waiting outside."></textarea>
-          <div class="memory-desc" style="font-size:11px;margin-top:4px;">Pause/resume and schedule are controlled by this task. It tags urgent, reply-soon, newsletter, marketing, and spam. Urgent/reply-soon emails use your reminder settings.</div>
-        `;
-        const settings = await _fetchUrgentEmailSettings();
-        const promptEl = document.getElementById('task-form-urgent-email-prompt');
-        if (promptEl && !promptEl.dataset.loaded) {
-          promptEl.value = settings.urgent_email_prompt || '';
-          promptEl.dataset.loaded = '1';
+        extra.innerHTML = '';
+        await _renderEmailActionOptions(action, existing, extra);
+        if (action === 'check_email_urgency') {
+          extra.insertAdjacentHTML('beforeend', `
+            <label class="task-form-label">Email triage rules</label>
+            <textarea id="task-form-urgent-email-prompt" class="task-form-input task-form-textarea" rows="4" placeholder="What should count as urgent? e.g. deadlines, blockers, people waiting outside."></textarea>
+            <div class="memory-desc" style="font-size:11px;margin-top:4px;">Pause/resume and schedule are controlled by this task. It tags work, personal, urgent, action-needed, finance, legal, travel, newsletter, marketing, spam, and related mail categories. Urgent/reply-soon emails use your reminder settings.</div>
+          `);
+          const settings = await _fetchUrgentEmailSettings();
+          const promptEl = document.getElementById('task-form-urgent-email-prompt');
+          if (promptEl && !promptEl.dataset.loaded) {
+            promptEl.value = settings.urgent_email_prompt || '';
+            promptEl.dataset.loaded = '1';
+          }
+          const notifEl = document.getElementById('task-form-notif');
+          if (notifEl && !existing?.id) notifEl.checked = false;
         }
-        const notifEl = document.getElementById('task-form-notif');
-        if (notifEl && !existing?.id) notifEl.checked = false;
       };
       _fetchActions().then(actions => {
         const sel = document.getElementById('task-form-action');
@@ -1474,6 +1558,10 @@ function _showForm(existing, initTaskType, initTriggerType) {
         return;
       }
       payload.action = action;
+      if (_EMAIL_ACCOUNT_ACTIONS.has(action)) {
+        const accountId = document.getElementById('task-form-email-account')?.value || '';
+        payload.prompt = accountId ? JSON.stringify({ account_id: accountId }) : '';
+      }
       if (action === 'check_email_urgency') {
         const urgentPrompt = document.getElementById('task-form-urgent-email-prompt')?.value || '';
         try {

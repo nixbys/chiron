@@ -33,6 +33,9 @@ async def do_manage_notes(content: str, owner: Optional[str] = None) -> Dict:
         "new": "add",
         "save": "add",
         "remind": "add",
+        "get": "view",
+        "read": "view",
+        "open": "view",
         "remove": "delete",
         "remove_item": "toggle_item",
     }
@@ -91,6 +94,32 @@ async def do_manage_notes(content: str, owner: Optional[str] = None) -> Dict:
                     snippet = n.content[:80].replace("\n", " ")
                     lines.append(f"  {snippet}")
             return {"results": "\n".join(lines)}
+
+        elif action == "view":
+            note_id = args.get("id", "")
+            note = _note_by_prefix(note_id)
+            if not note:
+                return {"error": f"Note '{note_id}' not found", "exit_code": 1}
+            if not _note_visible_to_owner(note, owner):
+                return {"error": "Note not found", "exit_code": 1}
+            lines = [f"Note: {note.title or '(untitled)'}", f"id: {note.id}"]
+            if note.label:
+                lines.append(f"label: {note.label}")
+            if note.due_date:
+                lines.append(f"due_date: {note.due_date}")
+            if note.note_type == "checklist":
+                lines.append("items:")
+                try:
+                    items = json.loads(note.items or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    items = []
+                for i, item in enumerate(items):
+                    mark = "x" if item.get("done") else " "
+                    lines.append(f"- [{mark}] {i}: {item.get('text', '')}")
+            elif note.content:
+                lines.append("content:")
+                lines.append(note.content)
+            return {"response": "\n".join(lines), "note_id": note.id, "exit_code": 0}
 
         elif action == "add":
             # Accept the various field names models emit: `text` is the most

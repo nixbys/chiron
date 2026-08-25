@@ -1105,6 +1105,17 @@ document.addEventListener('click', function(e) {
   }
 }, true);
 
+function resolveDocumentPlaceholderLinks(text, metadata) {
+  if (!text || !metadata || !Array.isArray(metadata.tool_events)) return text;
+  const docEvents = metadata.tool_events.filter(ev => ev && ev.doc_id);
+  if (!docEvents.length) return text;
+  return String(text).replace(/#document-(\d+)\b/g, (match, num) => {
+    const idx = Number(num) - 1;
+    const ev = Number.isInteger(idx) && idx >= 0 ? docEvents[idx] : null;
+    return ev && ev.doc_id ? `#document-${ev.doc_id}` : match;
+  });
+}
+
 // Jump-to-entity anchors — the agent emits links like
 //   [New Chat](#session-89effa28)
 //   [Notes](#document-abc123)
@@ -2184,7 +2195,7 @@ export function addMessage(role, content, modelName, metadata) {
 
       for (let r = 0; r < maxRound; r++) {
         const roundNum = r + 1;
-        const txt = (roundTexts[r] || '').trim();
+        const txt = resolveDocumentPlaceholderLinks((roundTexts[r] || '').trim(), metadata);
 
         if (txt) {
           const wrap = document.createElement('div');
@@ -2372,6 +2383,9 @@ export function addMessage(role, content, modelName, metadata) {
     b.className = 'body';
 
     let text = markdownModule.squashOutsideCode(stripToolBlocks(textRaw || ''));
+    if (role === 'assistant') {
+      text = resolveDocumentPlaceholderLinks(text, metadata);
+    }
 
     // For user messages, pull out vision-model image descriptions ([Image: name]\n
     // <multi-line desc>) into a collapsible "image description" section. Done for

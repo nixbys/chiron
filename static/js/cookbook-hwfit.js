@@ -561,8 +561,9 @@ function _ollamaToHwfitRows(libModels, vramAvail, ramAvail) {
   return out;
 }
 
-export async function _hwfitFetch(fresh = false) {
+export async function _hwfitFetch(fresh = false, opts = {}) {
   const _tk = ++_hwfitFetchToken;
+  const allowNetwork = fresh || opts.allowNetwork !== false;
   const useCase = document.getElementById('hwfit-usecase')?.value || '';
   const search = document.getElementById('hwfit-search')?.value?.trim() || '';
   const remoteHost = _envState.remoteHost || '';
@@ -577,6 +578,7 @@ export async function _hwfitFetch(fresh = false) {
   const _sig = _scanSig();
   const _cached = fresh ? null : _readScanCache(_sig);
   const wp = spinnerModule.createWhirlpool(18);
+  const _paintedFromCache = !!_cached;
   if (_cached) {
     // Tag the restored cache with its host too (scan-sig keys cache per
     // host, so a hit here is always for the current remoteHost).
@@ -587,6 +589,17 @@ export async function _hwfitFetch(fresh = false) {
     }
     _hwfitRenderList(list, _applyEngineFilter(_cached.models));
   } else {
+    if (!allowNetwork) {
+      _hwfitCache = null;
+      _hwfitRenderHw(hw, null);
+      list.innerHTML = '<div class="hwfit-loading" style="flex-direction:column;gap:8px;text-align:center;"><div>No cached scan yet</div><div style="font-size:11px;opacity:0.55;max-width:420px;line-height:1.4;">Test hardware and rank models for this server.</div><button type="button" class="hwfit-gpu-btn hwfit-empty-scan-btn" style="height:26px;padding:3px 10px;">Scan</button></div>';
+      list.querySelector('.hwfit-empty-scan-btn')?.addEventListener('click', () => {
+        _resetGpuToggleState();
+        _hwfitFetch(true);
+      });
+      try { wp.destroy(); } catch {}
+      return;
+    }
     // Show spinner while scanning — stack the spinner above a text label
     // (the .hwfit-loading class is a centered flex ROW, so force column here).
     const loadingDiv = document.createElement('div');
@@ -604,6 +617,10 @@ export async function _hwfitFetch(fresh = false) {
     list.innerHTML = '';
     list.appendChild(loadingDiv);
     _hwfitCache = null;   // no instant paint — clear until the fetch returns
+  }
+  if (!allowNetwork) {
+    try { wp.destroy(); } catch {}
+    return;
   }
   // Only fetch cached model IDs when server changes, not on every search/sort
   const remoteKey = _currentServerValue();
@@ -634,6 +651,10 @@ export async function _hwfitFetch(fresh = false) {
           }
         });
       }).catch(() => {});
+  }
+  if (_paintedFromCache) {
+    try { wp.destroy(); } catch {}
+    return;
   }
   try {
     const sortBy = document.getElementById('hwfit-sort')?.value || 'newest';
@@ -1955,16 +1976,17 @@ export function _hwfitInit() {
     dot.className = 'cookbook-srv-status testing';
     dot.title = 'Testing SSH…';
     setMsg('Testing SSH...');
-    const pf = port && port !== '22' ? `-p ${port} ` : '';
-    const cmd = `ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new ${pf}${host} "echo ok"`;
     const t0 = Date.now();
     try {
-      const res = await fetch('/api/shell/exec', {
+      const res = await fetch('/api/cookbook/test-ssh', {
         method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: cmd, timeout: 8 }),
+        body: JSON.stringify({ host, ssh_port: port || undefined }),
       });
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+      }
       const ms = Date.now() - t0;
       const out = (data.stdout || '').trim();
       if (data.exit_code === 0 && out.startsWith('ok')) {
@@ -1973,7 +1995,7 @@ export function _hwfitInit() {
         setMsg(`Connected · ${ms} ms`, 'var(--green,#50fa7b)');
       } else {
         dot.className = 'cookbook-srv-status fail';
-        const err = (data.stderr || data.stdout || `exit ${data.exit_code}`).toString().trim().slice(0, 240);
+        const err = (data.stderr || data.stdout || (data.exit_code == null ? 'no exit code' : `exit ${data.exit_code}`)).toString().trim().slice(0, 240);
         dot.title = `SSH failed: ${err}`;
         setMsg(`Failed · ${err}`, 'var(--red,#e06c75)');
       }
@@ -2159,15 +2181,12 @@ export function _hwfitInit() {
         }
       });
     });
-    // Auto-test when host or port blur
+    // Manual connectivity test after editing host or port. Existing saved
+    // servers are not auto-tested on panel open; unreachable hosts can stall the
+    // Cookbook UI and make opening the panel feel blocked.
     entry.querySelectorAll('.cookbook-srv-host, .cookbook-srv-port').forEach(el => {
       el.addEventListener('blur', () => _testServerConnection(entry));
     });
-    // Initial test for pre-filled rows (existing servers on tab load)
-    if (entry.querySelector('.cookbook-srv-host')?.value?.trim() && !entry.dataset.tested) {
-      entry.dataset.tested = '1';
-      _testServerConnection(entry);
-    }
     // Cancel button on a brand-new server entry: discard it (no confirm — it's
     // unsaved) and re-sync so the dropped blank server doesn't linger.
     const cancelBtn = entry.querySelector('.cookbook-server-cancel-btn');

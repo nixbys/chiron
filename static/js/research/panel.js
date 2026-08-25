@@ -297,6 +297,7 @@ export function openPanel(focusJobId) {
   _loadEndpoints().then(_restoreSavedSettings);
   _clearBadge();
   _updateResearchCount();
+  jobs.refreshLibrary?.({ force: true });
 
   if ('Notification' in window && Notification.permission === 'default') {
     try { Notification.requestPermission(); } catch {}
@@ -669,7 +670,7 @@ function _renderJobs() {
   const allJobs = jobs.getJobs();
   if (!allJobs.length) {
     // No empty-state text in the body — the query box above is the call to
-    // action. But still surface the "All past research found in Library,
+    // action. But still surface the "All past research found in: Library,
     // Research" hint under the main title, since the Past section won't
     // render to host it (this is exactly the case the dynamic hint targets).
     container.innerHTML = '';
@@ -718,7 +719,7 @@ function _renderJobs() {
   }
 
   // Dynamic Past hint: when the Past section won't render (no past items),
-  // surface the "All past research found in Library, Research" line under
+  // surface the "All past research found in: Library, Research" line under
   // the main Research title instead, so the link is always discoverable.
   const noPastHint = document.getElementById('research-no-past-hint');
   if (noPastHint) {
@@ -783,7 +784,7 @@ function _renderJobs() {
     if (key === 'past') {
       const hint = document.createElement('span');
       hint.className = 'research-library-hint';
-      hint.innerHTML = '<span>Multi-step web research with an LLM-in-the-loop agent</span> <button type="button" class="research-library-link">Library, Research</button>';
+      hint.innerHTML = '<span>All past research found in:</span> <button type="button" class="research-library-link">Library, Research</button>';
       hint.querySelector('.research-library-link').addEventListener('click', (e) => {
         e.stopPropagation();
         // Close the research panel first so the Library opens ABOVE it on mobile
