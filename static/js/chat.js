@@ -820,11 +820,14 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       // Web toggle: pre-search in Chat mode, tool permission in Agent mode
       const toggleState = Storage.loadToggleState();
       let isAgentMode = (toggleState.mode || 'chat') === 'agent';
+      const incognitoChk = el('incognito-toggle');
+      const isIncognito = !!(incognitoChk && incognitoChk.checked);
       // Auto-escalate to agent mode when a document is open — the user expects
       // the AI to see the document and have tools to edit it
-      if (!isAgentMode && documentModule && documentModule.isPanelOpen() && documentModule.getCurrentDocId()) {
+      if (!isIncognito && !isAgentMode && documentModule && documentModule.isPanelOpen() && documentModule.getCurrentDocId()) {
         isAgentMode = true;
       }
+      if (isIncognito) isAgentMode = false;
       fd.append('mode', isAgentMode ? 'agent' : 'chat');
       if (el('web-toggle').checked) {
         if (isAgentMode) {
@@ -845,8 +848,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       if (ragChk && !ragChk.checked) {
         fd.append('use_rag', 'false');
       }
-      const incognitoChk = el('incognito-toggle');
-      if (incognitoChk && incognitoChk.checked) {
+      if (isIncognito) {
         fd.append('incognito', 'true');
       }
       const _ws = (Storage.KEYS && Storage.get(Storage.KEYS.WORKSPACE, '')) || '';
@@ -863,7 +865,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       currentAbort = abortCtrl;
 
       const _tState = Storage.loadToggleState();
-      const _isAgent = (_tState.mode || 'chat') === 'agent';
+      const _isAgent = !isIncognito && (_tState.mode || 'chat') === 'agent';
 
       // Timeout: 6 min for research and agent mode, 3 min otherwise
       const timeoutMs = el('research-toggle').checked || _isAgent ? RESEARCH_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
@@ -1538,9 +1540,9 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
                         <div class="thinking-header-left"><span class="live-think-header-text">Thinking\u2026</span></div>
                         <span class="live-think-spinner-slot" style="flex-shrink:0;margin-left:auto;"></span>
                         <span class="live-think-timer" style="font-size:11px;opacity:0.4;font-variant-numeric:tabular-nums;margin-left:6px;margin-right:5px;"></span>
-                        <span class="thinking-toggle live-think-toggle" id="${_liveThinkDomId}-toggle"></span>
+                        <span class="thinking-toggle live-think-toggle expanded" id="${_liveThinkDomId}-toggle"></span>
                       </div>
-                      <div class="thinking-content" id="${_liveThinkDomId}">
+                      <div class="thinking-content expanded" id="${_liveThinkDomId}">
                         <div class="thinking-content-inner live-think-inner"></div>
                       </div>
                     </div>`;
@@ -1586,13 +1588,15 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
                       _liveThinkTimerEl.textContent = _formatThinkStats(_elapsedLive, _liveThinkTokenCount);
                     }
                     // Keep thinking box scrolled to bottom, but let user scroll up
+                    var _followThinking = true;
                     var thinkBox = _liveThinkInner.closest('.thinking-content');
                     if (thinkBox) {
                       var nearBottom = thinkBox.scrollHeight - thinkBox.clientHeight - thinkBox.scrollTop < 80;
                       if (nearBottom) thinkBox.scrollTop = thinkBox.scrollHeight;
+                      _followThinking = nearBottom;
                     }
                   }
-                  uiModule.scrollHistory();
+                  if (_followThinking) uiModule.scrollHistory();
                   continue;
                 } else if (!hasUnclosedThink && isThinking) {
                   isThinking = false;

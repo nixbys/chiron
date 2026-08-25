@@ -171,8 +171,11 @@ def test_default_assignment_when_current_default_disabled():
 
 
 def test_default_preserved_when_current_default_enabled():
-    # Normal case: the configured default is still enabled → leave it alone.
-    assert _default_endpoint_needs_assignment("live-ep", {"live-ep", "new-ep"}) is False
+    # Normal case: the configured default is still enabled and has a
+    # configured model → leave it alone.
+    assert _default_endpoint_needs_assignment(
+        "live-ep", {"live-ep", "new-ep"}, current_default_model="some-model",
+    ) is False
 
 
 # ── _match_provider_curated ──

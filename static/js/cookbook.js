@@ -891,8 +891,9 @@ async function _fetchDependencies() {
   let _spin = null;
   try {
     const sp = (await import('./spinner.js')).default;
-    _spin = sp.createWhirlpool(28);
-    _spin.element.style.cssText = 'margin:24px auto 0;display:block;';
+    _spin = sp.createWhirlpool(22);
+    _spin.element.classList.add('cookbook-section-loading-wp');
+    _spin.element.style.cssText = 'margin:24px auto 0;display:block;width:22px;height:22px;';
     list.appendChild(_spin.element);
     const label = document.createElement('div');
     label.className = 'hwfit-loading';
@@ -1652,10 +1653,10 @@ function _wireTabEvents(body) {
       });
       if (backend === 'Search') {
         _hwfitInit();
-        _hwfitFetch();
+        _hwfitFetch(false, { allowNetwork: false });
       }
       if (backend === 'Serve') {
-        _fetchCachedModels();
+        _fetchCachedModels(false, { allowNetwork: false });
       }
       if (backend === 'Dependencies') {
         _fetchDependencies();
@@ -1758,7 +1759,7 @@ function _wireTabEvents(body) {
       _applyServerSelection(dlServer.value);
       // Reset toggle state (no flicker) so the new server's hardware re-renders.
       _resetGpuToggleState();
-      _hwfitFetch();
+      _hwfitFetch(false, { allowNetwork: false });
     });
   }
 
@@ -1795,13 +1796,13 @@ function _wireTabEvents(body) {
           if (settingsTab) settingsTab.click();
         });
       }
-      _fetchCachedModels();
+      _fetchCachedModels(false, { allowNetwork: false });
     });
   }
 
   const scanBtn = document.getElementById('hwfit-cache-scan');
   if (scanBtn) {
-    scanBtn.addEventListener('click', () => _fetchCachedModels());
+    scanBtn.addEventListener('click', () => _fetchCachedModels(true));
   }
 
   const editDirsLink = document.querySelector('.cookbook-serve-dir-edit');
@@ -2299,8 +2300,9 @@ function _wireTabEvents(body) {
       hfList.innerHTML = '';
       try {
         const sp = (await import('./spinner.js')).default;
-        const _spin = sp.createWhirlpool(28);
-        _spin.element.style.cssText = 'margin:24px auto 0;display:block;';
+        const _spin = sp.createWhirlpool(22);
+        _spin.element.classList.add('cookbook-section-loading-wp');
+        _spin.element.style.cssText = 'margin:24px auto 0;display:block;width:22px;height:22px;';
         hfList.appendChild(_spin.element);
         const lbl = document.createElement('div');
         lbl.className = 'hwfit-loading';
@@ -2875,7 +2877,7 @@ function _renderRecipes() {
 
   // Auto-init What Fits
   _hwfitInit();
-  _hwfitFetch();
+  _hwfitFetch(false, { allowNetwork: false });
 }
 
 // ── Public API ──

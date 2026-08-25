@@ -594,6 +594,7 @@ def setup_task_routes(task_scheduler) -> APIRouter:
         cache_tables = {
             "summarize_emails": ("email_summaries",),
             "draft_email_replies": ("email_ai_replies",),
+            "email_auto_translate": ("email_translations",),
             "extract_email_events": ("email_calendar_extractions",),
             "mark_email_boundaries": ("email_boundaries",),
             "learn_sender_signatures": ("sender_signatures",),
