@@ -671,18 +671,6 @@ def _safe_build_headers(api_key: Optional[str], base_url: str) -> dict:
         return {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
 
-def _redact_url_for_log(url: str) -> str:
-    """Return a URL safe for logs by removing userinfo and query/fragment."""
-    try:
-        parsed = urlparse(url or "")
-        host = parsed.hostname or ""
-        if parsed.port:
-            host = f"{host}:{parsed.port}"
-        return urlunparse((parsed.scheme, host, parsed.path, "", "", ""))
-    except Exception:
-        return "<endpoint>"
-
-
 def _is_discovery_only_provider(provider: str) -> bool:
     return provider == "chatgpt-subscription"
 
