@@ -73,13 +73,11 @@ class DeleteUserRequest(BaseModel):
 class RenameUserRequest(BaseModel):
     username: str
 
+class SetOpenRegistrationRequest(BaseModel):
+    enabled: bool
 
 class SetAdminRequest(BaseModel):
     is_admin: bool
-
-
-class SetOpenRegistrationRequest(BaseModel):
-    enabled: bool
 
 SESSION_COOKIE = "odysseus_session"
 
