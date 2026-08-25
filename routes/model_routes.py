@@ -1436,7 +1436,7 @@ def setup_model_routes(model_discovery):
         return {"hosts": [], "items": items}
 
     @router.get("/models")
-    def api_models(request: Request, refresh: bool = False):
+    def api_models(request: Request, refresh: bool = False, background: bool = True):
         """Get available models — per-user (caller sees only their endpoints +
         legacy/shared null-owner rows). Cached per-user for 30s."""
         # Require auth; "" is the unconfigured single-user mode, treated as
@@ -1478,8 +1478,11 @@ def setup_model_routes(model_discovery):
             return cache_entry["data"]
         result = _fetch_models(owner=owner, is_admin=_is_admin)
         _models_cache[_cache_key] = {"data": result, "time": now}
-        # Kick off background refresh to update caches from live endpoints
-        _refresh_caches_bg(force=refresh)
+        # Kick off background refresh to update caches from live endpoints.
+        # Page boot can opt out with background=false so opening Odysseus does
+        # not start endpoint probes against slow/offline model servers.
+        if background or refresh:
+            _refresh_caches_bg(force=refresh)
         return result
 
     # Brief cache for local-probe results so picker-open doesn't hammer
@@ -1747,67 +1750,11 @@ def setup_model_routes(model_discovery):
                 hidden = _hidden_model_ids(r)
                 pinned = _normalize_model_ids(getattr(r, "pinned_models", None))
                 visible = _visible_models(all_models, r.hidden_models, pinned)
-                # Endpoint counts as reachable if it has any model — including
-                # admin-pinned IDs that a probe would never surface.
-                status = "online" if (all_models or pinned) else "offline"
+                # Keep the list route cache-only. It feeds Settings →
+                # Added Models and must render immediately; explicit
+                # Refresh/Probe endpoints do the network work.
+                status = "online" if (all_models or pinned) else ("empty" if r.is_enabled else "offline")
                 ping = None
-                # When cached_models is empty, do a quick reachability probe.
-                # Bumped 1.0s → 3.5s because the user reported endpoints they
-                # were ACTIVELY chatting with showed "offline" — the previous
-                # 1s timeout was clipping live cloud endpoints (DeepSeek can
-                # take 1.5–2.5s on /v1/models when their region is under load,
-                # vLLM on a remote GPU box behind SSH can also push past 1s).
-                # 3.5s still keeps the picker render snappy in the common
-                # "everything's already cached" path because this branch only
-                # runs for endpoints with an empty cached_models.
-                if not all_models and not pinned and r.is_enabled:
-                    base_for_ping = _normalize_base(r.base_url)
-                    kind_for_ping = _effective_endpoint_kind(r, base_for_ping)
-                    ping_timeout = 10.0 if _classify_endpoint(base_for_ping, kind_for_ping) == "local" else 3.5
-                    ping = _ping_endpoint(r.base_url, r.api_key, timeout=ping_timeout)
-                    if ping.get("reachable"):
-                        status = "loading" if ping.get("loading") else "empty"
-                        if ping.get("loading"):
-                            base = _normalize_base(r.base_url)
-                            kind = _effective_endpoint_kind(r, base)
-                            results.append({
-                                "id": r.id,
-                                "name": r.name,
-                                "base_url": r.base_url,
-                                "has_key": bool(r.api_key),
-                                "api_key_fingerprint": _api_key_fingerprint(r.api_key),
-                                "is_enabled": r.is_enabled,
-                                "models": visible,
-                                "pinned_models": pinned,
-                                "hidden_count": len(hidden),
-                                "online": True,
-                                "status": status,
-                                "ping_error": (ping or {}).get("error") if ping else None,
-                                "model_type": getattr(r, "model_type", None) or "llm",
-                                "supports_tools": getattr(r, "supports_tools", None),
-                                "endpoint_kind": kind,
-                                "category": _classify_endpoint(base, kind),
-                                "model_refresh_mode": _endpoint_refresh_mode(r, kind),
-                                "model_refresh_interval": getattr(r, "model_refresh_interval", None),
-                                "model_refresh_timeout": getattr(r, "model_refresh_timeout", None),
-                            })
-                            continue
-                        # Best-effort: if the probe came back reachable, try
-                        # to populate cached_models in the background so the
-                        # NEXT picker load shows "online" instead of "empty".
-                        # Failure here is silent — we already returned the
-                        # "empty" status, and the existing background refresh
-                        # path will eventually fill it in too.
-                        try:
-                            probed = _probe_endpoint(r.base_url, r.api_key, timeout=max(5, int(ping_timeout)))
-                            if probed:
-                                r.cached_models = json.dumps(probed)
-                                db.commit()
-                                all_models = probed
-                                visible = _visible_models(all_models, r.hidden_models, pinned)
-                                status = "online"
-                        except Exception as _refill_err:
-                            logger.debug(f"opportunistic cached_models refill failed for {r.id}: {_refill_err!r}")
                 base = _normalize_base(r.base_url)
                 kind = _effective_endpoint_kind(r, base)
                 results.append({

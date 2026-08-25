@@ -1112,7 +1112,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     if (_pdfPaneProximityWired || !pane) return;
     _pdfPaneProximityWired = true;
     let raf = 0;
-    const buffer = 30;
+    const buffer = 44;
     pane.addEventListener('mousemove', (ev) => {
       if (raf) return;
       raf = requestAnimationFrame(() => {
@@ -1470,7 +1470,12 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     };
     if (!_isTouch) {
       wrap.addEventListener('mouseenter', () => _setHandlesVisible(true));
-      wrap.addEventListener('mouseleave', () => _setHandlesVisible(false));
+      // Handles intentionally sit outside the annotation rectangle. Hiding on
+      // wrap mouseleave makes them disappear while moving toward those controls;
+      // pane-level proximity below owns hiding once the cursor is genuinely away.
+      for (const h of [del, grip, resize, menuBtn].filter(Boolean)) {
+        h.addEventListener('mouseenter', () => _setHandlesVisible(true));
+      }
     }
     wrap.addEventListener('pointerdown', (ev) => {
       if (ev.target === del || ev.target === grip || ev.target === resize || ev.target === menuBtn) return;
@@ -4182,7 +4187,27 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 
   // ---- Panel open/close ----
 
+  function _closeNotesForDocumentOpen() {
+    try {
+      if (Modals.isRegistered('notes-panel')) {
+        Modals.close('notes-panel');
+        return;
+      }
+    } catch (_) {}
+    if (!document.getElementById('notes-pane') && !document.getElementById('notes-pane-backdrop')) return;
+    import('./notes.js')
+      .then(mod => {
+        const close = mod.closeNotes || mod.closePanel || mod.default?.closeNotes || mod.default?.closePanel;
+        if (typeof close === 'function') close();
+      })
+      .catch(() => {
+        try { document.getElementById('notes-pane')?.remove(); } catch (_) {}
+        try { document.getElementById('notes-pane-backdrop')?.remove(); } catch (_) {}
+      });
+  }
+
   export function openPanel() {
+    _closeNotesForDocumentOpen();
     if (isOpen) return;
     // Clear any pane/divider still sliding out from a just-fired close so we
     // don't end up with two #doc-editor-pane nodes (and a stale close stripping
@@ -6533,6 +6558,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
   }
 
   export async function loadDocument(docId) {
+    _closeNotesForDocumentOpen();
     // If already in tabs, just switch
     if (docs.has(docId)) {
       _ensureDocPaneMounted();
