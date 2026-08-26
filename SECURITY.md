@@ -67,6 +67,15 @@ Before any active scan:
 - The bundled OpenSearch instance uses default credentials (`admin`/`admin`) — change `OPENSEARCH_USER`/`OPENSEARCH_PASSWORD` before any shared deployment.
 - Do not expose port 9200 outside the internal network.
 
+### OSINT / Threat-Intel API Keys
+
+`SHODAN_API_KEY`, `VIRUSTOTAL_API_KEY`, `OTX_API_KEY`, `NVD_API_KEY`, `CENSYS_API_ID`/`CENSYS_API_SECRET`, and `SPIDERFOOT_USERNAME`/`SPIDERFOOT_PASSWORD` (in `.env`) are the **highest-sensitivity credentials in this fork's own stack** — more so than most upstream integration tokens:
+
+- Several are billed/rate-limited third-party services; a leaked key can be used against your quota or account by someone else entirely.
+- Query history against these services (via Shodan, Censys, VirusTotal) can itself reveal what infrastructure or targets you've been investigating — a leak exposes reconnaissance intent, not just API access.
+- Rotate any of these immediately if they were ever pasted into a shared chat, screenshot, demo, or log, same as any other credential in the "Deployment Guidance" section above.
+- They reach the app only via per-MCP-server `env` on an admin-gated `McpServer` row (`routes/mcp/mcp_routes.py`, every route `require_admin`-gated) — never through a fork-specific, less-guarded path.
+
 ### Additional Secrets
 
 In addition to `.env`, protect:

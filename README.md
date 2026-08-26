@@ -50,23 +50,24 @@ Everything runs locally. No telemetry. All tool execution stays on your own infr
 
 ## Quick Start
 
-**Prerequisites:** Podman + podman-compose (or Docker + docker compose), git.
+**Prerequisites:** Docker + docker compose (or Podman + podman-compose), git.
 
 ```bash
 git clone https://github.com/nixbys/odysseus-red.git
 cd odysseus-red
 cp .env.example .env
-# Edit .env — add your API keys (see Configuration below)
-podman-compose -f docker-compose.yml -f docker-compose.security.yml --profile sidecars up -d --build
+# Edit .env — add your API keys (see Configuration below), and set
+# ODYSSEUS_CONTAINER_RUNTIME=docker (the fork's own default is podman — see below)
+docker compose -f docker-compose.yml -f docker-compose.security.yml --profile sidecars up -d --build
 ```
 
 Open `http://localhost:7000` once containers are healthy. The first admin password prints in:
 
 ```bash
-podman logs odysseus
+docker logs odysseus
 ```
 
-For Docker hosts, replace `podman-compose` with `docker compose` and set `ODYSSEUS_CONTAINER_RUNTIME=docker` in your `.env`.
+**Prefer Podman?** It's fully supported and is what this fork is actually developed and tested against day to day (daemonless, rootless by default, and this fork's own `ODYSSEUS_CONTAINER_RUNTIME` default — see [ADR 002](docs/adr/002-podman-over-docker.md)). Just swap `docker compose`/`docker logs` above for `podman-compose`/`podman logs` and leave `ODYSSEUS_CONTAINER_RUNTIME` unset.
 
 Native installs, GPU notes, Windows/macOS instructions, and HTTPS are covered in the upstream [setup guide](docs/setup.md).
 
