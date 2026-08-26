@@ -28,6 +28,10 @@ secrets.env.*
 data/
 !services/hwfit/data/
 !services/hwfit/data/hf_models.json
+# scripts/odysseus-backup writes full data-directory snapshots here (DB,
+# uploads, personal docs — everything data/ itself is gitignored for).
+# Was missing until the release-plan security audit caught it (2026-08).
+backups/
 logs/
 *.log
 *.db

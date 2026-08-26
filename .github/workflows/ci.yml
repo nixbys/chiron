@@ -69,6 +69,41 @@ jobs:
 
           publish_report
 
+  sensitive-paths:
+    name: No secrets/data/backups tracked in git
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # Path/filename-based gate, complementary to secret-scan.yml's
+      # content-based gitleaks scan: this catches a whole sensitive
+      # *directory* (data/, backups/, logs/) or an obviously-secret file
+      # (.env, private keys) ever landing as a tracked file, even one whose
+      # actual bytes don't happen to match a known secret-shape pattern
+      # (e.g. a full data/ snapshot full of chat history and personal
+      # documents, or an empty placeholder .env someone force-added).
+      # Automates the release-plan's "git status --short clean of .env,
+      # data/, logs/, uploads, and backups before any push" checklist item
+      # instead of relying on a human to remember it every time.
+      - name: Check for tracked sensitive paths
+        run: |
+          set -euo pipefail
+          violations=$(git ls-files | grep -E \
+            '^(data|logs|backups)/|^\.env$|^\.env\.[^e]|(^|/)(id_rsa|id_ed25519)[^/]*$|\.(pem|key)$' \
+            || true)
+          if [ -n "$violations" ]; then
+            echo "::error::Tracked file(s) match a sensitive path pattern that must stay local-only:"
+            echo "$violations"
+            echo
+            echo "These paths are gitignored for a reason -- if one of them is tracked anyway,"
+            echo "it was force-added (git add -f) or added before the gitignore rule existed."
+            echo "Remove it with 'git rm --cached <path>' and rewrite history if it ever held"
+            echo "real secrets or personal data, not just delete-and-recommit."
+            exit 1
+          fi
+          echo "No sensitive paths tracked."
+
   python-syntax:
     name: Python syntax (compileall)
     runs-on: ubuntu-latest
