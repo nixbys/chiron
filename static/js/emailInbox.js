@@ -5,7 +5,7 @@
 
 import spinnerModule from './spinner.js';
 import sessionModule from './sessions.js';
-import { initEmailLibrary, openEmailLibrary, closeEmailLibrary, isOpen as isLibOpen, prewarmEmailLibrary } from './emailLibrary.js';
+import { initEmailLibrary, openEmailLibrary, closeEmailLibrary, isOpen as isLibOpen } from './emailLibrary.js';
 import * as Modals from './modalManager.js';
 import { applyEdgeDock } from './modalSnap.js';
 import { buildReplyAllCc } from './emailLibrary/replyRecipients.js';
@@ -274,10 +274,11 @@ function _bindEvents() {
     });
   }
 
-  // Initial unread count check, refresh every 60s
-  _refreshUnreadCount();
+  // Delay the lightweight unread badge check so opening Odysseus doesn't
+  // compete with the initial chat/session paint. The full email list now loads
+  // only when the inbox is actually opened.
+  setTimeout(_refreshUnreadCount, 8000);
   setInterval(_refreshUnreadCount, 60000);
-  prewarmEmailLibrary({ delay: 3000 });
 
   // Deep-link: #email=<folder>:<uid> opens the library and expands that card
   _maybeOpenFromHash();
@@ -804,7 +805,10 @@ async function _openEmail(em, itemEl, preloadedData = null, mode = 'reply', note
           if (result.success && result.reply) {
             aiSuggestedBody = _cleanAiReplyText(result.reply);
           } else {
-            const _msg = result.error || 'AI reply could not be generated';
+            const _rawMsg = result.error || 'AI reply could not be generated';
+            const _msg = /empty response/i.test(_rawMsg)
+              ? 'AI returned empty response.'
+              : _rawMsg;
             console.error('AI reply generation failed:', _msg);
             import('./ui.js').then(m => m.showError && m.showError('AI reply failed: ' + _msg)).catch(() => {});
             return;
@@ -914,12 +918,10 @@ async function _openEmail(em, itemEl, preloadedData = null, mode = 'reply', note
     }
 
     if (_docModule) {
-      // Only reuse an existing doc tab if the user really just wants to "view"
-      // the email again. For reply/reply-all/forward/ai-reply, always create
-      // a fresh draft — otherwise a previously-emptied doc (sent reply, AI
-      // reply that came back blank, etc.) keeps coming back instead of a
-      // proper pre-filled reply.
-      const reuseExisting = (mode === 'view' || mode === 'open');
+      // Agent-provided reply text should land in the email draft the user
+      // already has open. Otherwise mobile users see the source email while the
+      // agent silently creates a second draft elsewhere.
+      const reuseExisting = (mode === 'view' || mode === 'open' || (!!aiSuggestedBody && mode !== 'forward'));
       const existingDocId = (reuseExisting && _docModule.findEmailDocId)
         ? _docModule.findEmailDocId(em.uid, _currentFolder)
         : null;
@@ -927,6 +929,10 @@ async function _openEmail(em, itemEl, preloadedData = null, mode = 'reply', note
         if (!_docModule.isPanelOpen()) _docModule.openPanel();
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
         await _docModule.loadDocument(existingDocId);
+        if (aiSuggestedBody && typeof _docModule.replaceEmailReplyBody === 'function') {
+          await _docModule.replaceEmailReplyBody(existingDocId, aiSuggestedBody);
+          _bringEmailReplyDraftToFrontOnMobile();
+        }
       } else {
         // If the user already has a chat session open, reuse it instead of
         // spawning a new one. They asked for this explicitly — opening reply
@@ -1183,13 +1189,43 @@ async function _deleteEmail(em) {
   const { styledConfirm } = await import('./ui.js');
   const ok = await styledConfirm(`Delete "${subject}"?`, { confirmText: 'Delete', cancelText: 'Cancel', danger: true });
   if (!ok) return;
+  const row = document.querySelector(`.email-item[data-uid="${CSS.escape(String(em.uid))}"]`);
+  const busy = _showEmailDeleteOverlay(row);
+  await busy?.ready;
   try {
     await fetch(`${API_BASE}/api/email/delete/${em.uid}?folder=${encodeURIComponent(_currentFolder)}${_acct()}`, { method: 'DELETE' });
+    busy?.remove?.();
     _emails = _emails.filter(e => e.uid !== em.uid);
     _renderList();
   } catch (e) {
+    busy?.remove?.();
     console.error('Failed to delete:', e);
   }
+}
+
+function _showEmailDeleteOverlay(target) {
+  if (!target) return null;
+  const wp = spinnerModule.createWhirlpool(16);
+  const overlay = document.createElement('div');
+  overlay.className = 'email-delete-overlay';
+  overlay.appendChild(wp.element);
+  const prevPos = target.style.position;
+  const prevPointerEvents = target.style.pointerEvents;
+  if (getComputedStyle(target).position === 'static') target.style.position = 'relative';
+  target.style.pointerEvents = 'none';
+  target.classList.add('email-delete-busy');
+  target.appendChild(overlay);
+  const ready = new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  return {
+    ready,
+    remove() {
+      try { wp.destroy?.(); } catch (_) {}
+      overlay.remove();
+      target.classList.remove('email-delete-busy');
+      target.style.pointerEvents = prevPointerEvents;
+      target.style.position = prevPos;
+    }
+  };
 }
 
 async function _toggleDone(em, itemEl) {

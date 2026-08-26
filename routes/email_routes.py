@@ -55,7 +55,7 @@ from routes.email_helpers import (
     _friendly_email_auth_error,
     SendEmailRequest, ExtractStyleRequest,
     ATTACHMENTS_DIR, COMPOSE_UPLOADS_DIR, SCHEDULED_DB,
-    attachment_extract_dir, _email_cache_owner_clause,
+    attachment_extract_dir, _email_cache_owner_clause, email_translation_body_hash,
 )
 from routes.email_pollers import _start_poller
 
@@ -4030,6 +4030,36 @@ def setup_email_routes():
             if not body:
                 return {"success": False, "error": "No body provided"}
 
+            body_hash = email_translation_body_hash(body)
+            try:
+                _c = _sql3.connect(SCHEDULED_DB)
+                owner_clause, owner_params = _email_cache_owner_clause(owner)
+                row = _c.execute(
+                    f"SELECT translation, same_language, model_used FROM email_translations "
+                    f"WHERE body_hash = ? AND target_language = ? AND {owner_clause}",
+                    (body_hash, target_language, *owner_params),
+                ).fetchone()
+                _c.close()
+                if row:
+                    if int(row[1] or 0):
+                        return {
+                            "success": True,
+                            "same_language": True,
+                            "language": target_language,
+                            "model_used": row[2] or "cached",
+                            "cached": True,
+                        }
+                    if row[0]:
+                        return {
+                            "success": True,
+                            "translation": row[0],
+                            "language": target_language,
+                            "model_used": row[2] or "cached",
+                            "cached": True,
+                        }
+            except Exception as e:
+                logger.warning(f"Failed to read email translation cache: {e}")
+
             candidates = []
             seen = set()
 
@@ -4087,6 +4117,21 @@ def setup_email_routes():
             content = (content or "").strip()
             content = _extract_reply(content)
             if "<<<SAME_LANGUAGE>>>" in content:
+                try:
+                    _c = _sql3.connect(SCHEDULED_DB)
+                    _c.execute("""
+                        INSERT OR REPLACE INTO email_translations
+                        (body_hash, owner, target_language, uid, folder, subject, sender,
+                         translation, same_language, model_used, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        body_hash, owner, target_language, data.get("uid", ""), data.get("folder", ""),
+                        subject, sender, "", 1, model, datetime.utcnow().isoformat(),
+                    ))
+                    _c.commit()
+                    _c.close()
+                except Exception as e:
+                    logger.warning(f"Failed to cache same-language email translation: {e}")
                 return {"success": True, "same_language": True, "language": target_language, "model_used": model}
             marker = re.search(r"<<<TRANSLATION>>>\s*(.*?)\s*<<<END>>>", content, re.S | re.I)
             if marker:
@@ -4096,6 +4141,21 @@ def setup_email_routes():
                 content = re.sub(r"\s*<<<END>>>\s*$", "", content, flags=re.I).strip()
             if not content:
                 return {"success": False, "error": "Empty response from model"}
+            try:
+                _c = _sql3.connect(SCHEDULED_DB)
+                _c.execute("""
+                    INSERT OR REPLACE INTO email_translations
+                    (body_hash, owner, target_language, uid, folder, subject, sender,
+                     translation, same_language, model_used, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    body_hash, owner, target_language, data.get("uid", ""), data.get("folder", ""),
+                    subject, sender, content, 0, model, datetime.utcnow().isoformat(),
+                ))
+                _c.commit()
+                _c.close()
+            except Exception as e:
+                logger.warning(f"Failed to cache email translation: {e}")
             return {"success": True, "translation": content, "language": target_language, "model_used": model}
         except Exception as e:
             logger.error(f"Failed to translate email: {e}")
@@ -4311,13 +4371,14 @@ def setup_email_routes():
                 _add(*cand)
             for cand in resolve_chat_fallback_candidates(owner=owner) or []:
                 _add(*cand)
+            _messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_msg},
+            ]
             try:
-                reply = await llm_call_async_with_fallback(
+                reply_raw = await llm_call_async_with_fallback(
                     _candidates,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_msg},
-                    ],
+                    messages=_messages,
                     temperature=0.7,
                     max_tokens=1024 if fast_reply else 6144,
                     timeout=60 if fast_reply else 180,
@@ -4327,9 +4388,51 @@ def setup_email_routes():
                 _attempted = ", ".join(f"{m}@{u.split('/')[2] if '/' in u else u}" for u, m, _ in _candidates) or "no candidates"
                 return {"success": False, "error": f"All endpoints failed ({_attempted}): {detail}. Check your API keys in Settings → Services."}
 
-            reply = _apply_email_style_mechanics(_extract_reply(reply or ""))
+            reply = _apply_email_style_mechanics(_extract_reply(reply_raw or ""))
             if not reply:
-                return {"success": False, "error": "LLM returned empty response"}
+                logger.warning(
+                    "AI reply returned empty usable text on first pass model=%s raw_len=%s; retrying candidates",
+                    model,
+                    len(reply_raw or ""),
+                )
+                retry_system = (
+                    system_prompt
+                    + "\n\nRETRY BECAUSE PREVIOUS OUTPUT WAS EMPTY: You MUST return a non-empty email reply body. "
+                    "If unsure, write a short, honest reply using only the facts in the original email and user instructions. "
+                    "Still use the exact <<<REPLY>>> and <<<END>>> markers."
+                )
+                retry_user = user_msg + "\n\nReturn a usable, non-empty reply now. Do not return an empty marker block."
+                retry_messages = [
+                    {"role": "system", "content": retry_system},
+                    {"role": "user", "content": retry_user},
+                ]
+                for cand_url, cand_model, cand_headers in _candidates:
+                    try:
+                        raw_retry = await llm_call_async(
+                            cand_url,
+                            cand_model,
+                            retry_messages,
+                            headers=cand_headers,
+                            temperature=0.3,
+                            max_tokens=1536 if fast_reply else 4096,
+                            timeout=45 if fast_reply else 120,
+                            max_retries=1,
+                        )
+                        retry_reply = _apply_email_style_mechanics(_extract_reply(raw_retry or ""))
+                        if retry_reply:
+                            reply = retry_reply
+                            model = cand_model
+                            break
+                        logger.warning(
+                            "AI reply retry still empty model=%s raw_len=%s",
+                            cand_model,
+                            len(raw_retry or ""),
+                        )
+                    except Exception as retry_exc:
+                        logger.warning("AI reply retry failed model=%s: %s", cand_model, retry_exc)
+            if not reply:
+                _attempted = ", ".join(f"{m}@{u.split('/')[2] if '/' in u else u}" for u, m, _ in _candidates) or "no candidates"
+                return {"success": False, "error": f"AI reply returned blank text after retrying: {_attempted}"}
 
             # Cache so next click is instant
             if message_id:

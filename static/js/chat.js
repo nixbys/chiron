@@ -292,6 +292,9 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
 
     // If currently streaming, stop it
     if (isStreaming) {
+      if (fileHandlerModule.isUploading && fileHandlerModule.isUploading()) {
+        fileHandlerModule.cancelUpload && fileHandlerModule.cancelUpload();
+      }
       // Cancel server-side research if in progress
       const _cancelSid = sessionModule.getCurrentSessionId();
       if (_cancelSid && _researchingStreamIds.has(_cancelSid)) {
@@ -683,9 +686,18 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
 
       let ids = [];
       try {
-        ids = await fileHandlerModule.uploadPending();
+        ids = await fileHandlerModule.uploadPending({ sessionId: sessionModule.getCurrentSessionId() });
       } catch(e) {
         console.error('upload failed', e);
+      }
+      if (_pendingAttachInfo && !ids.length && !(_pendingRegenAttachments && _pendingRegenAttachments.length)) {
+        if (_userMsgEl && _userMsgEl.parentNode) _userMsgEl.remove();
+        if (fileHandlerModule.wasLastUploadCancelled && !fileHandlerModule.wasLastUploadCancelled()) {
+          uiModule.showError && uiModule.showError('Upload failed. Attachment kept so you can retry.');
+        }
+        updateSubmitButton('idle', submitBtn);
+        _releaseSendFlag();
+        return;
       }
 
       // Carry over the original message's file-ids on a regenerate so the new
@@ -768,7 +780,10 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       }
 
       // Auto-save document editor content before sending so the AI sees latest text
-      if (documentModule && documentModule.isPanelOpen() && documentModule.getCurrentDocId()) {
+      const activeDocIdForSend = documentModule && typeof documentModule.getCurrentDocId === 'function'
+        ? documentModule.getCurrentDocId()
+        : null;
+      if (documentModule && activeDocIdForSend) {
         try { await documentModule.saveDocument(); } catch(e) { console.warn('doc auto-save failed', e); }
       }
 
@@ -800,9 +815,9 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       fd.append('session', streamSessionId);
       if (ids.length) fd.append('attachments', JSON.stringify(ids));
       // Auto-save & send active doc ID so the backend sees latest content
-      if (documentModule && documentModule.isPanelOpen() && documentModule.getCurrentDocId()) {
+      if (documentModule && activeDocIdForSend) {
         try { await documentModule.saveDocument({ silent: true }); } catch (_e) { /* best-effort */ }
-        fd.append('active_doc_id', documentModule.getCurrentDocId());
+        fd.append('active_doc_id', activeDocIdForSend);
       }
       // Active email context — when an email reader is open, pass its
       // uid/folder/account so "reply", "summarize", "what does this say"
@@ -824,10 +839,9 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       const isIncognito = !!(incognitoChk && incognitoChk.checked);
       // Auto-escalate to agent mode when a document is open — the user expects
       // the AI to see the document and have tools to edit it
-      if (!isIncognito && !isAgentMode && documentModule && documentModule.isPanelOpen() && documentModule.getCurrentDocId()) {
+      if (!isIncognito && !isAgentMode && documentModule && activeDocIdForSend) {
         isAgentMode = true;
       }
-      if (isIncognito) isAgentMode = false;
       fd.append('mode', isAgentMode ? 'agent' : 'chat');
       if (el('web-toggle').checked) {
         if (isAgentMode) {
@@ -865,7 +879,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       currentAbort = abortCtrl;
 
       const _tState = Storage.loadToggleState();
-      const _isAgent = !isIncognito && (_tState.mode || 'chat') === 'agent';
+      const _isAgent = (_tState.mode || 'chat') === 'agent';
 
       // Timeout: 6 min for research and agent mode, 3 min otherwise
       const timeoutMs = el('research-toggle').checked || _isAgent ? RESEARCH_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
@@ -1034,6 +1048,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       let roundHolder = holder;       // Current AI text bubble (changes per round)
       let roundText = '';             // Text accumulated for current round
       let currentToolBubble = null;   // Current tool execution bubble
+      let lastToolThread = null;      // Visible tool timeline for tool-only turns
       let roundFinalized = false;     // Whether current round's text is finalized
       let _sourcesHtml = '';          // Sources box HTML to prepend to body
       let _sourcesExpanded = false;   // Track if user expanded sources during stream
@@ -1041,6 +1056,14 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       let _sourcesType = '';          // 'web' or 'research'
       let _findingsData = null;      // Raw findings data for collapsible box
       // _keepResearchOn removed — clarification state now persisted server-side via DB mode
+      function _metricsTargetForTurn() {
+        const visibleRound = (roundHolder && roundHolder.style.display !== 'none') ? roundHolder : null;
+        const visibleText = visibleRound ? (visibleRound.querySelector('.body')?.textContent || '').trim() : '';
+        if (lastToolThread && lastToolThread.isConnected && (!visibleRound || !visibleText || visibleText === 'Done.')) {
+          return lastToolThread;
+        }
+        return visibleRound || holder;
+      }
       // Insert sources box as a stable DOM node that won't be replaced during streaming.
       // Returns the content container to use for innerHTML updates.
       function _ensureStreamLayout(body) {
@@ -1318,7 +1341,9 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
               _streamSawDone = true;
               // Always update background map if entry exists (even if user switched back)
               var bgDone = _backgroundStreams.get(streamSessionId);
-              if (bgDone) {
+              if (bgDone && !_isBg) {
+                _backgroundStreams.delete(streamSessionId);
+              } else if (bgDone) {
                 bgDone.status = 'completed';
                 bgDone.accumulated = accumulated;
                 if (_isBg) {
@@ -1442,9 +1467,10 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
                 }
 
                 // --- Text-fence doc streaming (for models that don't use native tool calls) ---
-                if (!_docFenceOpened && documentModule && roundText.includes('```create_document\n')) {
-                  const fenceIdx = roundText.indexOf('```create_document\n');
-                  const afterFence = roundText.slice(fenceIdx + '```create_document\n'.length);
+                if (!_docFenceOpened && documentModule && (roundText.includes('```create_document\n') || roundText.includes('```document\n'))) {
+                  const fenceMarker = roundText.includes('```document\n') ? '```document\n' : '```create_document\n';
+                  const fenceIdx = roundText.indexOf(fenceMarker);
+                  const afterFence = roundText.slice(fenceIdx + fenceMarker.length);
                   const fenceLines = afterFence.split('\n');
                   if (fenceLines.length >= 1 && fenceLines[0].trim()) {
                     _docFenceOpened = true;
@@ -1453,7 +1479,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
                     const knownLangs = ['python','py','javascript','js','typescript','ts','html','css','json','yaml','bash','sql','rust','go','java','c','cpp','markdown','text','plain','ruby','swift','kotlin','php','email','csv','xml','toml','ini'];
                     const isLang = fenceLines.length >= 2 && knownLangs.includes(fenceLines[1].trim().toLowerCase());
                     const lang = isLang ? fenceLines[1].trim() : '';
-                    _docFenceContentStart = fenceIdx + '```create_document\n'.length + title.length + 1 + (isLang ? fenceLines[1].length + 1 : 0);
+                    _docFenceContentStart = fenceIdx + fenceMarker.length + title.length + 1 + (isLang ? fenceLines[1].length + 1 : 0);
                     documentModule.streamDocOpen(title, lang);
                   }
                 }
@@ -2019,6 +2045,10 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
                   if (bgM) bgM.metrics = json.data;
                   continue;
                 }
+                if (metrics) {
+                  const metricsTarget = _metricsTargetForTurn();
+                  if (metricsTarget) displayMetrics(metricsTarget, metrics);
+                }
 
               } else if (json.type === 'message_saved') {
                 // Wire the persisted DB id onto the just-streamed bubble so it
@@ -2099,6 +2129,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
                   chatBox.appendChild(threadWrap);
                 }
                 threadWrap.classList.add('streaming');
+                lastToolThread = threadWrap;
                 const toolLabel = _toolLabels[json.tool.toLowerCase()] || json.tool;
                 const toolIcon = _toolIcons[json.tool.toLowerCase()] || '\u25B6';
                 const node = document.createElement('div')
@@ -2457,6 +2488,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       }
 
       _renderStream();
+      if (spinner && spinner.element) { try { spinner.destroy(); } catch (_) {} spinner = null; }
       _cancelThinkingTimer();
       _removeThinkingSpinner();
       // Stop any thread pulse animations
@@ -2636,7 +2668,9 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
 
         // Attach footer to the last visible bubble (roundHolder for multi-round agent, holder for single)
         const footerTarget = (roundHolder && roundHolder !== holder && roundHolder.style.display !== 'none') ? roundHolder : holder;
-        footerTarget.appendChild(createMsgFooter(footerTarget));
+        if (!footerTarget.querySelector('.msg-footer')) {
+          footerTarget.appendChild(createMsgFooter(footerTarget));
+        }
         // Add "View Report" link for completed research
         if (_researchingStreamIds.has(streamSessionId)) {
           _appendViewReportLink(footerTarget, streamSessionId);
@@ -2676,7 +2710,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
           }
         }
         if (metrics) {
-          displayMetrics(footerTarget, metrics);
+          displayMetrics(_metricsTargetForTurn() || footerTarget, metrics);
         }
         // Attach variant navigation if this was a regeneration
         _attachVariantNav(footerTarget);
@@ -4141,7 +4175,10 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     if (!sessionId) return;
     try {
       const res = await fetch(`${API_BASE}/api/research/status/${sessionId}`);
-      if (!res.ok) return; // 404 = no research for this session
+      if (!res.ok) {
+        if (sessionModule && sessionModule.clearResearching) sessionModule.clearResearching(sessionId);
+        return; // 404 = no research for this session
+      }
       const data = await res.json();
 
       if (data.status === 'done') {

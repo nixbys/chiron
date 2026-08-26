@@ -53,6 +53,71 @@ window.uiModule = uiModule;
 window.adminModule = adminModule;
 window.cookbookModule = cookbookModule;
 
+function initForegroundActivityHeartbeat() {
+  let lastSent = 0;
+  const minGapMs = 12000;
+  const send = (force = false) => {
+    if (document.visibilityState === 'hidden') return;
+    const now = Date.now();
+    if (!force && now - lastSent < minGapMs) return;
+    lastSent = now;
+    try {
+      if (navigator.sendBeacon) {
+        const body = new Blob(['{}'], { type: 'application/json' });
+        if (navigator.sendBeacon('/api/activity/heartbeat', body)) return;
+      }
+    } catch (_) {}
+    fetch('/api/activity/heartbeat', {
+      method: 'POST',
+      credentials: 'same-origin',
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    }).catch(() => {});
+  };
+  send(true);
+  window.addEventListener('focus', () => send(true));
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'hidden') send(true);
+  });
+  ['pointerdown', 'keydown', 'touchstart', 'scroll'].forEach(type => {
+    window.addEventListener(type, () => send(false), { passive: true, capture: true });
+  });
+  setInterval(() => send(false), 15000);
+}
+initForegroundActivityHeartbeat();
+
+function initRailHoverLabels() {
+  const labels = {
+    'rail-search-btn': 'Search',
+    'rail-new-session': 'New',
+    'rail-delete-session': 'Delete',
+    'rail-chats': 'Chat',
+    'rail-documents': 'Docs',
+    'rail-calendar': 'Calendar',
+    'rail-compare': 'Compare',
+    'rail-cookbook': 'Cookbook',
+    'rail-research': 'Research',
+    'rail-email': 'Email',
+    'rail-gallery': 'Gallery',
+    'rail-archive': 'Library',
+    'rail-memory': 'Brain',
+    'rail-notes': 'Notes',
+    'rail-tasks': 'Tasks',
+    'rail-theme': 'Theme',
+    'rail-settings': 'Settings',
+  };
+  document.querySelectorAll('#icon-rail .icon-rail-btn').forEach(btn => {
+    if (btn.querySelector('.rail-hover-label')) return;
+    const label = labels[btn.id] || btn.getAttribute('aria-label') || btn.getAttribute('title') || '';
+    if (!label) return;
+    const span = document.createElement('span');
+    span.className = 'rail-hover-label';
+    span.textContent = String(label).replace(/\s*\([^)]*\)\s*/g, '').trim();
+    btn.appendChild(span);
+  });
+}
+
 // Redirect to login on 401 from any fetch
 const _origFetch = window.fetch;
 window.fetch = async function(...args) {
@@ -3386,6 +3451,7 @@ function startOdysseusApp() {
   window.__odysseusAppStarted = true;
   // Set CSS variables
   document.documentElement.style.setProperty('--line-height', '20px');
+  initRailHoverLabels();
 
   // Smooth keyboard open/close on mobile — keep chat scrolled to bottom
   if (window.visualViewport && 'ontouchstart' in window) {

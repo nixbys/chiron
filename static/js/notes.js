@@ -2525,12 +2525,12 @@ function _bindCardEvents(body) {
     if (span.isContentEditable) return;
     const note = _notes.find(n => n.id === noteId);
     if (!note || !Array.isArray(note.items) || !note.items[idx]) return;
-    
+
     span.textContent = note.items[idx].text || '';
     span.contentEditable = "true";
     span.spellcheck = false;
     span.focus();
-    
+
     const selection = window.getSelection();
     const range = document.createRange();
     range.selectNodeContents(span);
@@ -2542,7 +2542,7 @@ function _bindCardEvents(body) {
       span.contentEditable = "false";
       const newText = span.textContent.trim();
       const oldText = (note.items[idx].text || '').trim();
-      
+
       if (newText === oldText) {
         _renderNotes();
         return;
