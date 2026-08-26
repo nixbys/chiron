@@ -116,7 +116,7 @@ jobs:
                 '> **Authorization requirement:** All active tools require explicit written',
                 '> authorization for any target. See [SECURITY.md](SECURITY.md).',
                 '',
-                `**Upstream base:** Odysseus \`1.0.1\`  `,
+                `**Upstream base:** Odysseus \`1.0.3\`  `,
                 `**Full Changelog:** https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/CHANGELOG.md`,
               ].join('\n'),
               draft: false,

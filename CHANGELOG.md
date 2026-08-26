@@ -8,50 +8,95 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Changed
-- `ACKNOWLEDGMENTS.md` — rewrote the "License-compatibility notes" section to
-  state plainly that Odysseus Red's own code is AGPL-3.0-or-later and explain
-  why (bundled AGPL-3.0 sidecars, not the permissive core deps); added a
-  `docker-compose.security.yml` bundled-services table (SpiderFoot, BentoPDF,
-  OpenSearch) that was previously undocumented
-- `package.json` — added explicit `"license": "AGPL-3.0-or-later"` field
+---
+
+## [0.4.0] — 2026-08-26
+
+Full upstream re-sync (dev fully converged with upstream `dev`) plus an
+MCP-reliability and security-hardening pass, released as `main`'s first
+promotion since `v0.3.1`.
+
+### Upstream sync
+
+`dev` had drifted a very long way behind `upstream/dev`
+(pewdiepie-archdaemon/odysseus) since the last release. Merged upstream in
+24 reviewed batches (each with full per-hunk provenance review — no blanket
+"take theirs"/"take ours" — verified individually via compile checks, JS
+syntax checks, an AST duplicate-definition scanner, and a full pytest run
+compared against a passing baseline), bringing `dev` to zero commits behind
+`upstream/dev` at merge time. See the individual
+`merge: sync upstream pewdiepie-archdaemon/odysseus dev (batch N, ...)`
+commits on `dev` for full per-batch detail (each documents exactly which
+upstream commits landed and how every conflict was resolved). Notable
+upstream features absorbed this cycle include: per-tool capability/
+result-integrity gating for indirect prompt-injection defense
+(`src/tool_capabilities.py`, `src/tool_approvals.py`), a model-capability
+reader framework (`src/model_capability_readers/`), several route
+domain-subpackage splits (document, mcp, webhook, task, note, search, vault,
+cleanup, admin_wipe, compare), and the platform version advancing to
+`1.0.3`.
+
+### Added
+
+- `scripts/mcp_health_check.py` — speaks the real MCP stdio protocol
+  (spawn → initialize → list_tools) to each of the 14 security-focused MCP
+  servers plus the 4 core-platform servers (email, memory, image_gen, rag),
+  independent of the app's own MCP server registry. Confirms every server
+  starts cleanly and correctly advertises its tools — upstream has open
+  reports of MCP servers intermittently failing to register with tools
+  "disappearing" silently rather than raising a visible error, and this
+  fork's headline differentiator is its 14 cybersecurity MCP servers.
+  Usable standalone (`--json` for CI, `--core-only`/`--security-only` to
+  scope a run) and as a manual pre-release check.
+- `GET /api/ready` now reports an `mcp_servers` check: configured/connected
+  counts and any server currently in `error`/`timeout` status, sourced from
+  the existing `McpManager` connection-status snapshot (no new connection
+  attempts, so it stays fast). Informational only — never fails overall
+  readiness — but a broken MCP server is now visible here instead of only
+  discoverable by a user hitting a missing tool mid-session.
+- `.github/workflows/ci.yml`: new `sensitive-paths` job. Runs
+  `git ls-files` on every push/PR and fails if any tracked file matches
+  `data/`, `logs/`, `backups/`, `.env` (excluding `.env.example`), or
+  private-key filename patterns. Automates the "confirm no secrets/data
+  ever get committed" checklist item as a real CI gate instead of relying
+  on a human to remember it before every push.
 
 ### Fixed
-- `requirements.txt` — pinned `mcp<2.0.0`. Upstream `mcp` 2.0.0 replaced the
-  low-level `Server`'s `@server.list_tools()`/`@server.call_tool()` decorator
-  API with constructor-passed `on_list_tools`/`on_call_tool` callables; all 18
-  files in `mcp_servers/` still use the pre-2.0 decorator pattern, so an
-  unpinned install broke every MCP server at import time
-  (`AttributeError: 'Server' object has no attribute 'list_tools'`), taking
-  down the `Python tests (pytest)` and `MCP server unit tests` CI jobs via
-  collection errors. Migrating the servers to the new API is tracked as a
-  followup; pinning restores CI now.
-- `docker/toolchain/Dockerfile` — HEALTHCHECK's `CMD curl ... || exit 1` used
-  shell form, which hadolint flags (DL3025); switched to
-  `CMD ["sh", "-c", "..."]`, which keeps the `||` fallback in JSON exec form.
-- `docker/toolchain/Dockerfile` — added `build-essential` and `python3-dev`.
-  Kali Rolling's current Python has no prebuilt `yara-python` wheel on PyPI,
-  so pip fell back to compiling it from source; without a C compiler and the
-  Python headers that failed outright (`x86_64-linux-gnu-gcc: No such file`,
-  then `Python.h: No such file or directory`), breaking the "Toolchain
-  Dockerfile build" CI job on every PR that touches the Dockerfile. Verified
-  by building the affected `apt-get`+`pip3 install yara-python` layers in
-  isolation.
-- `docker/toolchain/exec_api.py` — added an `ALLOWED_BINARIES` allowlist
-  checked against `args[0]` before every `subprocess.run`, closing CodeQL
-  alert #182 (`py/command-line-injection`). The MCP servers already only
-  ever choose `args[0]` themselves (`mcp_servers/common.py`); the allowlist
-  makes that a hard server-side boundary instead of an implicit one.
-- `tests/test_readme_ascii_fenced.py` — the wordmark-title guard asserted the
-  literal upstream `alt="Odysseus"`, which this fork's own
-  `alt="Odysseus Red"` branding never matched; broadened to a prefix match so
-  the guard still catches a missing/reverted wordmark without fighting the
-  fork's identity.
-- Dismissed 6 stale-open `py/incomplete-url-substring-sanitization` CodeQL
-  alerts (#76–#81) as "used in tests" — each is a substring/membership
-  assertion on either a hardcoded test fixture or `src/agent_loop.py`'s
-  `_API_HOSTS` (an admin-configured endpoint used only to pick prompt
-  format, not a security boundary), not exploitable sanitization logic.
+
+- `mcp_servers/asset_server.py` — schema init ran unconditionally at
+  *module import time*, before the MCP stdio handshake could even begin.
+  Any unwritable or missing data directory (bad volume mount, full disk, a
+  misconfigured read-only mount) crashed the whole server process before it
+  could register a single tool, surfacing to the MCP client only as an
+  opaque low-level transport exception — not an actionable message. Its
+  sibling stateful servers (`risk_server`, `memory_server`, `rag_server`,
+  `image_gen_server`) already use a safe lazy-init pattern that only
+  touches the filesystem when a tool is actually invoked; `asset_server`
+  was the sole outlier. Fixed to match: schema init now runs lazily on
+  first real DB access. A genuinely broken data directory now surfaces as
+  a normal per-call `[error:db_error] ...` MCP response instead of taking
+  down the process.
+- `.gitignore` / `.dockerignore` — `backups/` (full data-directory
+  snapshots written by `scripts/odysseus-backup`: DB, uploads, personal
+  docs — everything `data/` itself is gitignored for) was not covered by
+  either file. A `git add -A` after running a backup would have staged a
+  complete personal-data snapshot; a Docker build from a checkout with a
+  stray `backups/` dir would have baked it into an image layer. Audited
+  currently-tracked files first — confirmed clean, so this closes a latent
+  gap rather than an active leak.
+- `.gitleaksignore` — the allowlisted fingerprint for the known jwt.io
+  demo-token false positive in `tests/mcp_servers/test_transform_server.py`
+  pinned a commit SHA (`36edb229...`) reachable only via the `v0.3.1` tag.
+  This fork's `dev` history reconstruction during the upstream-sync merges
+  produced a *different* commit SHA (`6a7ce654...`) for the same
+  byte-identical content, which was never allowlisted — so the Secret scan
+  CI check had been failing on every push since the upstream-sync effort
+  began, mischaracterized along the way as "confirmed pre-existing and
+  unrelated" rather than actually run down. Added the correct fingerprint;
+  verified locally with the exact pinned gitleaks binary before pushing.
+- `.github/workflows/release.yml` — the release-notes template hardcoded
+  "Upstream base: Odysseus `1.0.1`", stale since the upstream-sync batches
+  above advanced the platform to `1.0.3`.
 
 ---
 
