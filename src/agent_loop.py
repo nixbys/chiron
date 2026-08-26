@@ -1055,11 +1055,37 @@ def _turn_targets_active_document(intent: Dict[str, object], last_user: str, act
     """
     if active_document is None:
         return False
+    raw_doc = getattr(active_document, "current_content", "") or ""
+    title_l = (getattr(active_document, "title", "") or "").strip().lower()
+    is_email_doc = (
+        getattr(active_document, "language", None) == "email"
+        or title_l in {"new email", "new mail", "new message"}
+        or ("To:" in raw_doc[:400] and "Subject:" in raw_doc[:400] and "\n---\n" in raw_doc)
+    )
     if "documents" in (intent.get("domains") or set()):
         return True
     text = str(last_user or "").strip().lower()
     if not text:
         return False
+    if is_email_doc and re.search(
+        r"\b("
+        r"email|mail|reply|respond|response|draft|compose|send|"
+        r"tell them|tell her|tell him|say|write|make it say|"
+        r"japanese|japan|polite|formal|tone|style"
+        r")\b",
+        text,
+    ):
+        return True
+    if re.search(
+        r"\b(?:add|insert|include|apply|put)\b.+\b(?:to it|to this|there|in it|in this|in the text|in the document)\b",
+        text,
+    ):
+        return True
+    if re.search(
+        r"\b(?:make it|make this|expand it|expand this|extend it|extend this|continue it|continue this)\b.*\b(?:longer|shorter|bigger|smaller|more detailed|more concise|expanded|extended)?\b",
+        text,
+    ):
+        return True
     return bool(re.search(
         r"\b("
         r"document|doc|draft|text|poem|story|essay|outline|letter|paragraph|"
@@ -1133,13 +1159,41 @@ def _minimal_odysseus_doc_messages(messages: List[Dict], active_document, stream
             "markdown\n"
             "Document content\n"
             "```\n"
-            "Do not use function calls or tool calls. Do not write anything before the fence. "
+            "Do not use native function-call JSON or <tool_calls> markup. "
+            "Use only the fenced document block above. Do not write anything before the fence. "
             "Use saved user memory facts when the user asks for something relating to them."
         )
     else:
         system = (
-            "You are Odysseus. Use the provided function when it is needed. "
-            "After a successful tool call, answer briefly."
+            "You are Odysseus. Edit or suggest changes to the active document using exactly one fenced tool block when needed.\n"
+            "If the user asks to add, remove, rewrite, transform, change, capitalize, shorten, expand, or otherwise apply a change, use edit_document or update_document, not suggest_document.\n"
+            "Use suggest_document only when the user explicitly asks for suggestions, feedback, or proposed improvements without applying them.\n"
+            "For targeted edits:\n"
+            "```edit_document\n"
+            "<<<FIND>>>\n"
+            "exact text from the active document\n"
+            "<<<REPLACE>>>\n"
+            "replacement text\n"
+            "<<<END>>>\n"
+            "```\n"
+            "For full rewrites only:\n"
+            "```update_document\n"
+            "entire new document content\n"
+            "```\n"
+            "For improvement suggestions:\n"
+            "```suggest_document\n"
+            "<<<FIND>>>\n"
+            "text to improve\n"
+            "<<<SUGGEST>>>\n"
+            "suggested replacement\n"
+            "<<<REASON>>>\n"
+            "why this improves it\n"
+            "<<<END>>>\n"
+            "```\n"
+            "Do not use native function-call JSON or <tool_calls> markup. "
+            "FIND text must be copied exactly from the active document with no labels like content:, title:, or markdown. "
+            "Use only the fenced tool blocks above. Do not write anything before the fenced block. "
+            "After the tool succeeds, Odysseus will answer Done."
         )
     out = [{"role": "system", "content": system}]
     memory_message = _minimal_saved_memory_message(messages)
@@ -1161,9 +1215,51 @@ def _minimal_odysseus_doc_messages(messages: List[Dict], active_document, stream
     return out
 
 
-def _normalize_stream_document_fences(text: str) -> str:
-    """Treat visible ```document blocks as create_document tool blocks."""
-    return re.sub(r"```document(\s*\n)", r"```create_document\1", text or "")
+_DOC_MODEL_ARTIFACT_RE = re.compile(
+    r"(?:\|end\|)+\|?assistan(?:t)?\|?"
+    r"|\|assistan(?:t)?\|"
+    r"|<\|im_start\|>\s*assistant"
+    r"|<\|im_end\|>",
+    re.IGNORECASE,
+)
+
+
+def _strip_doc_model_artifacts(text: str) -> str:
+    return _DOC_MODEL_ARTIFACT_RE.sub("", text or "")
+
+
+def _normalize_stream_document_fences(text: str, target_tool: str = "create_document") -> str:
+    """Treat visible ```document/documen blocks as document tool blocks.
+
+    The document LoRA occasionally emits a neutral/truncated `documen` fence.
+    For new documents that maps to create_document. For active-document turns,
+    the same shape is a full replacement of the open document, so map it to
+    update_document and drop the title/language header lines.
+    """
+    text = _strip_doc_model_artifacts(text or "")
+
+    def repl(match: re.Match) -> str:
+        body = match.group(1) or ""
+        if target_tool == "update_document":
+            lines = body.splitlines()
+            if lines and not lines[0].lstrip().startswith("#"):
+                lines = lines[1:]
+            if lines and lines[0].strip().lower() in {
+                "markdown", "md", "text", "txt", "html", "email",
+                "python", "javascript", "typescript", "json", "yaml",
+            }:
+                lines = lines[1:]
+            while lines and not lines[0].strip():
+                lines = lines[1:]
+            body = "\n".join(lines)
+        return f"```{target_tool}\n{body}"
+
+    return re.sub(
+        r"```documen(?:t)?\s*\n([\s\S]*?)(?=\n```|$)",
+        repl,
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 def _recent_context_for_retrieval(messages: List[Dict], max_user: int = 3, max_chars: int = 600) -> str:
@@ -1288,6 +1384,9 @@ def _build_system_prompt(
     # the trusted system role. Bound up front so the insert block below can
     # always check it.
     _skills_message = None
+    _email_style_message = None
+    _integ_message = None
+    _mcp_desc_message = None
     if active_document:
         set_active_document(active_document.id)
         _doc_raw = active_document.current_content or ""
@@ -1518,9 +1617,9 @@ def _build_system_prompt(
             from src.settings import load_settings as _load_settings
             _style = (_load_settings().get("email_writing_style", "") or "").strip()
             if _style:
+                # Hardcoded identity/style rules stay in the trusted system prompt.
                 agent_prompt += (
-                    "\n\n📧 EMAIL WRITING STYLE AND IDENTITY — FOLLOW FOR ANY EMAIL DRAFT OR SEND:\n"
-                    f"{_style}\n\n"
+                    "\n\n"
                     "Hard identity rule: write as the user/mailbox owner only. Do not sign as, speak as, "
                     "or imply you are the recipient, original sender, quoted sender, spouse, assistant, "
                     "company, or any other third party. If a signature is needed, use only the name/signature "
@@ -1528,6 +1627,12 @@ def _build_system_prompt(
                     "Mechanical style rules: never use em dash/en dash; use --. Never use curly apostrophes. "
                     "For English emails, default to Hi [Name] or Hiya from the saved style rather than Hey. "
                     "If the saved style specifies Best/newline/name, use that sign-off when a sign-off is natural."
+                )
+                # User-editable style text is untrusted — wrap it so a malicious
+                # style value cannot inject system-role instructions.
+                _email_style_message = untrusted_context_message(
+                    "email writing style",
+                    "EMAIL WRITING STYLE AND IDENTITY — FOLLOW FOR ANY EMAIL DRAFT OR SEND:\n" + _style,
                 )
         except Exception:
             pass
@@ -1656,6 +1761,25 @@ def _build_system_prompt(
         except Exception as _sk_err:
             logger.debug(f"skill injection failed (non-fatal): {_sk_err}")
 
+    # Integration descriptions — user-editable fields, must not be in system role.
+    if not suppress_local_context:
+        try:
+            from src.integrations import get_integrations_prompt
+            _integ_prompt = get_integrations_prompt()
+            if _integ_prompt:
+                _integ_message = untrusted_context_message("integrations", _integ_prompt)
+        except Exception as _integ_err:
+            logger.debug(f"Integration prompt injection skipped: {_integ_err}")
+
+    # MCP tool descriptions — sourced from external servers, must not be in system role.
+    if mcp_mgr:
+        try:
+            _mcp_desc = mcp_mgr.get_tool_descriptions_for_prompt(mcp_disabled_map or {})
+            if _mcp_desc:
+                _mcp_desc_message = untrusted_context_message("MCP tools", _mcp_desc)
+        except Exception as _mcp_err:
+            logger.debug(f"MCP description injection skipped: {_mcp_err}")
+
     agent_msg = {"role": "system", "content": agent_prompt}
     insert_idx = 0
     for i, msg in enumerate(messages):
@@ -1694,6 +1818,15 @@ def _build_system_prompt(
         last_user_idx += 1  # the document message is now at last_user_idx
     if _email_message:
         merged.insert(last_user_idx, _email_message)
+        last_user_idx += 1
+    if _email_style_message:
+        merged.insert(last_user_idx, _email_style_message)
+        last_user_idx += 1
+    if _integ_message:
+        merged.insert(last_user_idx, _integ_message)
+        last_user_idx += 1
+    if _mcp_desc_message:
+        merged.insert(last_user_idx, _mcp_desc_message)
         last_user_idx += 1
     if _skills_message:
         merged.insert(last_user_idx, _skills_message)
@@ -1800,19 +1933,6 @@ def _build_base_prompt(
         except Exception as _e:
             # Skill index is a soft enhancement — never fail prompt assembly on it.
             logger.debug(f"Skill-index injection skipped: {_e}")
-
-    # Inject integration descriptions
-    if not suppress_local_context:
-        from src.integrations import get_integrations_prompt
-        integ_prompt = get_integrations_prompt()
-        if integ_prompt:
-            agent_prompt += "\n\n" + integ_prompt
-
-    # Inject MCP tool descriptions
-    if mcp_mgr:
-        mcp_desc = mcp_mgr.get_tool_descriptions_for_prompt(mcp_disabled_map or {})
-        if mcp_desc:
-            agent_prompt += mcp_desc
 
     return agent_prompt, skill_index_block
 
@@ -2519,10 +2639,15 @@ async def stream_agent_loop(
         except Exception as _e:
             logger.debug(f"[tool-rag] skill-aware tool include skipped: {_e}")
 
+    _intent_domains = set(_intent.get("domains") or set())
     _ody_doc_finetune_mode = (
         (model or "").lower().startswith("odysseus-qwen3")
-        and "documents" in (_intent.get("domains") or set())
-        and "files" not in (_intent.get("domains") or set())
+        and (
+            "documents" in _intent_domains
+            or _active_document_relevant
+            or _prompt_active_document is not None
+        )
+        and "files" not in _intent_domains
         and not guide_only
     )
     _ody_doc_stream_create_mode = _ody_doc_finetune_mode and _prompt_active_document is None
@@ -2792,6 +2917,7 @@ async def stream_agent_loop(
     _doc_opened = False    # whether doc_stream_open was sent
     _doc_last_len = 0      # last content length sent
     _doc_stream_create_completed = False
+    _ody_doc_tool_completed = False
 
     # Set when the loop runs out of rounds while the agent was still actively
     # using tools — i.e. it was cut off, not finished. Drives a "Continue" event
@@ -2847,14 +2973,7 @@ async def stream_agent_loop(
                 ]
                 all_tool_schemas = base_schemas + mcp_schemas
             if _ody_doc_finetune_mode:
-                if _ody_doc_stream_create_mode:
-                    all_tool_schemas = []
-                else:
-                    _doc_schema_names = {"edit_document", "update_document", "suggest_document"}
-                    all_tool_schemas = [
-                        t for t in all_tool_schemas
-                        if t.get("function", {}).get("name") in _doc_schema_names
-                    ]
+                all_tool_schemas = []
             if disabled_tools:
                 all_tool_schemas = [
                     t for t in all_tool_schemas
@@ -2900,7 +3019,7 @@ async def stream_agent_loop(
             max_tokens=max_tokens,
             prompt_type=prompt_type if round_num == 1 else None,
             tools=all_tool_schemas if all_tool_schemas else None,
-            tool_choice_none=_ody_doc_stream_create_mode,
+            tool_choice_none=_ody_doc_finetune_mode,
             timeout=agent_stream_timeout,
             session_id=session_id,
         ):
@@ -3024,9 +3143,12 @@ async def stream_agent_loop(
                         if data.get("thinking"):
                             round_reasoning += data["delta"]
                         else:
-                            round_response += data["delta"]
-                            full_response += data["delta"]
-                        yield chunk  # Stream all rounds
+                            _delta_text = _strip_doc_model_artifacts(data["delta"]) if _ody_doc_finetune_mode else data["delta"]
+                            round_response += _delta_text
+                            full_response += _delta_text
+                            data["delta"] = _delta_text
+                        if not _ody_doc_finetune_mode or data.get("thinking"):
+                            yield f"data: {json.dumps(data)}\n\n"
                         # Detect text-fence doc streaming. Normal agent prompts
                         # use ```create_document; the doc LoRA streaming path
                         # uses neutral ```document to avoid triggering learned
@@ -3037,7 +3159,7 @@ async def stream_agent_loop(
                             and not (tool_policy and tool_policy.blocks("create_document"))
                         ):
                             _fence_markers = (
-                                ('```document\n', 'document')
+                                ('```document\n', '```documen\n')
                                 if _ody_doc_stream_create_mode
                                 else ('```create_document\n',)
                             )
@@ -3106,12 +3228,20 @@ async def stream_agent_loop(
             _round_first_event_logged,
             _round_first_token_logged,
         )
+        _normalized_doc_round = (
+            _normalize_stream_document_fences(
+                round_response,
+                "create_document" if _ody_doc_stream_create_mode else "update_document",
+            )
+            if _ody_doc_finetune_mode
+            else round_response
+        )
         tool_blocks, used_native, converted_calls = _resolve_tool_blocks(
-            _normalize_stream_document_fences(round_response) if _ody_doc_stream_create_mode else round_response,
+            _normalized_doc_round,
             native_tool_calls,
             round_num,
             is_api_model=(_is_api_model and not guide_only),
-            allow_fenced_for_api=_ody_doc_stream_create_mode,
+            allow_fenced_for_api=_ody_doc_finetune_mode,
         )
         if _ody_doc_stream_create_mode and tool_blocks:
             create_idx = next(
@@ -3757,6 +3887,12 @@ async def stream_agent_loop(
                 and result.get("action") == "create"
             ):
                 _doc_stream_create_completed = True
+            if (
+                _ody_doc_finetune_mode
+                and block.tool_type in ("create_document", "update_document", "edit_document", "suggest_document")
+                and not result.get("error")
+            ):
+                _ody_doc_tool_completed = True
 
         # If budget was hit, stop the loop
         if budget_hit:
@@ -3774,6 +3910,13 @@ async def stream_agent_loop(
                 full_response = "Done."
                 yield 'data: ' + json.dumps({"delta": "Done."}) + '\n\n'
             logger.info("[agent] odysseus doc stream-create completed after one create_document")
+            break
+
+        if _ody_doc_tool_completed:
+            if not full_response.strip() or full_response.strip().startswith("```"):
+                full_response = "Done."
+                yield 'data: ' + json.dumps({"delta": "Done."}) + '\n\n'
+            logger.info("[agent] odysseus doc tool completed after one textual tool block")
             break
 
         # Feed results back to LLM for next round
