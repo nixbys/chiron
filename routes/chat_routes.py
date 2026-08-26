@@ -781,11 +781,9 @@ def setup_chat_routes(
         # by default without having to send allow_bash in every request.
         if allow_bash is not None and str(allow_bash).lower() != "true":
             disabled_tools.add("bash")
-        _explicit_web_intent = bool(_tool_intent and _tool_intent.category == "web")
         if (
             allow_web_search is not None
             and str(allow_web_search).lower() != "true"
-            and not _explicit_web_intent
         ):
             disabled_tools.add("web_search")
             disabled_tools.add("web_fetch")
@@ -1359,9 +1357,11 @@ def setup_chat_routes(
                         elif chunk.startswith("event: "):
                             yield chunk
                         elif chunk == "data: [DONE]\n\n":
-                            if full_response:
+                            _has_tool_events = bool((last_metrics or {}).get("tool_events"))
+                            if full_response or _has_tool_events:
+                                _response_to_save = full_response or "Done."
                                 _saved_id = save_assistant_response(
-                                    sess, session_manager, session, full_response, last_metrics,
+                                    sess, session_manager, session, _response_to_save, last_metrics,
                                     character_name=ctx.preset.character_name,
                                     web_sources=web_sources,
                                     rag_sources=ctx.rag_sources,
@@ -1371,7 +1371,7 @@ def setup_chat_routes(
                                 if _saved_id:
                                     yield f'data: {json.dumps({"type": "message_saved", "id": _saved_id})}\n\n'
                                 run_post_response_tasks(
-                                    sess, session_manager, session, message, full_response,
+                                    sess, session_manager, session, message, _response_to_save,
                                     last_metrics, ctx.uprefs, memory_manager, memory_vector, webhook_manager,
                                     incognito=incognito, compare_mode=compare_mode,
                                     character_name=ctx.preset.character_name,
