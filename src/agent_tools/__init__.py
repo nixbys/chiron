@@ -131,11 +131,19 @@ from src.tool_parsing import (  # noqa: E402, F401
     _XML_PARAM_RE,
 )
 
-# Schemas
-from src.tool_schemas import (  # noqa: E402, F401
-    FUNCTION_TOOL_SCHEMAS,
-    function_call_to_tool_block,
-)
+# Schemas — deferred re-export (PEP 562). tool_schemas.py itself imports
+# ToolBlock/TOOL_TAGS from this module, so an eager import here creates a
+# cycle: whoever imports src.tool_schemas *first* (before agent_tools has
+# been loaded) hits "cannot import name 'FUNCTION_TOOL_SCHEMAS' from
+# partially initialized module" when tool_schemas' own import of us reaches
+# back to this line before tool_schemas has finished defining it. Lazy
+# access breaks the cycle: nothing here needs tool_schemas at import time,
+# only backward-compat callers reaching for agent_tools.FUNCTION_TOOL_SCHEMAS.
+def __getattr__(name):
+    if name in ("FUNCTION_TOOL_SCHEMAS", "function_call_to_tool_block"):
+        from src import tool_schemas
+        return getattr(tool_schemas, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # Execution
 from src.tool_execution import (  # noqa: E402, F401
