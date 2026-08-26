@@ -128,6 +128,18 @@ def test_dockerignore_excludes_secrets_editor_backups():
     assert "!secrets.env.example" in patterns
 
 
+def test_dockerignore_and_gitignore_exclude_backups_directory():
+    """scripts/odysseus-backup writes full data-directory snapshots (DB,
+    uploads, personal docs -- everything data/ itself is gitignored for) to
+    a top-level backups/ directory. Missing from both ignore files until the
+    release-plan security audit caught it -- a `git add -A` after running a
+    backup would have staged a complete personal-data snapshot."""
+    dockerignore = set((ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines())
+    gitignore = set((ROOT / ".gitignore").read_text(encoding="utf-8").splitlines())
+    assert "/backups/" in dockerignore
+    assert "backups/" in gitignore
+
+
 def test_cors_allow_methods_include_patch():
     methods = _cors_allow_methods()
     assert "PATCH" in methods

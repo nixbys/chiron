@@ -33,3 +33,15 @@ def test_python_tests_are_authoritative():
 
     assert "python -m pytest -q" in python_tests
     assert "continue-on-error:" not in python_tests
+
+
+def test_sensitive_paths_gate_is_authoritative():
+    """Regression for the release-plan's automated "no .env/data/logs/backups
+    tracked in git" gate: it must be a real blocking check, not an advisory
+    one someone could quietly ignore."""
+    workflow = _WORKFLOW.read_text()
+    sensitive_paths = _indented_block(workflow, "sensitive-paths", 2)
+
+    assert "git ls-files" in sensitive_paths
+    assert "continue-on-error:" not in sensitive_paths
+    assert "exit 1" in sensitive_paths
