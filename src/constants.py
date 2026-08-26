@@ -4,7 +4,7 @@ import os
 
 from src.runtime_paths import get_app_root, get_default_data_dir
 
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 
 # Odysseus Red fork version — tracks the security overlay independently of the
 # upstream platform version. Bumped when mcp_servers/, skills/, docker/toolchain/,
