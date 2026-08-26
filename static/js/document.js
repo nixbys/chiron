@@ -36,6 +36,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
   let _emailStreamRenderedBody = '';
   let _emailStreamTargetBody = '';
   let _emailLocalDraftDebounce = null;
+  let _emailRichbodySaveDebounce = null;
   const _EMAIL_LOCAL_DRAFT_PREFIX = 'odysseus.email.replyDraft.v1:';
 
   // Diff mode state
@@ -2222,6 +2223,12 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     document.querySelectorAll('.md-toolbar-edit-only').forEach(el => {
       el.style.display = (lang === 'markdown' && _mdActive) ? 'none' : '';
     });
+    const fsBtn = document.getElementById('doc-fontsize-btn');
+    if (fsBtn) {
+      const doc = activeDocId && docs.get(activeDocId);
+      const isPdfDoc = !!(doc && _isFormBackedDoc(doc.content || ''));
+      fsBtn.style.display = (isPdfDoc || (lang === 'markdown' && _mdActive)) ? 'none' : '';
+    }
     const mdToolbar = document.getElementById('doc-md-toolbar');
     if (mdToolbar) {
       mdToolbar.classList.toggle('md-preview-active', lang === 'markdown' && !!_mdActive);
@@ -2353,7 +2360,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 
   function _persistEmailLocalDraftSoon() {
     clearTimeout(_emailLocalDraftDebounce);
-    _emailLocalDraftDebounce = setTimeout(_persistEmailLocalDraftNow, 250);
+    _emailLocalDraftDebounce = setTimeout(_persistEmailLocalDraftNow, 800);
   }
 
   function _clearEmailLocalDraft(sourceUid, sourceFolder, inReplyTo) {
@@ -2393,20 +2400,41 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     const ta = document.getElementById('doc-editor-textarea');
     if (!ta) return;
     ta.value = rich.innerText;
-    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    const doc = activeDocId && docs.get(activeDocId);
+    if (doc && doc.language === 'email') {
+      const fields = _parseEmailHeader(doc.content || '');
+      doc.content = _buildEmailContent(
+        document.getElementById('doc-email-to')?.value || fields.to || '',
+        document.getElementById('doc-email-subject')?.value || fields.subject || '',
+        document.getElementById('doc-email-in-reply-to')?.value || fields.inReplyTo || '',
+        document.getElementById('doc-email-references')?.value || fields.references || '',
+        rich.innerHTML,
+        document.getElementById('doc-email-source-uid')?.value || fields.sourceUid || '',
+        document.getElementById('doc-email-source-folder')?.value || fields.sourceFolder || '',
+        document.getElementById('doc-email-cc')?.value || fields.cc || '',
+        document.getElementById('doc-email-bcc')?.value || fields.bcc || '',
+      );
+    }
+  }
+  function _scheduleEmailRichbodySave() {
+    _persistEmailLocalDraftSoon();
+    clearTimeout(_emailRichbodySaveDebounce);
+    _emailRichbodySaveDebounce = setTimeout(() => { saveDocument({ silent: true }); }, 2500);
   }
   function _wireEmailRichbody(rich) {
     if (rich._wired) { _syncEmailRichbody(rich); return; }
     rich._wired = true;
     rich.addEventListener('input', () => {
       _syncEmailRichbody(rich);
-      _persistEmailLocalDraftSoon();
+      _scheduleEmailRichbodySave();
     });
     // Highlight toolbar buttons (B / I / S, headings, lists) when the caret
     // sits inside formatted text. queryCommandState reflects the live
     // selection — we just translate that into .is-active classes the CSS
     // already understands.
-    const syncActive = () => {
+    let syncActiveFrame = 0;
+    const syncActiveNow = () => {
+      syncActiveFrame = 0;
       if (!rich.isConnected || rich.style.display === 'none') return;
       // Only sync when focus is inside the rich body — otherwise selection
       // outside it (e.g. clicking the toolbar itself) gives misleading state.
@@ -2430,10 +2458,13 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
         if (lBtn) lBtn.classList.toggle('is-active', !!inList);
       } catch (_) {}
     };
+    const syncActive = () => {
+      if (syncActiveFrame) return;
+      syncActiveFrame = requestAnimationFrame(syncActiveNow);
+    };
     rich.addEventListener('keyup',    syncActive);
     rich.addEventListener('mouseup',  syncActive);
     rich.addEventListener('focus',    syncActive);
-    rich.addEventListener('input',    syncActive);
     // selectionchange fires on the document; filter to selections inside rich.
     document.addEventListener('selectionchange', () => {
       const sel = window.getSelection();
@@ -2540,17 +2571,81 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     _emailStreamAnimFrame = requestAnimationFrame(tick);
   }
 
-  function _stripEmailReplyQuoteText(text) {
+  function _emailQuoteStartIndex(lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = String(lines[i] || '').trim();
+      if (
+        /^[-_=–—\s]{3,}(previous|original|forwarded)\s+(message|email|mail)[-_=–—\s]{3,}$/i.test(line)
+        || /^On .+ wrote:\s*$/i.test(line)
+        || /^-{2,}\s*Original Message\s*-{2,}$/i.test(line)
+      ) {
+        return i;
+      }
+      // Some pasted/converted threads lose the separator and start directly
+      // with mail headers. Treat that as quoted history only when the nearby
+      // lines look like a real header block.
+      if (/^From:\s+\S/i.test(line)) {
+        const nearby = lines.slice(i + 1, i + 8).map(l => String(l || '').trim());
+        if (nearby.some(l => /^To:\s+/i.test(l)) || nearby.some(l => /^Subject:\s+/i.test(l))) {
+          return i;
+        }
+      }
+    }
+    return -1;
+  }
+
+  function _emailQuoteStartOffset(text) {
     const original = String(text || '');
-    if (!original) return { body: '', stripped: false };
+    if (!original) return -1;
+    const boundary = String.raw`(?:^|\n|<br\s*\/?>|<\/(?:p|div|blockquote|li|tr|h[1-6])>)`;
+    const patterns = [
+      new RegExp(`${boundary}\\s*(?:[-_=–—\\s]|&nbsp;){3,}(?:previous|original|forwarded)\\s+(?:message|email|mail)(?:[-_=–—\\s]|&nbsp;){3,}`, 'i'),
+      new RegExp(`${boundary}\\s*On\\s+.{1,700}?\\s+wrote:\\s*`, 'i'),
+      new RegExp(`${boundary}\\s*-{2,}\\s*Original Message\\s*-{2,}`, 'i'),
+    ];
+    let best = -1;
+    for (const re of patterns) {
+      const m = re.exec(original);
+      if (!m) continue;
+      let idx = m.index;
+      const prefix = m[0].match(/^(?:\n|<br\s*\/?>|<\/(?:p|div|blockquote|li|tr|h[1-6])>)/i);
+      if (prefix) idx += prefix[0].length;
+      if (best < 0 || idx < best) best = idx;
+    }
+    const fromRe = new RegExp(`${boundary}\\s*From:\\s*\\S`, 'i');
+    const fromMatch = fromRe.exec(original);
+    if (fromMatch) {
+      let idx = fromMatch.index;
+      const prefix = fromMatch[0].match(/^(?:\n|<br\s*\/?>|<\/(?:p|div|blockquote|li|tr|h[1-6])>)/i);
+      if (prefix) idx += prefix[0].length;
+      const nearby = original.slice(idx, idx + 1200);
+      if (/(?:^|\n|<br\s*\/?>|<\/(?:p|div|blockquote|li|tr|h[1-6])>)\s*(?:To|Subject):\s*/i.test(nearby)) {
+        if (best < 0 || idx < best) best = idx;
+      }
+    }
+    return best;
+  }
+
+  function _splitEmailReplyQuote(text) {
+    const original = String(text || '');
+    if (!original) return { body: '', quote: '', stripped: false };
+    const htmlQuoteOffset = _emailQuoteStartOffset(original);
+    if (htmlQuoteOffset >= 0) {
+      const body = original.slice(0, htmlQuoteOffset).trim();
+      const quote = original.slice(htmlQuoteOffset).trim();
+      return { body, quote, stripped: true };
+    }
     const lines = original.split('\n');
-    const quoteIdx = lines.findIndex(line =>
-      /^-{5,}\s*Previous message\s*-{5,}$/i.test(line.trim())
-      || /^On .+ wrote:\s*$/i.test(line.trim())
-    );
-    if (quoteIdx <= 0) return { body: original.trim(), stripped: false };
+    const quoteIdx = _emailQuoteStartIndex(lines);
+    if (quoteIdx < 0) return { body: original.trim(), quote: '', stripped: false };
     const body = lines.slice(0, quoteIdx).join('\n').trim();
-    return { body, stripped: !!body };
+    const quote = lines.slice(quoteIdx).join('\n').trim();
+    return { body, quote, stripped: true };
+  }
+
+  function _stripEmailReplyQuoteText(text) {
+    const split = _splitEmailReplyQuote(text);
+    return { body: split.body, stripped: split.stripped };
   }
 
   function _emailReplyOwnText(text) {
@@ -2617,6 +2712,15 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     summary.title = summary.textContent;
   }
 
+  function _setEmailHeaderInputValue(id, value, { preserveFocused = true, preserveNonEmpty = false } = {}) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const next = value || '';
+    if (preserveFocused && document.activeElement === el) return;
+    if (preserveNonEmpty && !next && el.value) return;
+    if (el.value !== next) el.value = next;
+  }
+
   function _setEmailHeaderCollapsed(collapsed, { manual = true } = {}) {
     const header = document.getElementById('doc-email-header');
     const btn = document.getElementById('doc-email-collapse-btn');
@@ -2679,13 +2783,10 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     document.getElementById('doc-editor-highlight')?.classList.add('email-mode');
     let fields = _parseEmailHeader(doc.content || '');
     fields = _emailFieldsWithLocalDraft(fields);
-    const toInput = document.getElementById('doc-email-to');
     const subjectInput = document.getElementById('doc-email-subject');
-    const inReplyTo = document.getElementById('doc-email-in-reply-to');
-    const refs = document.getElementById('doc-email-references');
     const textarea = document.getElementById('doc-editor-textarea');
-    if (toInput) toInput.value = fields.to;
-    if (subjectInput) subjectInput.value = fields.subject;
+    _setEmailHeaderInputValue('doc-email-to', fields.to, { preserveNonEmpty: true });
+    _setEmailHeaderInputValue('doc-email-subject', fields.subject, { preserveNonEmpty: true });
     _setEmailHeaderCollapsed(!!(doc && doc._emailHeaderCollapsed), { manual: false });
     if (subjectInput && !subjectInput._emailTabBodyBound) {
       subjectInput._emailTabBodyBound = true;
@@ -2696,12 +2797,10 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
         }
       });
     }
-    if (inReplyTo) inReplyTo.value = fields.inReplyTo;
-    if (refs) refs.value = fields.references;
-    const sourceUid = document.getElementById('doc-email-source-uid');
-    const sourceFolder = document.getElementById('doc-email-source-folder');
-    if (sourceUid) sourceUid.value = fields.sourceUid || '';
-    if (sourceFolder) sourceFolder.value = fields.sourceFolder || '';
+    _setEmailHeaderInputValue('doc-email-in-reply-to', fields.inReplyTo, { preserveNonEmpty: true });
+    _setEmailHeaderInputValue('doc-email-references', fields.references, { preserveNonEmpty: true });
+    _setEmailHeaderInputValue('doc-email-source-uid', fields.sourceUid || '', { preserveNonEmpty: true });
+    _setEmailHeaderInputValue('doc-email-source-folder', fields.sourceFolder || '', { preserveNonEmpty: true });
     // Show/hide unread button only if we have a source UID (came from inbox)
     const unreadBtn = document.getElementById('doc-email-unread-btn');
     if (unreadBtn) unreadBtn.style.display = fields.sourceUid ? '' : 'none';
@@ -2824,11 +2923,14 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     const ccRow = document.getElementById('doc-email-cc-row');
     const bccRow = document.getElementById('doc-email-bcc-row');
     const ccToggle = document.getElementById('doc-email-show-cc');
-    const ccInput = document.getElementById('doc-email-cc');
-    const bccInput = document.getElementById('doc-email-bcc');
-    if (ccInput) ccInput.value = fields.cc || '';
-    if (bccInput) bccInput.value = fields.bcc || '';
-    const hasCcBcc = !!(fields.cc || fields.bcc);
+    _setEmailHeaderInputValue('doc-email-cc', fields.cc || '', { preserveNonEmpty: true });
+    _setEmailHeaderInputValue('doc-email-bcc', fields.bcc || '', { preserveNonEmpty: true });
+    const hasCcBcc = !!(
+      fields.cc ||
+      fields.bcc ||
+      document.getElementById('doc-email-cc')?.value ||
+      document.getElementById('doc-email-bcc')?.value
+    );
     if (ccRow) ccRow.style.display = hasCcBcc ? '' : 'none';
     if (bccRow) bccRow.style.display = hasCcBcc ? '' : 'none';
     if (ccToggle) ccToggle.style.display = hasCcBcc ? 'none' : '';
@@ -2847,19 +2949,14 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       return;
     }
 
-    const setValue = (id, value) => {
-      const el = document.getElementById(id);
-      const next = value || '';
-      if (el && el.value !== next) el.value = next;
-    };
-    setValue('doc-email-to', fields.to);
-    setValue('doc-email-subject', fields.subject);
-    setValue('doc-email-in-reply-to', fields.inReplyTo);
-    setValue('doc-email-references', fields.references);
-    setValue('doc-email-source-uid', fields.sourceUid || '');
-    setValue('doc-email-source-folder', fields.sourceFolder || '');
-    setValue('doc-email-cc', fields.cc || '');
-    setValue('doc-email-bcc', fields.bcc || '');
+    _setEmailHeaderInputValue('doc-email-to', fields.to, { preserveNonEmpty: true });
+    _setEmailHeaderInputValue('doc-email-subject', fields.subject, { preserveNonEmpty: true });
+    _setEmailHeaderInputValue('doc-email-in-reply-to', fields.inReplyTo, { preserveNonEmpty: true });
+    _setEmailHeaderInputValue('doc-email-references', fields.references, { preserveNonEmpty: true });
+    _setEmailHeaderInputValue('doc-email-source-uid', fields.sourceUid || '', { preserveNonEmpty: true });
+    _setEmailHeaderInputValue('doc-email-source-folder', fields.sourceFolder || '', { preserveNonEmpty: true });
+    _setEmailHeaderInputValue('doc-email-cc', fields.cc || '', { preserveNonEmpty: true });
+    _setEmailHeaderInputValue('doc-email-bcc', fields.bcc || '', { preserveNonEmpty: true });
 
     const unreadBtn = document.getElementById('doc-email-unread-btn');
     if (unreadBtn) unreadBtn.style.display = fields.sourceUid ? '' : 'none';
@@ -3978,7 +4075,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     const prevId = activeDocId;
     if (prevId && prevId !== docId && docs.has(prevId)) {
       const prev = docs.get(prevId);
-      if (!(prev.content || '').trim() && !(prev.title || '').trim()) {
+      if (prev.language !== 'email' && !(prev.content || '').trim() && !(prev.title || '').trim()) {
         fetch(`${API_BASE}/api/document/${prevId}`, { method: 'DELETE' }).catch(() => {});
         docs.delete(prevId);
         _syncDocIndicator();
@@ -6560,18 +6657,14 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     }));
   }
 
-  export async function replaceEmailReplyBody(docId, replyText) {
+  export async function replaceEmailReplyBody(docId, replyText, { force = false } = {}) {
     const doc = docs.get(docId);
     if (!doc) return;
     const fields = _parseEmailHeader(doc.content || '');
-    const lines = String(fields.body || '').split('\n');
-    const quoteIdx = lines.findIndex(line =>
-      /^-{5,}\s*Previous message\s*-{5,}$/i.test(line.trim())
-      || /^On .+ wrote:\s*$/i.test(line.trim())
-    );
-    const quote = quoteIdx >= 0 ? lines.slice(quoteIdx).join('\n') : '';
+    const oldSplit = _splitEmailReplyQuote(fields.body || '');
+    const quote = oldSplit.quote;
     const ownText = _emailReplyOwnText(fields.body || '');
-    if (ownText && !/^(\[AI reply draft will appear here\]|Drafting AI reply)/i.test(ownText)) {
+    if (!force && ownText && !/^(\[AI reply draft will appear here\]|Drafting AI reply)/i.test(ownText)) {
       if (uiModule) uiModule.showToast('AI reply ready, but draft was edited');
       return;
     }
@@ -8802,6 +8895,9 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
         }),
       });
       if (res.status === 404) {
+        if (silent && localDoc?.language === 'email') {
+          return;
+        }
         // Streaming/empty email drafts can leave a local tab pointing at a temp
         // or already-deleted document. Do not keep surfacing autosave errors for
         // a document the backend no longer knows about.
@@ -9961,7 +10057,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     // and enterDiffMode().
     if (_diffModeActive) exitDiffMode(true);
     let docId = data.doc_id;
-    const newContent = data.content || '';
+    let newContent = data.content || '';
 
     // Migrate streaming temp doc to real ID
     if (streamingId && streamingId.startsWith('_streaming_') && docs.has(streamingId)) {
@@ -10011,6 +10107,35 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     const textarea = document.getElementById('doc-editor-textarea');
     const oldContent = (docId === activeDocId && textarea) ? textarea.value : '';
     const isExistingDoc = docs.has(docId);
+    if (isExistingDoc) {
+      const existingDoc = docs.get(docId);
+      const existingLang = ((existingDoc?.language || data.language || '') + '').toLowerCase();
+      const oldFields = _parseEmailHeader(existingDoc?.content || '');
+      const newFields = _parseEmailHeader(newContent || '');
+      if (
+        existingLang === 'email'
+        && oldFields.body
+        && newFields.body
+        && (oldFields.inReplyTo || oldFields.sourceUid || newFields.inReplyTo || newFields.sourceUid)
+      ) {
+        const oldSplit = _splitEmailReplyQuote(oldFields.body);
+        if (oldSplit.quote) {
+          const newSplit = _splitEmailReplyQuote(newFields.body);
+          const nextBody = `${(newSplit.body || newFields.body || '').trim()}\n\n${oldSplit.quote}`.trim();
+          newContent = _buildEmailContent(
+            newFields.to || oldFields.to,
+            newFields.subject || oldFields.subject,
+            newFields.inReplyTo || oldFields.inReplyTo,
+            newFields.references || oldFields.references,
+            nextBody,
+            newFields.sourceUid || oldFields.sourceUid,
+            newFields.sourceFolder || oldFields.sourceFolder,
+            newFields.cc || oldFields.cc,
+            newFields.bcc || oldFields.bcc,
+          );
+        }
+      }
+    }
 
     // Add or update in docs map
     if (isExistingDoc) {
@@ -10451,6 +10576,21 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     return activeDocId;
   }
 
+  export function getActiveEmailComposerContext() {
+    if (!activeDocId) return null;
+    const doc = docs.get(activeDocId);
+    if (!doc || doc.language !== 'email') return null;
+    const fields = _parseEmailHeader(doc.content || '');
+    return {
+      docId: activeDocId,
+      sourceUid: fields.sourceUid || '',
+      sourceFolder: fields.sourceFolder || 'INBOX',
+      inReplyTo: fields.inReplyTo || '',
+      to: fields.to || '',
+      subject: fields.subject || '',
+    };
+  }
+
   /** Find an open email tab by source UID + folder. Returns docId or null. */
   export function findEmailDocId(uid, folder) {
     if (uid == null) return null;
@@ -10493,6 +10633,7 @@ const documentModule = {
   exitDiffMode,
   isDiffModeActive,
   getCurrentDocId,
+  getActiveEmailComposerContext,
   findEmailDocId,
   getSelectionContext,
   clearSelection,
