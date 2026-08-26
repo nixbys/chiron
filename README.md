@@ -128,6 +128,8 @@ The Odysseus core image is **not modified**. All sidecars are managed via `docke
 | `virustotal_lookup` | Hash, URL, domain, or IP reputation check |
 | `cve_lookup` | NVD CVE search by ID or keyword |
 | `otx_indicator` | AlienVault OTX threat intel lookup |
+| `censys_host` | Open services, TLS certificates, and ASN info for a host IP from Censys |
+| `censys_search` | Search Censys hosts by Censys Search Language query |
 
 ### `osint_server` — Passive OSINT
 
@@ -137,6 +139,7 @@ The Odysseus core image is **not modified**. All sidecars are managed via `docke
 | `username_search` | Cross-platform username enumeration (Sherlock) |
 | `dns_enum` | DNS record enumeration (A, MX, NS, TXT, CNAME) |
 | `whois_lookup` | WHOIS registration data |
+| `subdomain_enum` | Passive subdomain enumeration via Amass (cert transparency, DNS brute-force, APIs) |
 
 ### `web_vuln_server` — Web Assessment
 
@@ -146,6 +149,7 @@ The Odysseus core image is **not modified**. All sidecars are managed via `docke
 | `gobuster_dir` | Directory and file brute-force |
 | `sqlmap_scan` | SQL injection detection (non-destructive by default) |
 | `nuclei_scan` | Template-based vulnerability scanning |
+| `ffuf_fuzz` | Fast parameter/header/path fuzzing (ffuf) against an authorized target |
 
 ### `hashcrack_server` — Password / Hash
 
@@ -177,6 +181,7 @@ SpiderFoot use cases: `passive` (no active probing), `investigate` (balanced), `
 | `pdf_merge` | Assemble a final pentest report from per-tool output PDFs |
 | `pdf_extract_pages` | Carve specific pages from a large document |
 | `pdf_bentopdf_url` | Return the BentoPDF UI URL for interactive editing tasks |
+| `generate_report` | Render markdown/plain-text content (OSINT summaries, pentest findings) to a formatted PDF |
 
 Uses `pypdf` (already in `requirements.txt`) — no additional dependencies. For interactive work (redaction, compression, format conversion, signing), the agent hands users the BentoPDF URL at `http://localhost:3000`.
 
@@ -221,11 +226,11 @@ All transforms run in-process — no toolchain call required.
 |------|-------------|
 | `asset_add` | Register a host in the inventory |
 | `asset_list` | List all tracked assets with metadata |
-| `asset_get` | Retrieve a specific asset by IP |
+| `asset_summary` | Inventory summary: asset counts, severity breakdown, top risks |
 | `service_add` | Record an open service on a tracked asset |
-| `service_list` | List services for a given asset |
 | `finding_add` | Log a security finding against an asset |
 | `finding_list` | List findings, optionally filtered by asset or severity |
+| `finding_update` | Update a finding's status (e.g. remediated, false positive) |
 
 Backed by a WAL-mode SQLite database at `$ODYSSEUS_DATA_DIR/assets.db`.
 
@@ -328,7 +333,7 @@ SHODAN_API_KEY=
 VIRUSTOTAL_API_KEY=
 OTX_API_KEY=
 
-# Censys (censys_server)
+# Censys (intel_server)
 CENSYS_API_ID=
 CENSYS_API_SECRET=
 
@@ -357,9 +362,9 @@ odysseus-red/
 ├── mcp_servers/
 │   ├── common.py                # Shared: exec_in_toolchain, mcp_error, validators
 │   ├── recon_server.py          # nmap, masscan
-│   ├── intel_server.py          # Shodan, VirusTotal, CVE/NVD, OTX
-│   ├── osint_server.py          # theHarvester, Sherlock, DNS, WHOIS
-│   ├── web_vuln_server.py       # nikto, gobuster, sqlmap, nuclei
+│   ├── intel_server.py          # Shodan, VirusTotal, CVE/NVD, OTX, Censys
+│   ├── osint_server.py          # theHarvester, Sherlock, DNS, WHOIS, Amass
+│   ├── web_vuln_server.py       # nikto, gobuster, sqlmap, nuclei, ffuf
 │   ├── hashcrack_server.py      # hashid, john
 │   ├── spiderfoot_server.py     # SpiderFoot REST API client
 │   ├── pdf_server.py            # PDF intel + report assembly (pypdf)
@@ -389,7 +394,7 @@ odysseus-red/
 │       └── exec_api.py          # HTTP exec API (Bearer auth + structured logging)
 ├── docker-compose.security.yml  # Compose overlay: toolchain + SpiderFoot + OpenSearch + BentoPDF
 ├── docs/
-│   ├── adr/                     # Architecture decision records (ADR 001–004)
+│   ├── adr/                     # Architecture decision records (ADR 001–005)
 │   ├── develop-mcp-servers.md   # Guide for adding new MCP servers
 │   └── reverse-proxy.md         # HTTPS + Caddy/nginx/Traefik examples
 └── tests/

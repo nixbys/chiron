@@ -137,7 +137,7 @@ Common codes:
 ## Registering the new server
 
 1. Add the server script to `mcp_servers/my_server.py`
-2. Add an MCP server entry in the upstream Odysseus `config.json` (or equivalent config) pointing to `python mcp_servers/my_server.py`
+2. Register it as a stdio MCP server pointing at `python mcp_servers/my_server.py` — Odysseus has no static config file for this; servers are registered as rows in the app's own `McpServer` table, either through **Settings → Integrations → MCP** in the UI, or by an admin-authenticated `POST /api/mcp/servers` call (see `routes/mcp/mcp_routes.py`). There's no separate seed step for a fresh install: the built-in fork servers aren't auto-registered by default, so exercising a new one locally means adding it the same way an operator would.
 3. Add the file path to the CI `paths:` trigger in `.github/workflows/ci-security.yml`
 4. Add the file to the bandit scan list in the same workflow
 
