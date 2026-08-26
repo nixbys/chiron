@@ -30,6 +30,15 @@ A natural recommendation, given upstream itself splits bleeding-edge (`dev`) fro
 - **`dev` ← `upstream/dev`**: sync monthly at minimum, or sooner if a security-relevant upstream fix lands (matching the fork's existing practice of checking `git log --oneline --first-parent dev..upstream/dev` at the start of each sync session). Batch size stays ~20-40 commits per merge, per the established boundary-selection heuristic (avoid oversized hidden merges; route around or absorb a revealed side-branch on its own merits — see `upstream_sync_progress` project memory for the full worked methodology).
 - **`main` ← `dev` (release promotion)**: promote whenever `dev` has a clean, CI-green run and there's a meaningful set of changes to ship — not on a fixed calendar, but *don't let it go longer than a few sync cycles* without a promotion. A `main` that's many sync cycles behind `dev` is the exact staleness this ADR is meant to prevent.
 
+## Repo Hygiene Is a Release Prerequisite, Not a Nice-to-Have
+
+Green CI is necessary but not sufficient before promoting `dev` → `main` or cutting a tag. Also required, every time:
+
+- 0 open issues, 0 open PRs, 0 open Dependabot/code-scanning/secret-scanning alerts, and no stale/unnecessary branches. See the repo-hygiene-and-docs standing rule (project memory) for the full triage methodology — in particular, don't delete a branch just because it's unmerged by git ancestry without first diffing its actual content against current `dev`; a stale-looking branch can hold real unlanded work.
+- README.md, other docs, and inline code comments verified *current* against the actual code, not just present. Check specific claims (tool names, file paths, config mechanisms, version numbers) against the real source — a doc that exists but describes stale behavior is worse than no doc, because it actively misleads the next reader.
+
+This became a formal requirement after `main` was found frozen 2230 commits behind `dev` (see "Context" above) and, separately, after a documentation pass turned up a fork MCP tool table that had drifted enough to describe two tools that didn't exist while omitting two that did. Both gaps were individually cheap to fix once found, but both went unnoticed for a long time precisely because neither was gated on anything — this makes checking for both a required step of every promotion, not a follow-up someone might get to.
+
 ## Changelog Discipline
 
 - Every upstream-sync merge commit on `dev` documents its own provenance in full: which upstream commits landed, how every conflict was resolved, and full verification output (compile checks, JS syntax, AST duplicate scan, whole-repo diff stat, full pytest run vs. baseline). This is *the* per-sync changelog — `git log` on `dev` is the source of truth for "what changed upstream vs. what's fork-specific" at batch granularity.

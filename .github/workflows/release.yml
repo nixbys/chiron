@@ -4,6 +4,14 @@ name: Release
 # Creates an immutable GitHub Release with the corresponding CHANGELOG section.
 #
 # Release process:
+#   0. Prerequisite, not optional: 0 open issues, 0 open PRs, 0 open
+#      Dependabot/code-scanning/secret-scanning alerts, and no stale/
+#      unnecessary branches on dev -- and README.md, other docs, and
+#      inline code comments verified current against the actual code
+#      (not just "a doc exists", check its specific claims). See
+#      docs/adr/005-upstream-sync-strategy.md and the repo-hygiene-
+#      and-docs standing rule. A release is not "ready" on green CI
+#      alone if this is skipped.
 #   1. Bump ODYSSEUS_RED_VERSION in src/constants.py on dev.
 #   2. Move [Unreleased] → [X.Y.Z] in CHANGELOG.md on dev.
 #   3. Open a PR from dev → main; wait for CI (ci-security.yml) to pass.
