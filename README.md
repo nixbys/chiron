@@ -446,7 +446,10 @@ Active tools in this repo can cause significant impact on target systems. Before
 
 Keep Odysseus auth enabled. Do not expose the SpiderFoot port (5001) or toolchain container ports to the public internet — both are internal-network only by default. BentoPDF is bound to `127.0.0.1:3000` and processes all files client-side — no document content passes through the container.
 
-For Odysseus platform security notes see the upstream [SECURITY.md](SECURITY.md) and [THREAT_MODEL.md](THREAT_MODEL.md).
+- Keep `AUTH_ENABLED=true` for any network-accessible deployment.
+- Keep `LOCALHOST_BYPASS=false` outside local development.
+
+For Odysseus platform security notes see the upstream [SECURITY.md](SECURITY.md) and [THREAT_MODEL.md](THREAT_MODEL.md), and the base platform's [deployment security notes](docs/setup.md#security-notes) (`AUTH_ENABLED`, `LOCALHOST_BYPASS`, and related settings).
 
 ---
 
