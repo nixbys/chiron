@@ -69,6 +69,174 @@ from src.agent_tools import (
 
 logger = logging.getLogger(__name__)
 
+# Redaction patterns for common secret-bearing shapes. Explicit and tested
+# (see tests/test_agent_loop_redaction.py) rather than one clever broad regex —
+# safety first, but we try not to mangle harmless prose. Applied in order.
+#
+# Tool output, live progress tails, and displayed commands all round-trip
+# through model context and the SSE stream to the client, so a secret a tool
+# happens to print (an env dump, a verbose curl, a leaked cookie header) would
+# otherwise reach both the model and the browser in cleartext. This redacts
+# before either happens.
+_REDACTED = "[redacted]"
+
+# Cookie: ... / Set-Cookie: ... — redact the rest of the line (cookies hold spaces).
+_SENSITIVE_COOKIE_RE = re.compile(
+    r"(?i)\b((?:set-)?cookie\s*[:=]\s*)[^\r\n]+"
+)
+# URL credentials, e.g. postgres://user:pass@host/db. The password half allows
+# inner colons (postgres://user:pa:ss@host/db) but still stops at / and @.
+_SENSITIVE_URL_CRED_RE = re.compile(
+    r"(?i)\b([a-z][a-z0-9+.\-]*://)[^\s:/@]+:[^\s/@]+@"
+)
+# Prefix-only discovery regexes. Each matches the key and its separator (the part
+# we KEEP); the value that follows is found by a linear scanner rather than by a
+# regex, so there is no backtracking-prone quantifier over uncontrolled input.
+#
+# Authorization: Bearer <tok> / Authorization: Basic "two word secret"
+_AUTH_PREFIX_RE = re.compile(
+    r"(?i)authorization\s*[:=]\s*(?:bearer|basic)\s+"
+)
+# Provider-prefixed env names, e.g. OPENAI_API_KEY=..., AWS_SECRET_ACCESS_KEY=...,
+# GITHUB_TOKEN=... — require a sensitive suffix preceded by `_` so benign names
+# that merely end in KEY (MONKEY, TURKEY) are left alone.
+_ENV_PREFIX_RE = re.compile(
+    r"(?:export\s+)?\b[A-Z][A-Z0-9_]*"
+    r"_(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIALS?)\s*=\s*"
+)
+# Generic sensitive key, e.g. password=..., api_key: ..., client_secret=...
+_KEY_PREFIX_RE = re.compile(
+    r"(?i)\b(?:password|passwd|pwd|token|api[_-]?key|client_secret|secret)\b\s*[:=]\s*"
+)
+# Obvious provider-shaped bare tokens (no surrounding key needed).
+_SENSITIVE_BARE_TOKEN_RE = re.compile(
+    r"\b("
+    r"sk-[A-Za-z0-9_\-]{16,}"          # OpenAI / Anthropic style
+    r"|gh[pousr]_[A-Za-z0-9]{20,}"     # GitHub PAT
+    r"|xox[baprs]-[A-Za-z0-9\-]{10,}"  # Slack
+    r"|AKIA[0-9A-Z]{16}"               # AWS access key id
+    r"|hf_[A-Za-z0-9]{16,}"            # Hugging Face token
+    r"|AIza[0-9A-Za-z_\-]{20,}"        # Google API key
+    r")\b"
+)
+
+
+def _consume_secret_value_end(text: str, start: int) -> int:
+    """Return the exclusive end index of the secret value beginning at ``start``.
+
+    If the value is quoted, scan to the matching unescaped quote (backslash
+    escapes are skipped two chars at a time). Otherwise scan to the first
+    whitespace, comma, or semicolon. The scan is linear in the length of the
+    input, so it cannot exhibit catastrophic backtracking.
+    """
+    n = len(text)
+    if start >= n:
+        return start
+    quote = text[start]
+    if quote in ("'", '"'):
+        i = start + 1
+        while i < n:
+            ch = text[i]
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                return i + 1
+            i += 1
+        return n  # unterminated quote: redact to the end
+    i = start
+    while i < n and not text[i].isspace() and text[i] not in (",", ";"):
+        i += 1
+    return i
+
+
+def _redact_after_prefix(text: str, prefix_re: "re.Pattern") -> str:
+    """Redact the value following each ``prefix_re`` match using a linear scan."""
+    result = []
+    pos = 0
+    n = len(text)
+    while pos < n:
+        match = prefix_re.search(text, pos)
+        if match is None:
+            result.append(text[pos:])
+            break
+        result.append(text[pos:match.end()])
+        value_end = _consume_secret_value_end(text, match.end())
+        if value_end > match.end():
+            result.append(_REDACTED)
+            pos = value_end
+        else:
+            # Empty value: nothing to redact; step past the prefix and continue.
+            pos = match.end()
+            if pos < n:
+                result.append(text[pos])
+                pos += 1
+    return "".join(result)
+
+
+def _redact_private_keys(text: str) -> str:
+    """Replace PEM private-key blocks with a placeholder via linear scanning.
+
+    Finds ``-----BEGIN `` markers, verifies the header names a PRIVATE KEY,
+    locates the matching ``-----END `` marker, and collapses the whole block.
+    No regex is used, so the (multi-line, uncontrolled) body cannot trigger
+    polynomial matching.
+    """
+    begin_marker = "-----BEGIN "
+    end_marker = "-----END "
+    dash = "-----"
+    max_header = 64  # generous bound on "[TYPE ]PRIVATE KEY"
+    result = []
+    pos = 0
+    while True:
+        begin = text.find(begin_marker, pos)
+        if begin == -1:
+            result.append(text[pos:])
+            return "".join(result)
+        header_start = begin + len(begin_marker)
+        header_close = text.find(dash, header_start)
+        if (
+            header_close == -1
+            or header_close - header_start > max_header
+            or not text[header_start:header_close].endswith("PRIVATE KEY")
+        ):
+            result.append(text[pos:header_start])
+            pos = header_start
+            continue
+        end = text.find(end_marker, header_close)
+        if end == -1:
+            result.append(text[pos:])
+            return "".join(result)
+        end_header_start = end + len(end_marker)
+        end_close = text.find(dash, end_header_start)
+        if (
+            end_close == -1
+            or end_close - end_header_start > max_header
+            or not text[end_header_start:end_close].endswith("PRIVATE KEY")
+        ):
+            result.append(text[pos:header_start])
+            pos = header_start
+            continue
+        result.append(text[pos:begin])
+        result.append("[redacted private key]")
+        pos = end_close + len(dash)
+
+
+def _redact_sensitive_text(value: object) -> str:
+    """Redact obvious credential values before surfacing tool output."""
+    if value is None:
+        return ""
+
+    text = str(value)
+    text = _redact_private_keys(text)
+    text = _redact_after_prefix(text, _AUTH_PREFIX_RE)
+    text = _SENSITIVE_COOKIE_RE.sub(r"\1" + _REDACTED, text)
+    text = _SENSITIVE_URL_CRED_RE.sub(r"\1" + _REDACTED + "@", text)
+    text = _redact_after_prefix(text, _ENV_PREFIX_RE)
+    text = _redact_after_prefix(text, _KEY_PREFIX_RE)
+    return _SENSITIVE_BARE_TOKEN_RE.sub(_REDACTED, text)
+
+
 _BROWSER_MCP_PREFIX = "mcp__builtin_browser__"
 
 
@@ -4517,7 +4685,10 @@ async def stream_agent_loop(
     if exact_approval is not None:
         approved = exact_approval.pending
         approved_block = ToolBlock(approved.tool_name, approved.content)
-        approved_display = approved.content.strip()
+        # Redact the DISPLAY copy only -- approved.content/approved_block stay
+        # untouched, since exact_approval.matches() below and the real replay
+        # execution both need the actual content, not a redacted stand-in.
+        approved_display = _redact_sensitive_text(approved.content.strip())
         approval_matches = exact_approval.matches(
             owner=owner,
             session_id=session_id,
@@ -4627,7 +4798,7 @@ async def stream_agent_loop(
                 + "\n\n"
             )
 
-        approved_output = str(
+        approved_output = _redact_sensitive_text(str(
             approved_result.get("output")
             or approved_result.get("stdout")
             or approved_result.get("response")
@@ -4635,7 +4806,7 @@ async def stream_agent_loop(
             or approved_result.get("content")
             or approved_result.get("error")
             or "(no output)"
-        )
+        ))
         approved_event = {
             "type": "tool_output",
             "tool": approved.tool_name,
@@ -5488,7 +5659,12 @@ async def stream_agent_loop(
             if _looks_like_promise and _intent_nudge_count < _MAX_INTENT_NUDGES:
                 _intent_nudge_count += 1
                 _matched_phrase = _intent_match.group(0).strip()
-                logger.info(f"[agent] intent-without-action nudge #{_intent_nudge_count} on round {round_num}: {_matched_phrase!r}")
+                # Logged only in its redacted form -- the raw phrase is still
+                # used unredacted below in the system message replayed back to
+                # the model (it needs to see what it actually wrote), but a
+                # server log is not a place a credential the model echoed
+                # should land in cleartext.
+                logger.info(f"[agent] intent-without-action nudge #{_intent_nudge_count} on round {round_num}: {_redact_sensitive_text(_matched_phrase)!r}")
                 _lower_phrase = _matched_phrase.lower()
                 _cookbook_log_hint = ""
                 if any(_word in _lower_phrase for _word in ("log", "logs", "output", "tail", "status")):
@@ -5516,6 +5692,7 @@ async def stream_agent_loop(
                 continue
             if _looks_like_promise:
                 _matched_phrase = _intent_match.group(0).strip()
+                _matched_phrase_safe = _redact_sensitive_text(_matched_phrase)
                 _guard_message = (
                     "The agent stopped because it repeatedly announced a tool "
                     "action without making the tool call."
@@ -5524,7 +5701,7 @@ async def stream_agent_loop(
                     "[agent] intent-without-action guard exhausted on round %d after %d nudges: %r",
                     round_num,
                     _intent_nudge_count,
-                    _matched_phrase,
+                    _matched_phrase_safe,
                 )
                 yield (
                     "data: "
@@ -5534,7 +5711,7 @@ async def stream_agent_loop(
                         "message": _guard_message,
                         "round": round_num,
                         "nudges": _intent_nudge_count,
-                        "matched": _matched_phrase,
+                        "matched": _matched_phrase_safe,
                     })
                     + "\n\n"
                 )
@@ -5574,7 +5751,13 @@ async def stream_agent_loop(
         if _stuck_rounds >= 4 or _runaway:
             reason = (f"calling {_runaway} with identical arguments over and over" if _runaway
                       else "repeating the same tool calls without new progress")
-            logger.warning(f"[agent] loop-breaker tripped on round {round_num} ({reason}); sig={_sig[:80]!r}")
+            # _sig embeds up to 120 raw chars of each repeated tool call's
+            # content (see its construction above) for dedup comparison — a
+            # repeated "echo api_key=..." would otherwise land in the log
+            # verbatim here. Redact this logged copy only; _sig itself must
+            # stay unredacted since _detect_runaway_call/_call_freq compare
+            # on the real content.
+            logger.warning(f"[agent] loop-breaker tripped on round {round_num} ({reason}); sig={_redact_sensitive_text(_sig[:80])!r}")
             yield (
                 "data: "
                     + json.dumps({
@@ -5635,6 +5818,11 @@ async def stream_agent_loop(
                 cmd_display = block.content.split("\n")[0].strip()[:80]
             else:
                 cmd_display = full_command
+            # Redact the DISPLAY copy only — full_command/block.content stay
+            # untouched below, since they still go to the real tool executor
+            # and to the security-decision check just below, both of which
+            # need the actual content, not a redacted stand-in.
+            cmd_display = _redact_sensitive_text(cmd_display)
 
             security_decision = run_security.decision_for(
                 block.tool_type,
@@ -5803,6 +5991,11 @@ async def stream_agent_loop(
                         evt = await _progress_q.get()
                         if evt is None:
                             break
+                        # The live tail is a raw slice of in-progress output —
+                        # same leak surface as the final tool_output, just
+                        # streamed earlier, so it needs the same redaction.
+                        if "tail" in evt:
+                            evt = {**evt, "tail": _redact_sensitive_text(evt["tail"])}
                         yield (
                             f'data: {json.dumps({"type": "tool_progress", "tool": block.tool_type, "round": round_num, **evt})}\n\n'
                         )
@@ -5968,29 +6161,29 @@ async def stream_agent_loop(
                 # empty) stdout/stderr; fall back to the error so the "timed
                 # out" reason reaches the UI instead of a blank result.
                 raw = result["stdout"] or result["stderr"] or result.get("error", "")
-                output_text = _truncate(raw)
+                output_text = _truncate(_redact_sensitive_text(raw))
             elif "output" in result:
                 # bash / python canonical result: {"output": ..., "exit_code": ...}
                 raw = result["output"] or ""
-                output_text = _truncate(raw)
+                output_text = _truncate(_redact_sensitive_text(raw))
             elif "response" in result:
                 # AI interaction tools (chat_with_model, send_to_session)
                 label = result.get("model", result.get("session_name", "AI"))
-                output_text = _truncate(f"{label}: {result['response']}")
+                output_text = _truncate(_redact_sensitive_text(f"{label}: {result['response']}"))
             elif "content" in result:
-                output_text = _truncate(result["content"])
+                output_text = _truncate(_redact_sensitive_text(result["content"]))
             elif "results" in result:
-                output_text = _truncate(result["results"])
+                output_text = _truncate(_redact_sensitive_text(result["results"]))
             elif "session_id" in result and "name" in result:
                 output_text = f"Session created: {result['name']} (id: {result['session_id']})"
             elif "success" in result:
                 output_text = (
                     f"Written: {result.get('path', '')}"
                     if result["success"]
-                    else f"Error: {result.get('error', '')}"
+                    else f"Error: {_redact_sensitive_text(result.get('error', ''))}"
                 )
             elif "error" in result:
-                output_text = _truncate(result["error"])
+                output_text = _truncate(_redact_sensitive_text(result["error"]))
 
             # Emit tool_output (include ui_event data if present)
             tool_output_data = {"type": "tool_output", "tool": block.tool_type, "command": cmd_display, "output": output_text, "exit_code": result.get("exit_code")}
