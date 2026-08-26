@@ -727,6 +727,8 @@ async function _deleteEmailAndAdvance(em, card, opts = {}) {
     const ok = await styledConfirm(`Delete "${subject}"?`, { confirmText: 'Delete', cancelText: 'Cancel', danger: true });
     if (!ok) return;
   }
+  const busy = _showEmailDeleteOverlay(card);
+  await busy?.ready;
   const wasExpanded = !!card?.classList?.contains('doclib-card-expanded');
   const sibling = wasExpanded
     ? (_findSiblingEmailCard(card, +1) || _findSiblingEmailCard(card, -1))
@@ -736,9 +738,11 @@ async function _deleteEmailAndAdvance(em, card, opts = {}) {
     await fetch(`${API_BASE}/api/email/delete/${em.uid}?folder=${encodeURIComponent(state._libFolder)}${_acct()}`, { method: 'DELETE' });
   } catch (err) {
     console.error('Failed to delete email:', err);
+    busy?.remove?.();
     showToast('Failed to delete email');
     return;
   }
+  busy?.remove?.();
   await _animateEmailCardRemoval([em.uid]);
   state._libEmails = state._libEmails.filter(e => String(e.uid) !== String(em.uid));
   state._selectedUids.delete(em.uid);
@@ -756,6 +760,31 @@ async function _deleteEmailAndAdvance(em, card, opts = {}) {
   } else {
     document.getElementById('email-lib-modal')?.classList.remove('email-reading');
   }
+}
+
+function _showEmailDeleteOverlay(target) {
+  if (!target) return null;
+  const wp = spinnerModule.createWhirlpool(18);
+  const overlay = document.createElement('div');
+  overlay.className = 'email-delete-overlay';
+  overlay.appendChild(wp.element);
+  const prevPos = target.style.position;
+  const prevPointerEvents = target.style.pointerEvents;
+  if (getComputedStyle(target).position === 'static') target.style.position = 'relative';
+  target.style.pointerEvents = 'none';
+  target.classList.add('email-delete-busy');
+  target.appendChild(overlay);
+  const ready = new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  return {
+    ready,
+    remove() {
+      try { wp.destroy?.(); } catch (_) {}
+      overlay.remove();
+      target.classList.remove('email-delete-busy');
+      target.style.pointerEvents = prevPointerEvents;
+      target.style.position = prevPos;
+    }
+  };
 }
 
 function _animateEmailCardRemoval(uids, opts = {}) {
@@ -6341,6 +6370,18 @@ async function _maybeAutoTranslateEmail(reader) {
     const res = await fetch(`${API_BASE}/api/email/config`);
     const cfg = await res.json();
     if (!cfg || !cfg.email_auto_translate) return;
+    try {
+      const sid = window.sessionModule?.getCurrentSessionId?.() || '';
+      if (sid) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 800);
+        const statusRes = await fetch(`${API_BASE}/api/chat/stream_status/${encodeURIComponent(sid)}`, {
+          signal: ctrl.signal,
+        }).catch(() => null);
+        clearTimeout(timer);
+        if (statusRes && statusRes.ok) return;
+      }
+    } catch (_) {}
     await _translateEmail(reader, cfg.email_translate_language || 'English', { auto: true });
   } catch (_) {}
 }
@@ -6569,9 +6610,17 @@ function _showReaderMoreMenu(em, card, reader, anchor) {
       label: 'Move to Trash',
       icon: _trashIcon,
       action: async () => {
+        const busy = _showEmailDeleteOverlay(card);
+        await busy?.ready;
         try {
           await fetch(`${API_BASE}/api/email/delete/${em.uid}?folder=${encodeURIComponent(state._libFolder)}${_acct()}`, { method: 'DELETE' });
-        } catch (e) { console.error(e); }
+        } catch (e) {
+          console.error(e);
+          busy?.remove?.();
+          showToast('Failed to delete email');
+          return;
+        }
+        busy?.remove?.();
         await closeAndRemove();
       },
     },
@@ -6586,9 +6635,17 @@ function _showReaderMoreMenu(em, card, reader, anchor) {
           { confirmText: 'Delete', cancelText: 'Cancel', danger: true }
         );
         if (!ok) return;
+        const busy = _showEmailDeleteOverlay(card);
+        await busy?.ready;
         try {
           await fetch(`${API_BASE}/api/email/delete-permanent/${em.uid}?folder=${encodeURIComponent(state._libFolder)}${_acct()}`, { method: 'DELETE' });
-        } catch (e) { console.error(e); }
+        } catch (e) {
+          console.error(e);
+          busy?.remove?.();
+          showToast('Failed to delete email');
+          return;
+        }
+        busy?.remove?.();
         await closeAndRemove();
       },
     },
@@ -6793,7 +6850,17 @@ function _showCardMenu(em, anchor) {
       const subject = em.subject || '(no subject)';
       const ok = await styledConfirm(`Delete "${subject}"?`, { confirmText: 'Delete', cancelText: 'Cancel', danger: true });
       if (!ok) return;
-      await fetch(`${API_BASE}/api/email/delete/${em.uid}?folder=${encodeURIComponent(state._libFolder)}${_acct()}`, { method: 'DELETE' });
+      const card = document.querySelector(`#email-lib-grid .doclib-card[data-uid="${CSS.escape(String(em.uid))}"]`);
+      const busy = _showEmailDeleteOverlay(card);
+      await busy?.ready;
+      try {
+        await fetch(`${API_BASE}/api/email/delete/${em.uid}?folder=${encodeURIComponent(state._libFolder)}${_acct()}`, { method: 'DELETE' });
+      } catch (e) {
+        busy?.remove?.();
+        showToast('Failed to delete email');
+        throw e;
+      }
+      busy?.remove?.();
       await _animateEmailCardRemoval([em.uid]);
       state._libEmails = state._libEmails.filter(e => String(e.uid) !== String(em.uid));
       _renderGrid();
@@ -6952,6 +7019,15 @@ async function _bulkAction(action) {
   if (cancelBtn) cancelBtn.disabled = true;
   if (selectAll) selectAll.disabled = true;
   if (countEl) countEl.textContent = `${verbing} ${uids.length}…`;
+  const deleteOverlays = action === 'delete'
+    ? uids.map(uid => {
+        const card = document.querySelector(`#email-lib-grid .doclib-card[data-uid="${CSS.escape(String(uid))}"]`);
+        return _showEmailDeleteOverlay(card);
+      }).filter(Boolean)
+    : [];
+  if (deleteOverlays.length) {
+    await Promise.all(deleteOverlays.map(busy => busy.ready).filter(Boolean));
+  }
 
   // Single-uid worker.
   const handleOne = async (uid) => {
@@ -7018,6 +7094,9 @@ async function _bulkAction(action) {
     });
 
     if (action === 'archive' || action === 'delete') {
+      if (action === 'delete') {
+        deleteOverlays.forEach(busy => busy.remove?.());
+      }
       await _animateEmailCardRemoval(uids);
       const removed = new Set(uids.map(uid => String(uid)));
       state._libEmails = state._libEmails.filter(e => !removed.has(String(e.uid)));
@@ -7031,6 +7110,7 @@ async function _bulkAction(action) {
       state._libEmails = state._libEmails.filter(e => !removed.has(String(e.uid)));
     }
   } finally {
+    deleteOverlays.forEach(busy => busy.remove?.());
     if (busySpinner) busySpinner.destroy();
     // Restore whichever button we hijacked (delete vs actions).
     if (targetBtn) {

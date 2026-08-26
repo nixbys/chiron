@@ -92,6 +92,13 @@ function _displayHistoryContent(content) {
   ].join('\n');
 }
 
+function _stripUserVisionBlocks(text) {
+  return String(text || '').replace(
+    /\n*\[Image: ([^\]]+)\]\n[\s\S]*?(?=\n*\[Image: |\n*\[Image attached: |\n*=== File: |\n*\[PDF content\]:|$)/g,
+    ''
+  ).trim();
+}
+
 function _historyPageLimit() {
   return window.innerWidth <= 768 ? HISTORY_PAGE_LIMIT_MOBILE : HISTORY_PAGE_LIMIT_DESKTOP;
 }
@@ -114,6 +121,7 @@ function _renderHistoryMessage(msg, modelName) {
     displayContent = '';
   }
   if (msg.role === 'user') {
+    displayContent = _stripUserVisionBlocks(displayContent);
     const trimmed = displayContent.trim();
     if (
       trimmed === 'Continue where you left off' ||
@@ -168,26 +176,9 @@ function _renderHistoryMessage(msg, modelName) {
     markdownModule.squashOutsideCode(markdownModule.renderContent(displayContent || ''))
   );
   if (msg.role === 'user' && Array.isArray(meta?.attachments) && meta.attachments.length) {
-    const cards = document.createElement('div');
-    cards.className = 'attach-cards history-attach-cards';
-    for (const att of meta.attachments) {
-      const card = document.createElement('div');
-      card.className = 'attach-card history-attach-card';
-      const icon = document.createElement('span');
-      icon.className = 'attach-card-icon';
-      icon.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>';
-      const name = document.createElement('span');
-      name.className = 'attach-card-name';
-      name.textContent = att.name || 'Image attached';
-      const size = document.createElement('span');
-      size.className = 'attach-card-size';
-      size.textContent = 'image';
-      card.appendChild(icon);
-      card.appendChild(name);
-      card.appendChild(size);
-      cards.appendChild(card);
+    if (chatRenderer.buildAttachCards) {
+      body.appendChild(chatRenderer.buildAttachCards(meta.attachments));
     }
-    body.appendChild(cards);
   }
 
   wrap.appendChild(roleEl);
@@ -2433,6 +2424,17 @@ export function clearStreaming(sessionId) {
   _updateRailNotifs();
 }
 
+function _clearRunningState(sessionId) {
+  if (!sessionId) return;
+  var changed = false;
+  if (_researchingSessions.delete(sessionId)) changed = true;
+  if (_streamingSessions.delete(sessionId)) changed = true;
+  if (changed) {
+    _updateResearchDots();
+    _updateRailNotifs();
+  }
+}
+
 export function markStreamComplete(sessionId) {
   _researchingSessions.delete(sessionId);
   _streamingSessions.delete(sessionId);
@@ -2503,9 +2505,15 @@ async function _checkServerStream(sessionId) {
     if (window.chatModule && window.chatModule.hasActiveStream && window.chatModule.hasActiveStream(sessionId)) return;
 
     const res = await fetch(`${API_BASE}/api/chat/stream_status/${sessionId}`);
-    if (!res.ok) return; // 404 = no active stream
+    if (!res.ok) {
+      _clearRunningState(sessionId);
+      return; // 404 = no active stream
+    }
     const info = await res.json();
-    if (info.status !== 'streaming') return;
+    if (info.status !== 'streaming') {
+      _clearRunningState(sessionId);
+      return;
+    }
 
     // Skip if this is a research stream — research has its own progress UI
     if (info.mode === 'research' || info.is_research) return;
