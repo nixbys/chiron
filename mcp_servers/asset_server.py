@@ -28,16 +28,33 @@ _DATA_DIR = Path(os.environ.get("ODYSSEUS_DATA_DIR", "./data"))
 _DB_PATH = _DATA_DIR / "assets.db"
 
 
+_db_initialized = False
+
+
 def _get_db() -> sqlite3.Connection:
+    global _db_initialized
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(_DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    if not _db_initialized:
+        # Lazy schema init, on first real DB access rather than at import
+        # time (module import happens before the MCP stdio handshake). An
+        # eager call here previously crashed the whole process -- and with
+        # it, tool *registration* -- if the data directory was missing or
+        # unwritable at boot (bad volume permissions, full disk, a
+        # read-only mount). Deferring it means the server still starts and
+        # advertises its tools; a genuinely broken data directory now
+        # surfaces as a normal per-call "db_error" MCP response (see the
+        # try/except in call_tool below) instead of an opaque dead
+        # subprocess the MCP client can only report as a transport failure.
+        _init_db(conn)
+        _db_initialized = True
     return conn
 
 
-def _init_db() -> None:
-    with _get_db() as conn:
+def _init_db(conn: sqlite3.Connection) -> None:
+    with conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS assets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,8 +102,6 @@ def _init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_assets_ip ON assets(ip);
         """)
 
-
-_init_db()
 
 TOOLS = [
     Tool(

@@ -52,6 +52,37 @@ def check_readiness() -> Dict[str, object]:
     )
     checks["local_first"] = {"ok": True, "local": local_first}
 
+    # MCP servers — informational, never fatal to overall readiness (a
+    # misconfigured or not-yet-connected optional MCP server doesn't mean
+    # the instance itself is broken). Upstream has open reports of MCP
+    # servers intermittently failing to register with tools silently
+    # "disappearing" rather than raising a visible error; this surfaces
+    # each configured server's actual connection status (populated by the
+    # startup connection sweep in app.py) so a broken server shows up here
+    # instead of only being discoverable by a user hitting a missing tool
+    # mid-session. Snapshot-only: does not attempt new connections, so this
+    # stays fast enough for a readiness probe hit on every health check.
+    try:
+        from src.tool_utils import get_mcp_manager
+
+        manager = get_mcp_manager()
+        statuses = manager.get_all_statuses() if manager else {}
+        failed = {
+            sid: s for sid, s in statuses.items()
+            if s.get("status") not in ("connected", "needs_auth", "connecting")
+        }
+        checks["mcp_servers"] = {
+            "ok": True,
+            "configured": len(statuses),
+            "connected": sum(1 for s in statuses.values() if s.get("status") == "connected"),
+            "failed": {
+                sid: {"name": s.get("name"), "status": s.get("status"), "error": s.get("error")}
+                for sid, s in failed.items()
+            },
+        }
+    except Exception as e:
+        checks["mcp_servers"] = {"ok": True, "error": f"status unavailable: {e}"}
+
     ready = all(bool(c.get("ok")) for c in checks.values())
     return {
         "ready": ready,
