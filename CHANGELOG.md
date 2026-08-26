@@ -8,6 +8,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- `src/agent_loop.py` — tool output, live progress tails, and displayed
+  commands now get redacted for common secret shapes (cookies, URL
+  credentials, `Authorization` headers, provider-shaped bare tokens,
+  PEM private keys) before reaching the model or the SSE stream to the
+  client. There was previously no redaction anywhere in this pipeline.
+  Salvaged from an unlanded local branch discovered during a repo
+  cleanup pass; see that commit for full detail.
+- `README.md` — MCP tool tables had drifted from the actual server
+  code: `intel_server` was missing `censys_host`/`censys_search`,
+  `osint_server` was missing `subdomain_enum`, `web_vuln_server` was
+  missing `ffuf_fuzz`, `pdf_server` was missing `generate_report`, and
+  `asset_server` listed two tools (`asset_get`, `service_list`) that
+  don't exist in the code while omitting two that do (`asset_summary`,
+  `finding_update`). Also fixed a stale `docs/adr/` count (004 → 005)
+  and the Quick Start's Podman/Docker command wording.
+- `.env.example` / `README.md` — the Censys config comment referenced
+  a `censys_server` module that was never created; Censys support
+  actually lives in `intel_server.py`.
+- `docs/develop-mcp-servers.md` — the "registering a new server" step
+  referenced a `config.json` (or equivalent) file that doesn't exist;
+  MCP servers are registered as rows in the app's own database via
+  Settings → Integrations → MCP or `POST /api/mcp/servers`, not a
+  static config file.
+
+### Removed
+- 9 stale/superseded branches on `origin` (all content already present
+  on `dev`, confirmed individually rather than assumed from merge
+  ancestry). One of them held real unlanded work (the redaction fix
+  above) that was ported to `dev` first.
+
 ---
 
 ## [0.4.0] — 2026-08-26
