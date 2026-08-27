@@ -394,7 +394,7 @@ odysseus-red/
 │       └── exec_api.py          # HTTP exec API (Bearer auth + structured logging)
 ├── docker-compose.security.yml  # Compose overlay: toolchain + SpiderFoot + OpenSearch + BentoPDF
 ├── docs/
-│   ├── adr/                     # Architecture decision records (ADR 001–005)
+│   ├── adr/                     # Architecture decision records (ADR 001–006)
 │   ├── develop-mcp-servers.md   # Guide for adding new MCP servers
 │   └── reverse-proxy.md         # HTTPS + Caddy/nginx/Traefik examples
 └── tests/

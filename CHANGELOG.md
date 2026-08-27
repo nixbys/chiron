@@ -4,6 +4,8 @@ All notable changes to **Odysseus Red** (this fork) are documented here. Changes
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before the final `vX.Y.Z` — see [ADR 006](docs/adr/006-release-channel-strategy.md). Those prerelease tags don't get their own section here; their GitHub Release notes are generated from whatever's under `[Unreleased]` at tag time.
+
 ---
 
 ## [Unreleased]
