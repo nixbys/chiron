@@ -54,6 +54,10 @@ def test_main_loads_admin_password_from_env_file(tmp_path, monkeypatch):
     monkeypatch.setattr(setup_module, "create_env", lambda: None)
     monkeypatch.setattr(setup_module, "check_deps", lambda: None)
     monkeypatch.setattr(setup_module, "init_database", lambda: None)
+    # Not this test's concern, and its network port checks would make an
+    # otherwise-deterministic unit test depend on what happens to be running
+    # on the CI host.
+    monkeypatch.setattr(setup_module, "host_capability_scan", lambda: None)
     # Force the non-interactive branch so the test never blocks on a prompt.
     monkeypatch.setenv("ODYSSEUS_SKIP_ADMIN_PROMPT", "1")
 

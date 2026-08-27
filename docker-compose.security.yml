@@ -8,16 +8,23 @@
 #   bentopdf    — BentoPDF client-side PDF toolkit; web UI at http://localhost:3000
 #   opensearch  — findings persistence index
 #
-# toolchain, spiderfoot, bentopdf, and opensearch are gated behind the
-# "sidecars" Compose profile. If you already have the underlying
-# tool/service installed on this machine (e.g. nmap on PATH, a native
-# SpiderFoot/OpenSearch install), omit `--profile sidecars` to skip that
-# container and instead point the corresponding env var
+# toolchain, spiderfoot, bentopdf, and opensearch are each gated behind
+# TWO Compose profiles: the shared "sidecars" group (for
+# `--profile sidecars`, unchanged — starts all four, same as always) AND
+# their own individual profile name ("toolchain", "spiderfoot",
+# "bentopdf", "opensearch"). This lets you skip just ONE of the four
+# instead of all-or-nothing: if you already have the underlying tool/
+# service installed on this machine (e.g. nmap on PATH, a native
+# SpiderFoot/OpenSearch install), pass only the profiles you still want,
+# e.g. `--profile toolchain --profile bentopdf --profile opensearch` to
+# start everything except SpiderFoot, and point the corresponding env var
 # (ODYSSEUS_TOOLCHAIN_API, SPIDERFOOT_URL, BENTOPDF_URL, OPENSEARCH_URL) at
-# your local instance — see docs/setup.md "Hybrid / local-tools mode" and
-# TOOLCHAIN_EXEC_MODE / TOOLCHAIN_EXEC_MODE_<BINARY> for per-tool control
-# over the toolchain binaries specifically. Ollama is not gated here since
-# the comment below already documents redirecting it to a host instance.
+# your local instance instead — see docs/setup.md "Hybrid / local-tools
+# mode", `src/host_capabilities.py` (setup.py runs this scan and offers to
+# set the right env vars automatically), and TOOLCHAIN_EXEC_MODE /
+# TOOLCHAIN_EXEC_MODE_<BINARY> for per-tool control over the toolchain
+# binaries specifically. Ollama is not gated here since the comment below
+# already documents redirecting it to a host instance.
 
 services:
   # ── extend upstream odysseus with security + LLM env vars ────────────────
@@ -76,7 +83,7 @@ services:
 
   # ── Kali sidecar ──────────────────────────────────────────────────────────
   toolchain:
-    profiles: ["sidecars"]
+    profiles: ["sidecars", "toolchain"]
     build:
       context: ./docker/toolchain
       dockerfile: Dockerfile
@@ -99,7 +106,7 @@ services:
 
   # ── SpiderFoot OSINT ──────────────────────────────────────────────────────
   spiderfoot:
-    profiles: ["sidecars"]
+    profiles: ["sidecars", "spiderfoot"]
     image: docker.io/fopina/spiderfoot:latest
     container_name: odysseus-spiderfoot
     hostname: odysseus-spiderfoot
@@ -118,7 +125,7 @@ services:
 
   # ── BentoPDF ──────────────────────────────────────────────────────────────
   bentopdf:
-    profiles: ["sidecars"]
+    profiles: ["sidecars", "bentopdf"]
     image: ghcr.io/alam00000/bentopdf-simple:latest
     container_name: odysseus-bentopdf
     hostname: odysseus-bentopdf
@@ -130,7 +137,7 @@ services:
 
   # ── OpenSearch — persistent findings index ────────────────────────────────
   opensearch:
-    profiles: ["sidecars"]
+    profiles: ["sidecars", "opensearch"]
     image: docker.io/opensearchproject/opensearch:2.17.0
     container_name: odysseus-opensearch
     hostname: odysseus-opensearch
