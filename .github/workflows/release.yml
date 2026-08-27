@@ -18,6 +18,12 @@ name: Release
 #   4. Merge the PR.
 #   5. On main: git tag -a vX.Y.Z -m "Odysseus Red vX.Y.Z"
 #   6. git push origin vX.Y.Z  ← triggers this workflow.
+#
+# Prereleases (alpha/beta/rc): see docs/adr/006-release-channel-strategy.md.
+# Same steps above, minus step 2 (no CHANGELOG section needed) and tagging
+# vX.Y.Z-alpha.N / -beta.N / -rc.N instead of the final vX.Y.Z at step 5 —
+# this workflow marks those "Pre-release" automatically and pulls the
+# generated notes from [Unreleased] instead of a version-specific section.
 
 on:
   push:
@@ -53,9 +59,15 @@ jobs:
           VERSION="${TAG#v}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          # A version starting with 0. is a pre-1.0 release — mark it pre-release
-          # on GitHub so it does not appear as "latest" for users on main.
-          if [[ "${VERSION}" == 0.* ]]; then
+          # Two independent reasons a tag is marked pre-release on GitHub (never
+          # "latest", never bumps what a plain `git clone` on main implies):
+          #   - a version starting with 0. (pre-1.0 — the whole project is still
+          #     pre-release by SemVer's own definition)
+          #   - a SemVer prerelease suffix (-alpha.N / -beta.N / -rc.N) — see
+          #     docs/adr/006-release-channel-strategy.md. Maturity is signaled by
+          #     tagging one branch (main), not by maintaining separate long-lived
+          #     alpha/beta/rc branches.
+          if [[ "${VERSION}" == 0.* ]] || [[ "${VERSION}" =~ -(alpha|beta|rc)(\.[0-9]+)?$ ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
@@ -69,13 +81,38 @@ jobs:
 
           content = pathlib.Path("CHANGELOG.md").read_text()
           version = os.environ["VERSION"]
+          is_prerelease_tag = bool(re.search(r"-(alpha|beta|rc)(\.[0-9]+)?$", version))
 
-          # Match from "## [VERSION]..." to the next "## " heading (exclusive).
-          pattern = rf'## \[{re.escape(version)}\][^\n]*\n(.*?)(?=\n## |\Z)'
-          m = re.search(pattern, content, re.DOTALL)
-          if m:
-              notes = m.group(1).strip()
-          else:
+          def section(heading: str) -> str | None:
+              # Match from "## [HEADING]..." to the next "## " heading (exclusive).
+              pattern = rf'## \[{re.escape(heading)}\][^\n]*\n(.*?)(?=\n## |\Z)'
+              m = re.search(pattern, content, re.DOTALL)
+              return m.group(1).strip() if m else None
+
+          # 1. An exact "## [X.Y.Z]" section always wins if present -- this is
+          #    what a final release (X.Y.Z with no prerelease suffix) is
+          #    expected to have, per the documented release process.
+          notes = section(version)
+
+          # 2. A prerelease tag (alpha/beta/rc) is cut ad hoc from whatever's
+          #    currently on dev/main, per ADR 006 -- it is not expected to have
+          #    its own CHANGELOG section (that would mean rewriting CHANGELOG.md
+          #    on every alpha/beta bump for content that all rolls into the
+          #    same eventual final-version entry). Show what's accumulated in
+          #    [Unreleased] instead, so the release notes are still genuinely
+          #    informative rather than a placeholder.
+          if notes is None and is_prerelease_tag:
+              unreleased = section("Unreleased")
+              if unreleased:
+                  notes = (
+                      f"Prerelease build ({version}). Changes accumulated so far "
+                      f"toward the next version (not yet a final CHANGELOG entry):\n\n"
+                      f"{unreleased}"
+                  )
+
+          # 3. Nothing found either way -- generic fallback so the release still
+          #    gets created with *something*, rather than failing the workflow.
+          if notes is None:
               notes = (
                   f"Release v{version} of Odysseus Red — the security overlay fork of Odysseus.\n\n"
                   f"See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) "
