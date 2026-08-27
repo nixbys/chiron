@@ -236,6 +236,128 @@ def check_arch():
     sys.exit(1)
 
 
+def _env_var_is_active(env_path, var_name):
+    """True if var_name has an uncommented assignment anywhere in .env —
+    used to avoid re-suggesting (or duplicating) something the user already
+    configured themselves, whether via this scan on a previous run or by
+    hand."""
+    if not os.path.exists(env_path):
+        return False
+    with open(env_path, "r", encoding="utf-8-sig") as f:
+        for line in f:
+            if line.strip().startswith(f"{var_name}="):
+                return True
+    return False
+
+
+def _prompt_yes_no(question):
+    try:
+        answer = input(f"  {question} [y/N]: ").strip().lower()
+    except EOFError:
+        return False
+    return answer in ("y", "yes")
+
+
+def host_capability_scan():
+    """Offer to reuse tools/services already present on the host instead of
+    provisioning fresh copies of what docker-compose.security.yml would
+    otherwise start. See src/host_capabilities.py for the full scan/verify
+    design and why it never trusts a detection without also verifying it.
+
+    Always scans and verifies; only ever writes to .env for something the
+    caller explicitly accepted this run. Skips prompting entirely (reports
+    findings only) when not running in an interactive terminal, or when
+    ODYSSEUS_SKIP_HOST_SCAN is set — matching this file's existing
+    ODYSSEUS_SKIP_ADMIN_PROMPT convention for non-interactive/CI/Docker-
+    entrypoint runs, where there is nobody present to answer a prompt and
+    a default of "no reuse" is always the safe one.
+    """
+    from src.host_capabilities import run_scan, format_env_suggestion, isolation_tradeoff_warning
+
+    result = run_scan()
+
+    if result.in_container:
+        print("  [skip] Running inside a container — cannot see the real host's")
+        print("         installed binaries (that's container isolation working as")
+        print("         intended). Toolchain-binary reuse only applies to a native")
+        print("         install; service detection below still works via")
+        print("         host.docker.internal.")
+
+    reusable_binaries = result.reusable_binaries
+    reusable_services = result.reusable_services
+    if not reusable_binaries and not reusable_services:
+        print("  [ok] Nothing already on this host that Odysseus Red would")
+        print("       otherwise provision itself for — nothing to offer.")
+        return
+
+    interactive = sys.stdin.isatty() and not os.getenv("ODYSSEUS_SKIP_HOST_SCAN")
+    env_path = os.path.join(BASE_DIR, ".env")
+    to_write = []      # (description, env_lines) accepted this run
+    log_entries = []    # every finding, accepted or not, for the audit log
+
+    for check in reusable_binaries:
+        cap = check.capability
+        already = _env_var_is_active(env_path, cap.env_var)
+        log_entries.append(
+            f"binary={cap.name} path={check.path} verified={check.verified} "
+            f"detail={check.detail!r} already_configured={already}"
+        )
+        if already:
+            continue
+        print(f"\n  Found {cap.name} on this host: {check.detail}")
+        if interactive and _prompt_yes_no(f"Use this instead of the toolchain container for {cap.name}?"):
+            to_write.append((cap.name, [format_env_suggestion(check)]))
+            log_entries[-1] += " accepted=true"
+        elif not interactive:
+            print(f"         (not interactive — skipping; set {cap.env_var}=local in .env to use it)")
+            log_entries[-1] += " accepted=false(non-interactive)"
+        else:
+            log_entries[-1] += " accepted=false"
+
+    for check in reusable_services:
+        cap = check.capability
+        already = any(_env_var_is_active(env_path, v) for v in cap.env_vars)
+        log_entries.append(
+            f"service={cap.name} found_at={check.found_at} verified={check.verified} "
+            f"detail={check.detail!r} already_configured={already}"
+        )
+        if already:
+            continue
+        print(f"\n  Found {cap.name} at {check.found_at}: {check.detail}")
+        if interactive and _prompt_yes_no(f"Use this instead of provisioning a new {cap.name} container?"):
+            to_write.append((cap.name, format_env_suggestion(check).splitlines()))
+            print(f"         Remember: skip the \"{cap.compose_profile}\" Compose profile too, e.g.")
+            print(f"           --profile toolchain --profile spiderfoot --profile bentopdf --profile opensearch")
+            print(f"         (omit \"{cap.compose_profile}\" from that list)")
+            log_entries[-1] += " accepted=true"
+        elif not interactive:
+            print(f"         (not interactive — skipping; set {'/'.join(cap.env_vars)} in .env to use it)")
+            log_entries[-1] += " accepted=false(non-interactive)"
+        else:
+            log_entries[-1] += " accepted=false"
+
+    if to_write:
+        with open(env_path, "a", encoding="utf-8") as f:
+            f.write("\n# --- Added by setup.py's host-capability scan ---\n")
+            for name, lines in to_write:
+                f.write(f"# Reusing host {name} instead of provisioning a fresh copy\n")
+                for line in lines:
+                    f.write(line + "\n")
+        print(f"\n  [ok] Wrote {sum(len(lines) for _, lines in to_write)} line(s) to .env")
+        print(f"       {isolation_tradeoff_warning()}")
+
+    log_path = os.path.join(BASE_DIR, "logs", "host_capability_scan.log")
+    try:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        from datetime import datetime, timezone
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now(timezone.utc).isoformat(timespec='seconds')}]\n")
+            for entry in log_entries:
+                f.write(f"  {entry}\n")
+    except OSError as e:
+        print(f"  [warn] Could not write scan log: {e}")
+
+
 def main():
     print("\n=== Odysseus Setup ===\n")
 
@@ -277,6 +399,13 @@ def main():
     except Exception as e:
         print(f"  [warn] Admin creation failed: {e}")
         admin_status = "failed"
+
+    print("\n6. Checking for reusable host tools/services...")
+    try:
+        host_capability_scan()
+    except Exception as e:
+        print(f"  [warn] Host capability scan failed: {e}")
+        print("         Not fatal — Odysseus Red will provision its own copies as usual.")
 
     print("\n=== Setup complete ===")
     # start-macos.sh launches the server itself (on its own port) right after

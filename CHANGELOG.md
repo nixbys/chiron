@@ -10,6 +10,35 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 
 ## [Unreleased]
 
+### Added
+- `src/host_capabilities.py` + `setup.py` — a new interactive host-capability
+  scan (setup.py step 6, native installs) that probes `PATH` for the 16
+  toolchain binaries and the well-known ports of the 6 sidecar services
+  (Ollama, ChromaDB, SearXNG, SpiderFoot, OpenSearch, BentoPDF), verifies
+  each service by its actual response shape rather than "port is open"
+  alone (avoids mistaking an unrelated service on the same port for the
+  real one), then offers to write the matching `TOOLCHAIN_EXEC_MODE_*` /
+  service-URL lines into `.env` and logs accepted suggestions to
+  `logs/host_capability_scan.log`. Self-detects when running inside the
+  container (via `docker/entrypoint.sh`'s automatic `setup.py` invocation)
+  and skips the binary scan there — container isolation makes it
+  structurally meaningless — while still running the service scan against
+  `host.docker.internal`. No-ops without prompting when stdin isn't a TTY
+  or `ODYSSEUS_SKIP_HOST_SCAN` is set.
+- `docker-compose.security.yml` — `toolchain`, `spiderfoot`, `bentopdf`,
+  and `opensearch` each gained their own Compose profile name alongside
+  the shared `sidecars` profile, so a subset of sidecars can now actually
+  be started independently (e.g. `--profile toolchain --profile bentopdf
+  --profile opensearch`). Previously all four shared one profile value,
+  making the existing "omit `--profile sidecars` to skip just this one"
+  doc comment literally false.
+- [ADR 006](docs/adr/006-release-channel-strategy.md) — documents the
+  chosen release-channel strategy: one working branch (`main`) with
+  SemVer prerelease tags (`vX.Y.Z-alpha.N` → `-beta.N` → `-rc.N` →
+  `vX.Y.Z`) instead of parallel long-lived alpha/beta/rc branches, plus
+  the matching `release.yml` changes (prerelease detection, `[Unreleased]`
+  fallback for prerelease tag CHANGELOG extraction).
+
 ### Fixed
 - `src/agent_loop.py` — tool output, live progress tails, and displayed
   commands now get redacted for common secret shapes (cookies, URL
