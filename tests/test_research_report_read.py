@@ -21,14 +21,20 @@ import pytest
 from src.tool_implementations import do_manage_research
 from src.agent_loop import TOOL_SECTIONS
 
-_DATA_DIR = Path("data/deep_research")
-
 
 @pytest.fixture
 def saved_report():
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    # Resolve DEEP_RESEARCH_DIR at fixture time (not import time) so this
+    # honors whatever ODYSSEUS_DATA_DIR was in effect when the test runs --
+    # a hardcoded "data/deep_research" literal previously bypassed that
+    # entirely and wrote into the real repo-local ./data, which fails with
+    # a PermissionError in a checkout where ./data is owned by a different
+    # uid (e.g. a container-mapped user) than whoever runs pytest.
+    from src.constants import DEEP_RESEARCH_DIR
+    data_dir = Path(DEEP_RESEARCH_DIR)
+    data_dir.mkdir(parents=True, exist_ok=True)
     rid = "rp-testreport1363"
-    path = _DATA_DIR / f"{rid}.json"
+    path = data_dir / f"{rid}.json"
     path.write_text(json.dumps({
         "query": "trending blender video ideas",
         "result": "## Findings\nShort-form Geometry Nodes tutorials are trending.",
