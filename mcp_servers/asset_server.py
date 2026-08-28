@@ -101,6 +101,18 @@ def _init_db(conn: sqlite3.Connection) -> None:
             CREATE INDEX IF NOT EXISTS idx_findings_status ON findings(status);
             CREATE INDEX IF NOT EXISTS idx_assets_ip ON assets(ip);
         """)
+        # Migration: engagement_id groups assets/findings under an
+        # mcp_servers/engagement_server.py engagement. Added after the
+        # tables above shipped, so existing databases need an ALTER TABLE
+        # rather than a fresh CREATE TABLE picking it up.
+        asset_cols = {row[1] for row in conn.execute("PRAGMA table_info(assets)")}
+        if "engagement_id" not in asset_cols:
+            conn.execute("ALTER TABLE assets ADD COLUMN engagement_id TEXT")
+        finding_cols = {row[1] for row in conn.execute("PRAGMA table_info(findings)")}
+        if "engagement_id" not in finding_cols:
+            conn.execute("ALTER TABLE findings ADD COLUMN engagement_id TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_assets_engagement ON assets(engagement_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_findings_engagement ON findings(engagement_id)")
 
 
 TOOLS = [
@@ -125,6 +137,7 @@ TOOLS = [
                     "default": [],
                 },
                 "notes": {"type": "string", "default": ""},
+                "engagement_id": {"type": "string", "description": "Group this asset under an engagement (see engagement_server's engagement_create)"},
             },
             "required": ["ip"],
         },
@@ -162,31 +175,34 @@ TOOLS = [
                 "description": {"type": "string"},
                 "evidence": {"type": "string", "description": "Raw tool output or proof"},
                 "tool": {"type": "string", "description": "Tool that found this (e.g. nuclei, nmap)"},
+                "engagement_id": {"type": "string", "description": "Group this finding under an engagement (see engagement_server's engagement_create)"},
             },
             "required": ["title", "severity"],
         },
     ),
     Tool(
         name="asset_list",
-        description="List all assets in the inventory, optionally filtered by criticality or tag.",
+        description="List all assets in the inventory, optionally filtered by criticality, tag, or engagement.",
         inputSchema={
             "type": "object",
             "properties": {
                 "criticality": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
                 "tag": {"type": "string"},
+                "engagement_id": {"type": "string"},
                 "limit": {"type": "integer", "default": 50},
             },
         },
     ),
     Tool(
         name="finding_list",
-        description="List findings, optionally filtered by severity, status, or asset IP.",
+        description="List findings, optionally filtered by severity, status, asset IP, or engagement.",
         inputSchema={
             "type": "object",
             "properties": {
                 "severity": {"type": "string", "enum": ["critical", "high", "medium", "low", "info"]},
                 "status": {"type": "string", "enum": ["open", "remediated", "accepted", "false_positive"]},
                 "ip": {"type": "string"},
+                "engagement_id": {"type": "string"},
                 "limit": {"type": "integer", "default": 50},
             },
         },
@@ -230,15 +246,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:  # noqa: C
             ip = arguments["ip"]
             tags = json.dumps(arguments.get("tags", []))
             conn.execute("""
-                INSERT INTO assets (ip, hostname, os, criticality, tags, first_seen, last_seen, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO assets (ip, hostname, os, criticality, tags, first_seen, last_seen, notes, engagement_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(ip) DO UPDATE SET
                     hostname=excluded.hostname, os=excluded.os,
                     criticality=excluded.criticality, tags=excluded.tags,
-                    last_seen=excluded.last_seen, notes=excluded.notes
+                    last_seen=excluded.last_seen, notes=excluded.notes,
+                    engagement_id=COALESCE(excluded.engagement_id, assets.engagement_id)
             """, (ip, arguments.get("hostname", ""), arguments.get("os", ""),
                   arguments.get("criticality", "medium"), tags, now, now,
-                  arguments.get("notes", "")))
+                  arguments.get("notes", ""), arguments.get("engagement_id")))
             conn.commit()
             result = f"Asset {ip} recorded."
 
@@ -270,12 +287,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:  # noqa: C
                 asset_id = row["id"] if row else None
             conn.execute("""
                 INSERT INTO findings
-                    (asset_id, title, severity, cvss, cve_id, description, evidence, tool, first_seen, last_seen)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (asset_id, title, severity, cvss, cve_id, description, evidence, tool, first_seen, last_seen, engagement_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (asset_id, arguments["title"], arguments["severity"],
                   arguments.get("cvss"), arguments.get("cve_id"),
                   arguments.get("description", ""), arguments.get("evidence", ""),
-                  arguments.get("tool", ""), now, now))
+                  arguments.get("tool", ""), now, now, arguments.get("engagement_id")))
             conn.commit()
             result = f"Finding '{arguments['title']}' ({arguments['severity']}) recorded."
 
@@ -285,6 +302,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:  # noqa: C
             if crit := arguments.get("criticality"):
                 query += " AND criticality=?"
                 params.append(crit)
+            if engagement_id := arguments.get("engagement_id"):
+                query += " AND engagement_id=?"
+                params.append(engagement_id)
             query += " ORDER BY last_seen DESC LIMIT ?"
             params.append(arguments.get("limit", 50))
             rows = conn.execute(query, params).fetchall()
@@ -310,6 +330,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:  # noqa: C
             if ip := arguments.get("ip"):
                 query += " AND a.ip=?"
                 params.append(ip)
+            if engagement_id := arguments.get("engagement_id"):
+                query += " AND f.engagement_id=?"
+                params.append(engagement_id)
             query += " ORDER BY CASE f.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5 END, f.last_seen DESC LIMIT ?"
             params.append(arguments.get("limit", 50))
             rows = conn.execute(query, params).fetchall()

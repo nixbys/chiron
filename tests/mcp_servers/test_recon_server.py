@@ -75,3 +75,19 @@ async def test_call_tool_unknown():
     results = await call_tool("nonexistent_tool", {})
     assert results
     assert "[error:unknown_tool]" in results[0].text
+
+
+@pytest.mark.asyncio
+@patch("mcp_servers.common.requests.post")
+async def test_call_tool_tls_cert_info(mock_post):
+    mock_post.return_value = _make_response(stdout="Not valid before: 2026-01-01\nNot valid after: 2027-01-01")
+    results = await call_tool("tls_cert_info", {"host": "192.0.2.1", "port": 443})
+    assert results
+    assert "Not valid after" in results[0].text
+
+
+@pytest.mark.asyncio
+async def test_call_tool_tls_cert_info_invalid_host():
+    results = await call_tool("tls_cert_info", {"host": "not_a_valid_host!@#"})
+    assert results
+    assert "[error:" in results[0].text

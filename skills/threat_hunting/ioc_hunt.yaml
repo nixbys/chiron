@@ -64,3 +64,17 @@ steps:
       findings: "{{ steps }}"
       format: markdown
     description: "Hunt report: expanded IOC list, infrastructure map, coverage assessment"
+
+  - id: watchlist_seed
+    tool: watchlist_add
+    args:
+      indicator: "{{ seed }}"
+      kind: "ip"
+    description: >
+      Optional — a one-shot hunt only looks at this instant. If the seed
+      or a pivoted indicator is still worth tracking, add it to the
+      persistent watchlist (watchlist_server) so watchlist_check
+      (a scheduled task) re-checks it against Shodan/VirusTotal/OTX/Censys
+      going forward and files a finding on any future change. Set `kind`
+      to whatever matches the actual indicator (ip/domain/hash/url).
+    optional: true

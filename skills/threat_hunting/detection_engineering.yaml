@@ -1,0 +1,50 @@
+name: detection_engineering
+version: "1.0"
+description: >
+  Write a Sigma detection rule and validate it against your own findings
+  index before relying on it — the log-detection equivalent of writing and
+  testing a YARA rule (see skills/malware_analysis/file_triage.yaml for
+  the file-pattern side).
+
+inputs:
+  rule_name:
+    type: string
+    description: "Filename for the rule, alnum/underscore/hyphen only"
+  rule_yaml:
+    type: string
+    description: "Full Sigma rule YAML (title, logsource, detection, level, tags)"
+
+steps:
+  - id: write_rule
+    tool: sigma_rule_write
+    args:
+      name: "{{ rule_name }}"
+      rule_yaml: "{{ rule_yaml }}"
+    description: "Save and validate the rule parses as well-formed Sigma"
+
+  - id: preview_query
+    tool: sigma_rule_convert
+    args:
+      name: "{{ rule_name }}"
+    description: "See the OpenSearch Lucene query the rule compiles to, before running it"
+
+  - id: test_rule
+    tool: sigma_rule_test
+    args:
+      name: "{{ rule_name }}"
+      index: "odysseus-findings"
+      limit: 20
+    description: "Run the rule against the findings index and check the match count/samples make sense"
+
+  - id: iterate
+    description: >
+      If sigma_rule_test finds nothing (or too much), the detection field
+      names in your rule's `detection` block likely don't match what's
+      actually indexed — check findings_server.py's mapping (title,
+      severity, cvss, cve_id, ip, port, tool, description, status, tags)
+      and adjust, or point `index` at wherever your real log data lives.
+
+notes: >
+  Requires pysigma + pysigma-backend-opensearch installed
+  (requirements-optional.txt) for sigma_rule_convert/sigma_rule_test.
+  sigma_rule_write/list/delete work without them.

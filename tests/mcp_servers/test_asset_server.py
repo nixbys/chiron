@@ -76,6 +76,85 @@ async def test_asset_add_duplicate_ok(tmp_data_dir):
 
 
 @pytest.mark.asyncio
+async def test_asset_add_and_list_by_engagement(tmp_data_dir):
+    mod = tmp_data_dir
+    await mod.call_tool("asset_add", {"ip": "10.0.0.5", "engagement_id": "eng-1"})
+    await mod.call_tool("asset_add", {"ip": "10.0.0.6", "engagement_id": "eng-2"})
+
+    results = await mod.call_tool("asset_list", {"engagement_id": "eng-1"})
+    text = results[0].text
+    assert "10.0.0.5" in text
+    assert "10.0.0.6" not in text
+
+
+@pytest.mark.asyncio
+async def test_finding_add_and_list_by_engagement(tmp_data_dir):
+    mod = tmp_data_dir
+    await mod.call_tool("finding_add", {
+        "title": "Open SSH", "severity": "low", "engagement_id": "eng-1",
+    })
+    await mod.call_tool("finding_add", {
+        "title": "Open RDP", "severity": "medium", "engagement_id": "eng-2",
+    })
+
+    results = await mod.call_tool("finding_list", {"engagement_id": "eng-1"})
+    text = results[0].text
+    assert "Open SSH" in text
+    assert "Open RDP" not in text
+
+
+@pytest.mark.asyncio
+async def test_asset_add_preserves_engagement_id_on_update(tmp_data_dir):
+    """A follow-up asset_add for the same IP with no engagement_id (e.g. a
+    plain rescan) must not clear a previously-recorded engagement_id."""
+    mod = tmp_data_dir
+    await mod.call_tool("asset_add", {"ip": "10.0.0.7", "engagement_id": "eng-1"})
+    await mod.call_tool("asset_add", {"ip": "10.0.0.7", "hostname": "rescanned"})
+
+    results = await mod.call_tool("asset_list", {"engagement_id": "eng-1"})
+    assert "10.0.0.7" in results[0].text
+
+
+@pytest.mark.asyncio
+async def test_engagement_id_migration_on_existing_db(tmp_path, monkeypatch):
+    """A database created before the engagement_id columns existed must be
+    transparently migrated on next open, not crash or lose data."""
+    import importlib
+    import sqlite3
+
+    monkeypatch.setenv("ODYSSEUS_DATA_DIR", str(tmp_path))
+    db_path = tmp_path / "assets.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Simulate a pre-migration schema (no engagement_id column).
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript("""
+        CREATE TABLE assets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT, hostname TEXT, os TEXT,
+            criticality TEXT DEFAULT 'medium', tags TEXT DEFAULT '[]',
+            first_seen REAL, last_seen REAL, notes TEXT DEFAULT '',
+            UNIQUE(ip)
+        );
+        INSERT INTO assets (ip, hostname, first_seen, last_seen) VALUES ('10.0.0.99', 'legacy', 1, 1);
+    """)
+    conn.commit()
+    conn.close()
+
+    import mcp_servers.asset_server as asset_mod
+    importlib.reload(asset_mod)
+
+    # Pre-existing row survives the migration.
+    results = await asset_mod.call_tool("asset_list", {})
+    assert "10.0.0.99" in results[0].text
+
+    # New engagement-scoped writes work post-migration.
+    await asset_mod.call_tool("asset_add", {"ip": "10.0.0.100", "engagement_id": "eng-1"})
+    results = await asset_mod.call_tool("asset_list", {"engagement_id": "eng-1"})
+    assert "10.0.0.100" in results[0].text
+
+
+@pytest.mark.asyncio
 async def test_module_import_survives_unwritable_data_dir(tmp_path, monkeypatch):
     """Regression test: importing the module must never crash the whole MCP
     server process just because the data directory can't be written to yet

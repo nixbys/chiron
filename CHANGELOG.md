@@ -10,7 +10,69 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 
 ## [Unreleased]
 
+---
+
+## [0.5.0] — 2026-08-27
+
+Five additions aimed at turning the security toolset from a one-shot toolbox
+into something that keeps working while nobody's watching: case/engagement
+grouping, continuous scheduled scanning with drift-only alerting, a
+persistent IOC watchlist, notification wiring for both (reusing the existing
+reminder-channel system — no new channel), and a Sigma detection-rule server
+closing the log-detection gap next to YARA's file-pattern detection. 4 new
+MCP servers (18 total), 2 modified, 61 new tests.
+
 ### Added
+- `mcp_servers/sigma_server.py` — a new MCP server for authoring and
+  testing Sigma detection rules, the log-detection complement to
+  `yara_server.py`'s file-pattern detection. Runs entirely in-process
+  (no Kali sidecar — Sigma rules match structured log/finding data, not
+  files) via the optional `pysigma` + `pysigma-backend-opensearch`
+  packages (`requirements-optional.txt`); without them,
+  `sigma_rule_write`/`list`/`delete` still work (a rule just needs to be
+  valid YAML), and `sigma_rule_convert`/`sigma_rule_test` return a clear
+  `not_installed` error instead of crashing server registration.
+  `sigma_rule_test` converts a stored rule to an OpenSearch Lucene query
+  and runs it against `findings_server.py`'s `odysseus-findings` index by
+  default. v1 is on-demand only — no scheduled rule sweep yet.
+- `mcp_servers/watchlist_server.py` + `src/builtin_actions.py`'s new
+  `watchlist_check` action — a persistent IOC watchlist (`watchlist_add`,
+  IPs/domains/hashes/URLs, validated per kind) re-checked on a cron
+  schedule against whichever of Shodan/VirusTotal/OTX/Censys are
+  configured for that indicator's kind, filing a finding and sending one
+  batched reminder only when a provider's result changes since the last
+  check (open ports, VirusTotal detection counts, OTX pulse count,
+  Censys services). The first check per (entry, provider) establishes the
+  baseline silently, same as `scheduled_recon`.
+- `mcp_servers/monitor_server.py` + `src/builtin_actions.py`'s new
+  `scheduled_recon` action — turns one-shot recon into continuous
+  monitoring. A `ScheduledTask` with `task_type="action"` and
+  `action="scheduled_recon"` (configured via its `prompt` as JSON, e.g.
+  `{"target": "example.com", "checks": ["ports", "cert"]}`) re-runs
+  `nmap_scan`/`subdomain_enum`/the new `tls_cert_info` (`recon_server.py`)/a
+  Shodan CVE lookup on whatever cron schedule the task uses, diffs the
+  result against the last stored snapshot in `monitor_server.py`, and files
+  a finding (via `findings_server`) plus a reminder (`dispatch_reminder`,
+  respecting the user's existing `reminder_channel` setting) only when
+  something actually changed — a new open port, new subdomain, changed TLS
+  cert fingerprint, or a new CVE. The first run for a target/check
+  establishes the baseline without filing anything. Fires a new
+  `security_finding_added` event (`src/event_bus.py`) other scheduled tasks
+  can trigger off of. `intel_server.py`'s Shodan/VirusTotal/NVD/OTX/Censys
+  lookups were each split into a `_X_fetch() -> dict` (raw data) plus
+  `_X_format() -> str` (existing text output, unchanged) so this and future
+  callers can diff structured data instead of parsing formatted strings.
+- `mcp_servers/engagement_server.py` — a new MCP server for grouping recon
+  scans, findings, and watchlist activity under a named engagement/case
+  (scope, client, start/end date), with an event timeline
+  (`engagement_log_event` / `engagement_timeline`) for report assembly.
+  `asset_server.py`'s `assets`/`findings` tables gained an `engagement_id`
+  column (migrated in place for existing databases) and `findings_server.py`'s
+  existing `engagement` field is now documented as accepting the id
+  `engagement_create` returns. There's no shared database between MCP
+  servers, so `engagement_id` is a convention key threaded through each
+  server's own tools, not a real foreign key — see `engagement_server.py`'s
+  module docstring.
 - `src/host_capabilities.py` + `setup.py` — a new interactive host-capability
   scan (setup.py step 6, native installs) that probes `PATH` for the 16
   toolchain binaries and the well-known ports of the 6 sidecar services

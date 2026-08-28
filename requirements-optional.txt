@@ -44,3 +44,13 @@ PyMuPDF
 # [all]/Azure/audio extras (cloud + heavy). Pinned to a release >30 days old per
 # the dependency-age discussion in issue #485.
 markitdown[docx,pptx,xlsx,xls]==0.1.7
+
+# Sigma detection-rule authoring/testing (mcp_servers/sigma_server.py).
+# pysigma parses/validates Sigma YAML rules; pysigma-backend-opensearch
+# converts them to Lucene query strings runnable against the
+# odysseus-findings OpenSearch index (findings_server.py). Pure Python, no
+# Kali sidecar involved. Without these, sigma_rule_write/list/delete still
+# work (a rule just needs to be valid YAML); sigma_rule_convert/
+# sigma_rule_test return a clear "not_installed" error instead.
+pysigma
+pysigma-backend-opensearch

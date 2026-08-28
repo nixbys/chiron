@@ -1,0 +1,70 @@
+name: scan_and_watch
+version: "1.0"
+description: >
+  Set up continuous monitoring for a target instead of a one-shot scan:
+  create an engagement, establish a baseline, and schedule a recurring
+  drift check that only surfaces a finding when something actually
+  changes (new open port, new subdomain, changed TLS cert, new CVE).
+  This skill doesn't call an MCP tool chain end-to-end like most skills
+  here — the actual recurring work is a Scheduled Task, not an agent run,
+  so it documents the setup steps and the follow-up read-only tools.
+
+inputs:
+  target:
+    type: string
+    description: "Host, domain, or IP to monitor"
+  checks:
+    type: array
+    default: ["ports", "cert"]
+    description: "Any of: ports, subdomains, cert, cve"
+  engagement_name:
+    type: string
+    description: "Optional — creates/uses an engagement to group this target's findings"
+
+steps:
+  - id: create_engagement
+    tool: engagement_create
+    args:
+      name: "{{ engagement_name }}"
+      scope: ["{{ target }}"]
+    description: "Optional — skip if this target already belongs to an engagement. Save the returned engagement_id for the next steps."
+    optional: true
+
+  - id: baseline_scan
+    tool: scheduled_recon
+    description: >
+      Not called directly as a tool — this is a Scheduled Task action.
+      Create one via the Tasks UI/API with task_type="action",
+      action="scheduled_recon", a cron schedule (e.g. daily), and a
+      prompt of raw JSON:
+        {"target": "{{ target }}", "checks": {{ checks }}, "engagement_id": "<from create_engagement>"}
+      Its first run establishes the baseline (no finding filed); every run
+      after that only files a finding + sends a reminder on actual drift.
+
+  - id: review_drift
+    tool: monitor_diff_history
+    args:
+      task_id: "<the Scheduled Task's id>"
+    description: "Check what's changed across previous runs for this task"
+
+  - id: reset_after_known_change
+    tool: monitor_reset
+    args:
+      task_id: "<the Scheduled Task's id>"
+    description: "After a deliberate infra change (e.g. planned port opening), reset so the next run re-baselines instead of reporting expected drift"
+    optional: true
+
+  - id: engagement_report
+    tool: engagement_timeline
+    args:
+      engagement_id: "<from create_engagement>"
+    description: "Pull the full timeline for a report — see skills/reporting/engagement_report.md"
+    optional: true
+
+notes: >
+  scheduled_recon resolves nmap_scan (ports), subdomain_enum (subdomains),
+  and tls_cert_info (cert) by name against whatever MCP servers are
+  currently registered under Settings > Integrations > MCP — register
+  recon_server, osint_server, and findings_server before scheduling this.
+  The cve check calls intel_server's Shodan lookup directly and needs
+  SHODAN_API_KEY set.

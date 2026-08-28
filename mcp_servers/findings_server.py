@@ -99,7 +99,7 @@ TOOLS = [
             "properties": {
                 "title": {"type": "string"},
                 "severity": {"type": "string", "enum": ["critical", "high", "medium", "low", "info"]},
-                "engagement": {"type": "string", "description": "Engagement/project name for grouping"},
+                "engagement": {"type": "string", "description": "Engagement id for grouping (pass the id returned by engagement_server's engagement_create, or any free-text project name)"},
                 "ip": {"type": "string", "description": "Target IP"},
                 "port": {"type": "integer"},
                 "cve_id": {"type": "string"},
