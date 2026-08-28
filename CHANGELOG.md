@@ -11,6 +11,14 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 ## [Unreleased]
 
 ### Added
+- Multi-target support for `scheduled_recon` (`src/builtin_actions.py`): the
+  task prompt now also accepts a `"targets"` array (merged with a single
+  `"target"` string if both are present) and a `"use_engagement_assets":
+  true` flag that resolves targets from an engagement's own asset
+  inventory (`asset_server`'s `asset_list`) instead of listing them by
+  hand. One reminder is sent per run covering every target's drift, not
+  one per target — same batching `watchlist_check` already used. Fully
+  backward compatible with a single `"target"` string.
 - `verify_remediation` scheduled-task action (`src/builtin_actions.py`) — the
   remediation-verification loop: re-checks every `scheduled_recon`-sourced
   finding marked `remediated` to confirm the underlying issue is actually
