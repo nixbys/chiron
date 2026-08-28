@@ -279,6 +279,8 @@ Risk formula: `CVSS_base × criticality_multiplier × exploitability_factor`, ca
 
 Index: `odysseus-findings` in the `opensearch` service (see `docker-compose.security.yml`).
 
+Backs the `verify_remediation` scheduled-task action (`src/builtin_actions.py`): re-checks every `scheduled_recon`-sourced finding marked `remediated` to confirm the underlying issue (open port/subdomain/cert fingerprint/CVE) is actually still gone — no separate state store, it reconstructs what to re-test entirely from the finding's own `title`/`description` fields. Reopens the finding (`finding_update_status`) + sends a reminder if it's back; logs a confirming `engagement_server` event if it's genuinely still remediated. Scoped to `scheduled_recon` findings only — `watchlist_check`/`sigma_sweep`/`host_monitor` findings don't carry an equivalently well-defined single re-testable item. Configure via the task's prompt as JSON, e.g. `{"limit": 20, "engagement_id": "..."}`.
+
 ### `engagement_server` — Case / Engagement Grouping
 
 | Tool | Description |
