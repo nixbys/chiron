@@ -25,13 +25,28 @@ updates:
       # on_list_tools/on_call_tool callables -- every file in mcp_servers/
       # still uses the pre-2.0 decorator pattern (see the pin comment on
       # `mcp<2.0.0` in requirements.txt). Dependabot doesn't read that
-      # comment: it previously opened a PR widening the pin to `mcp<3.0.0`,
+      # comment: it has twice opened a PR widening the pin to `mcp<3.0.0`,
       # which pulled in an mcp 2.x resolution and broke every MCP server at
       # import time (`AttributeError: 'Server' object has no attribute
-      # 'list_tools'`) -- confirmed by that PR's failing CI, not merged.
-      # Re-evaluate once mcp_servers/ is migrated to the 2.x API.
+      # 'list_tools'`) -- confirmed by that PR's own failing CI both times,
+      # neither merged.
+      #
+      # Filtered by `versions` (an explicit version-range block), not
+      # `update-types: [version-update:semver-major]` -- the first attempt
+      # used update-types and Dependabot proposed the exact same mcp<3.0.0
+      # bump again minutes later. requirements.txt pins mcp with an
+      # inequality only (`mcp<2.0.0`, no exact `==` version), and
+      # Dependabot's semver-major/minor/patch classification is derived
+      # from the *previously resolved* version, which is ambiguous for an
+      # open-ended range -- so relying on that classification to catch
+      # this is not dependable. A `versions` block filters candidate
+      # versions directly during Dependabot's own update evaluation,
+      # independent of how it classifies the change, and is what
+      # Dependabot's docs recommend for pinning a package below a major
+      # version boundary. Re-evaluate (drop this block) once mcp_servers/
+      # is migrated to the 2.x API.
       - dependency-name: "mcp"
-        update-types: ["version-update:semver-major"]
+        versions: [">=2.0.0"]
 
   # Frontend / tooling npm packages (package.json).
   - package-ecosystem: npm
