@@ -54,6 +54,12 @@ jinja2
 pyotp
 qrcode[pil]
 croniter
+# Cross-platform process/connection/user introspection for
+# mcp_servers/host_telemetry_server.py — pure Python, no exec/Dockerfile
+# changes needed. Reports on Odysseus's own host/container, not an
+# arbitrary target — see that module's docstring for the container-
+# boundary caveat.
+psutil
 pytest
 pytest-asyncio
 # starlette.testclient prefers httpx2 since Starlette 1.2.0 and warns on every

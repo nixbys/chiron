@@ -22,6 +22,27 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
   actually changed since the last sweep — same drift-only-alerting design
   as `scheduled_recon`/`watchlist_check`. `sigma_sweep` reads each rule's
   own `level:` field for the filed finding's severity.
+- `mcp_servers/host_telemetry_server.py` (19th MCP server) + `src/
+  builtin_actions.py`'s new `host_monitor` action — read-only host
+  telemetry (processes, listening sockets, logged-in users, cron jobs,
+  installed packages) for the host/container Odysseus itself runs in, via
+  `psutil` rather than the Kali toolchain sidecar (querying the sidecar's
+  own process list would be useless for defensive monitoring of anything
+  real). `host_monitor` diffs each check against the last stored snapshot
+  (`monitor_server`) the same drift-only-alerting way as the other
+  scheduled actions, filtering out kernel-thread name churn
+  (`kworker/N:M`, renumbered by the kernel constantly) before diffing so
+  it doesn't look like drift on every run. Container-boundary caveat: when
+  Odysseus runs in Docker (the default), this only sees the container's
+  own namespace, not the true host — documented in the module and README,
+  not solved in this pass.
+- Shared `_file_drift_finding()` helper in `src/builtin_actions.py`,
+  extracted from the file-a-finding-and-log-an-engagement-event block that
+  `scheduled_recon`/`watchlist_check`/`sigma_sweep`/`yara_sweep`/
+  `host_monitor` all repeated. Also fixes a real gap this surfaced:
+  `watchlist_check` was filing findings but never logging the
+  corresponding engagement timeline event; it now does, like every other
+  drift-detecting action.
 
 ---
 

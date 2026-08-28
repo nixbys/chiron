@@ -3456,6 +3456,34 @@ def _looks_like_ip(value: str) -> str | None:
         return None
 
 
+async def _file_drift_finding(
+    mgr, findings_tool: str | None, engagement_mod, *,
+    title: str, description: str, severity: str, tool: str,
+    tags: list, engagement_id: str | None = None, ip: str | None = None,
+) -> None:
+    """File one finding + log one engagement event -- the block every
+    drift-detecting scheduled action (scheduled_recon/watchlist_check/
+    sigma_sweep/yara_sweep/host_monitor) repeats once per detected change.
+    Each action still builds its own batched reminder/fire_event afterward
+    (those differ enough per action -- format, cadence -- not to be worth
+    folding in here); this only covers the part that was byte-for-byte
+    identical four times over."""
+    if findings_tool and mgr:
+        payload = {
+            "title": title,
+            "severity": severity,
+            "tool": tool,
+            "description": description,
+            "engagement": engagement_id,
+            "tags": tags,
+        }
+        if ip:
+            payload["ip"] = ip
+        await mgr.call_tool(findings_tool, payload)
+    if engagement_id:
+        engagement_mod._log_event(engagement_id, "scan_completed", title, description)
+
+
 async def action_scheduled_recon(owner: str, **kwargs) -> Tuple[str, bool]:
     """Re-run configured recon checks (open ports, subdomains, TLS cert,
     known CVEs) against a target, diff against the last stored snapshot
@@ -3556,18 +3584,13 @@ async def action_scheduled_recon(owner: str, **kwargs) -> Tuple[str, bool]:
         summary_lines.append(f"- {check_type}: +{added or '[]'} -{removed or '[]'}")
         title = f"{check_type} change on {target}"
         description = f"Added: {added or 'none'}  Removed: {removed or 'none'}"
-        if findings_tool:
-            await mgr.call_tool(findings_tool, {
-                "title": title,
-                "severity": _SCHEDULED_RECON_SEVERITY.get(check_type, "low"),
-                "ip": _looks_like_ip(target),
-                "tool": "scheduled_recon",
-                "description": description,
-                "engagement": engagement_id,
-                "tags": ["continuous-monitoring", "drift", check_type],
-            })
-        if engagement_id:
-            engagement_mod._log_event(engagement_id, "scan_completed", title, description)
+        await _file_drift_finding(
+            mgr, findings_tool, engagement_mod,
+            title=title, description=description,
+            severity=_SCHEDULED_RECON_SEVERITY.get(check_type, "low"),
+            tool="scheduled_recon", tags=["continuous-monitoring", "drift", check_type],
+            engagement_id=engagement_id, ip=_looks_like_ip(target),
+        )
     if errors:
         summary_lines.append(f"({len(errors)} check(s) had errors: {'; '.join(errors)})")
 
@@ -3647,6 +3670,7 @@ async def action_watchlist_check(owner: str, **kwargs) -> Tuple[str, bool]:
     changes since the last check. Like action_scheduled_recon, the first
     check for a given (entry, provider) establishes the baseline silently.
     """
+    import mcp_servers.engagement_server as engagement_mod
     import mcp_servers.intel_server as intel_mod
     import mcp_servers.watchlist_server as watchlist_mod
     from src.event_bus import fire_event
@@ -3688,15 +3712,13 @@ async def action_watchlist_check(owner: str, **kwargs) -> Tuple[str, bool]:
 
             hit = f"{provider} change on {indicator} ({kind}): {signature}"
             hits.append(hit)
-            if qualified_findings_tool and mgr:
-                await mgr.call_tool(qualified_findings_tool, {
-                    "title": f"Watchlist hit: {provider} change on {indicator}",
-                    "severity": "medium",
-                    "tool": "watchlist_check",
-                    "description": hit,
-                    "engagement": entry.get("engagement_id"),
-                    "tags": ["watchlist", "threat-intel", provider],
-                })
+            await _file_drift_finding(
+                mgr, qualified_findings_tool, engagement_mod,
+                title=f"Watchlist hit: {provider} change on {indicator}",
+                description=hit, severity="medium", tool="watchlist_check",
+                tags=["watchlist", "threat-intel", provider],
+                engagement_id=entry.get("engagement_id"),
+            )
 
     if not hits:
         if not any_provider_configured:
@@ -3850,17 +3872,13 @@ async def action_sigma_sweep(owner: str, **kwargs) -> Tuple[str, bool]:
         summary_lines.append(f"- {rule_name}: +{len(added)} new match(es), -{len(removed)} cleared")
         title = f"Sigma rule match: {rule_name}"
         description = f"New matches: {added or 'none'}  Cleared matches: {removed or 'none'}"
-        if findings_tool and mgr:
-            await mgr.call_tool(findings_tool, {
-                "title": title,
-                "severity": _sigma_rule_severity(sigma_mod, rule_name),
-                "tool": "sigma_sweep",
-                "description": description,
-                "engagement": engagement_id,
-                "tags": ["continuous-monitoring", "sigma", "drift", rule_name],
-            })
-        if engagement_id:
-            engagement_mod._log_event(engagement_id, "scan_completed", title, description)
+        await _file_drift_finding(
+            mgr, findings_tool, engagement_mod,
+            title=title, description=description,
+            severity=_sigma_rule_severity(sigma_mod, rule_name), tool="sigma_sweep",
+            tags=["continuous-monitoring", "sigma", "drift", rule_name],
+            engagement_id=engagement_id,
+        )
     if errors:
         summary_lines.append(f"({len(errors)} rule(s) had errors: {'; '.join(errors)})")
 
@@ -3966,17 +3984,11 @@ async def action_yara_sweep(owner: str, **kwargs) -> Tuple[str, bool]:
     summary = f"YARA sweep drift for {target}:\n- +{added or '[]'} -{removed or '[]'}"
 
     findings_tool = await _find_qualified_tool("finding_index")
-    if findings_tool:
-        await mgr.call_tool(findings_tool, {
-            "title": title,
-            "severity": "high",
-            "tool": "yara_sweep",
-            "description": description,
-            "engagement": engagement_id,
-            "tags": ["continuous-monitoring", "yara", "drift"],
-        })
-    if engagement_id:
-        engagement_mod._log_event(engagement_id, "scan_completed", title, description)
+    await _file_drift_finding(
+        mgr, findings_tool, engagement_mod,
+        title=title, description=description, severity="high", tool="yara_sweep",
+        tags=["continuous-monitoring", "yara", "drift"], engagement_id=engagement_id,
+    )
 
     try:
         from routes.note_routes import dispatch_reminder
@@ -3993,6 +4005,156 @@ async def action_yara_sweep(owner: str, **kwargs) -> Tuple[str, bool]:
     fire_event("security_finding_added", owner)
 
     return summary, True
+
+
+# Which host_telemetry_server fetch function backs each check type, how to
+# reduce its structured result to a flat list of comparable items for
+# monitor_server's set-diff, and the severity/whether it needs the
+# invoking action's `limit` config.
+def _host_monitor_processes_items(data: dict) -> list:
+    # Name+user, not pid -- pids churn on every restart of anything that
+    # restarts, which would make ordinary process cycling look like drift.
+    # Kernel threads (empty cmdline -- psutil's own signal for "no argv",
+    # e.g. kworker/N:M) are excluded too: the kernel renumbers their name
+    # suffix constantly, which would otherwise look like drift on every run.
+    return sorted({
+        f"{p['name']}:{p['user']}" for p in data["processes"] if p["cmdline"]
+    })
+
+
+def _host_monitor_ports_items(data: dict) -> list:
+    return sorted({f"{c['proto']}:{c['address']}:{c['port']}" for c in data["listening"]})
+
+
+def _host_monitor_users_items(data: dict) -> list:
+    return sorted({f"{u['name']}@{u['host'] or 'local'}" for u in data["users"]})
+
+
+def _host_monitor_cron_items(data: dict) -> list:
+    return sorted(data["entries"])
+
+
+def _host_monitor_packages_items(data: dict) -> list:
+    return sorted({f"{p['name']}=={p['version']}" for p in data["packages"]})
+
+
+_HOST_MONITOR_CHECKS = {
+    # check_type: (fetch_fn_name, items_fn, severity)
+    "processes": ("_processes_fetch", _host_monitor_processes_items, "low"),
+    "listening_ports": ("_listening_ports_fetch", _host_monitor_ports_items, "medium"),
+    "users": ("_users_fetch", _host_monitor_users_items, "medium"),
+    "cron": ("_cron_fetch", _host_monitor_cron_items, "high"),
+    "packages": ("_packages_fetch", _host_monitor_packages_items, "medium"),
+}
+
+
+async def action_host_monitor(owner: str, **kwargs) -> Tuple[str, bool]:
+    """Re-run host telemetry checks (mcp_servers/host_telemetry_server.py --
+    processes/listening ports/logged-in users/cron/packages on the host
+    Odysseus itself runs in, see that module's docstring for the container-
+    boundary caveat) and diff each against the last stored snapshot
+    (mcp_servers/monitor_server.py), filing a finding only when something
+    actually changed since the last run. Calls host_telemetry_server's
+    fetch functions directly rather than through the MCP manager (same
+    reason action_sigma_sweep imports sigma_server's helpers directly) --
+    this is host introspection, not something a disabled/unregistered MCP
+    tool should be able to block.
+
+    kwargs:
+      task_id: str  -- the ScheduledTask's own id; drift state is keyed per-task.
+      prompt: str    -- JSON config, e.g.:
+        {"checks": ["processes", "listening_ports", "users"],
+         "engagement_id": "optional-engagement-id-from-engagement_create"}
+        Defaults to ["processes", "listening_ports", "users"] -- "cron" and
+        "packages" are Linux-only and opt-in.
+    """
+    import mcp_servers.engagement_server as engagement_mod
+    import mcp_servers.host_telemetry_server as host_mod
+    import mcp_servers.monitor_server as monitor_mod
+    from src.event_bus import fire_event
+    from src.tool_utils import get_mcp_manager
+
+    task_id = kwargs.get("task_id") or ""
+    raw_prompt = kwargs.get("prompt") or "{}"
+    try:
+        config = json.loads(raw_prompt)
+    except (TypeError, ValueError):
+        return (
+            'host_monitor: prompt must be JSON, e.g. {"checks": ["processes"]}',
+            False,
+        )
+
+    checks = config.get("checks") or ["processes", "listening_ports", "users"]
+    engagement_id = config.get("engagement_id") or None
+
+    findings_tool = await _find_qualified_tool("finding_index")
+    mgr = get_mcp_manager()
+
+    drifted_checks: list = []
+    errors: list = []
+
+    for check_type in checks:
+        spec = _HOST_MONITOR_CHECKS.get(check_type)
+        if not spec:
+            errors.append(f"unknown check type: {check_type}")
+            continue
+        fetch_fn_name, items_fn, severity = spec
+
+        data = getattr(host_mod, fetch_fn_name)()
+        if "_mcp_error" in data:
+            errors.append(f"{check_type}: {data['_mcp_error']}")
+            continue
+        items = items_fn(data)
+
+        new_snapshot = {"items": items}
+        old_snapshot = monitor_mod._get_snapshot(task_id, "host", check_type)
+        added, removed = monitor_mod._compute_diff(old_snapshot, new_snapshot)
+        monitor_mod._save_snapshot(task_id, owner, "host", check_type, engagement_id, new_snapshot)
+
+        if old_snapshot is None:
+            # First run for this check -- establishes the baseline.
+            continue
+        if not added and not removed:
+            continue
+
+        monitor_mod._record_diff(task_id, "host", check_type, added, removed)
+        drifted_checks.append((check_type, added, removed, severity))
+
+    if not drifted_checks:
+        if errors:
+            return f"host_monitor: no drift; {len(errors)} check(s) had errors: {'; '.join(errors)}", False
+        raise TaskNoop("host_monitor: no drift detected")
+
+    summary_lines = ["Host telemetry drift detected:"]
+    for check_type, added, removed, severity in drifted_checks:
+        summary_lines.append(f"- {check_type}: +{added or '[]'} -{removed or '[]'}")
+        title = f"Host {check_type} change"
+        description = f"Added: {added or 'none'}  Removed: {removed or 'none'}"
+        await _file_drift_finding(
+            mgr, findings_tool, engagement_mod,
+            title=title, description=description, severity=severity, tool="host_monitor",
+            tags=["continuous-monitoring", "host-telemetry", check_type],
+            engagement_id=engagement_id,
+        )
+    if errors:
+        summary_lines.append(f"({len(errors)} check(s) had errors: {'; '.join(errors)})")
+
+    try:
+        from routes.note_routes import dispatch_reminder
+        note_id_seed = "|".join(f"{c}:{a}:{r}" for c, a, r, _ in drifted_checks)
+        note_id = f"hostmon-{task_id}-{hashlib.sha256(note_id_seed.encode()).hexdigest()[:12]}"
+        await dispatch_reminder(
+            title="Host telemetry drift detected",
+            note_body="\n".join(summary_lines),
+            note_id=note_id,
+            owner=owner or "",
+        )
+    except Exception as e:
+        logger.warning(f"host_monitor: reminder dispatch failed: {e}")
+
+    fire_event("security_finding_added", owner)
+
+    return "\n".join(summary_lines), True
 
 
 BUILTIN_ACTIONS = {
@@ -4020,6 +4182,7 @@ BUILTIN_ACTIONS = {
     "watchlist_check": action_watchlist_check,
     "sigma_sweep": action_sigma_sweep,
     "yara_sweep": action_yara_sweep,
+    "host_monitor": action_host_monitor,
     # ping_notes removed from the registry — runs only inside `_note_pings_loop`.
 }
 
@@ -4045,4 +4208,5 @@ BUILTIN_ACTION_INFO = {
     "watchlist_check": "Re-check every active IOC watchlist entry (Settings > MCP > watchlist_server, or the watchlist_add tool) against Shodan/VirusTotal/OTX/Censys; files a finding and sends a reminder only on a change since the last check.",
     "sigma_sweep": "Convert every stored Sigma rule (or a configured subset) and re-run it against OpenSearch; files a finding and sends a reminder only when a rule's matches changed since the last sweep. Configure via this task's prompt as JSON, e.g. {\"rules\": [\"suspicious-logins\"]}.",
     "yara_sweep": "Run yara_scan against a configured target in the Kali toolchain container; files a finding and sends a reminder only when matches changed since the last sweep. Configure via this task's prompt as JSON, e.g. {\"target\": \"case-123/evidence\"}.",
+    "host_monitor": "Re-check host telemetry (processes/listening ports/logged-in users, plus opt-in cron/packages) on the host Odysseus itself runs in; files a finding and sends a reminder only when something changed since the last run. Configure via this task's prompt as JSON, e.g. {\"checks\": [\"processes\", \"listening_ports\"]}.",
 }
