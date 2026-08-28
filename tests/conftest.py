@@ -1,6 +1,7 @@
 """Shared test configuration - ensure project root is on sys.path and stub heavy deps."""
 import sys
 import os
+import tempfile
 import types
 import importlib.util
 from unittest.mock import MagicMock
@@ -16,6 +17,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # This only unblocks collection/import-time init; it does not provide a shared
 # file-backed DB across processes - tests needing that must set DATABASE_URL.
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+
+# Same problem, different constant: ODYSSEUS_DATA_DIR (src.constants.DATA_DIR)
+# defaults to the real repo-local ./data directory if unset, and several
+# modules read/write under it at *import* time (routes/email_helpers.py's
+# scheduled-email SQLite caches) or from ordinary test bodies
+# (tests/test_tool_path_confinement.py writing into DATA_DIR directly). In a
+# checkout where ./data was created by a container-mapped uid (e.g. a
+# rootless-podman subuid user), it's readable but not writable by whichever
+# uid runs pytest, so these fail with "attempt to write a readonly database" /
+# PermissionError -- during collection, before any test even runs, for the
+# import-time case. Default to an isolated temp directory for the same
+# reason DATABASE_URL is defaulted above; an explicit ODYSSEUS_DATA_DIR is
+# preserved.
+os.environ.setdefault("ODYSSEUS_DATA_DIR", tempfile.mkdtemp(prefix="odysseus-test-data-"))
 
 # Pre-import real heavy modules BEFORE any test file's module-level stubs can
 # replace them with MagicMock. Some test files (e.g. test_llm_core_sanitize_*)
