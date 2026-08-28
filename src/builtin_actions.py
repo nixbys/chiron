@@ -3484,11 +3484,53 @@ async def _file_drift_finding(
         engagement_mod._log_event(engagement_id, "scan_completed", title, description)
 
 
+# Matches the first column of asset_server's asset_list table output
+# (fixed-width, IP first) -- see _resolve_engagement_asset_targets. Assets
+# with no IP recorded (hostname-only) are skipped; a parse miss here just
+# means fewer resolved targets, never a crash.
+_ASSET_LIST_IP_RE = re.compile(r"^(\d{1,3}(?:\.\d{1,3}){3})\s", re.MULTILINE)
+
+
+async def _resolve_engagement_asset_targets(mgr, engagement_id: str) -> list[str]:
+    """Resolve scheduled_recon's targets from an engagement's own asset
+    inventory (mcp_servers/asset_server.py) instead of a hardcoded list --
+    asset_server has no private list helper to import directly (unlike
+    watchlist_server/sigma_server), so this goes through the MCP tool and
+    parses its formatted table output, the same way action_scheduled_recon
+    already parses nmap/subdomain_enum output."""
+    qualified = await _find_qualified_tool("asset_list")
+    if not qualified:
+        return []
+    result = await mgr.call_tool(qualified, {"engagement_id": engagement_id, "limit": 200})
+    text = result.get("stdout") or result.get("stderr") or ""
+    if result.get("error") or "[error:" in text:
+        return []
+    return sorted(set(_ASSET_LIST_IP_RE.findall(text)))
+
+
+def _resolve_scheduled_recon_targets(config: dict) -> tuple[list[str], str | None]:
+    """Build scheduled_recon's target list from its JSON config. Returns
+    (explicit_targets, error). "targets" (a list) and "target" (a single
+    string) are both accepted and merged -- engagement-asset targets are
+    resolved separately by the caller (needs an await, this doesn't)."""
+    targets: list[str] = []
+    raw_targets = config.get("targets")
+    if raw_targets is not None:
+        if not isinstance(raw_targets, list):
+            return [], '"targets" must be a JSON array of strings'
+        targets.extend(str(t).strip() for t in raw_targets if str(t).strip())
+    if single := (config.get("target") or "").strip():
+        if single not in targets:
+            targets.append(single)
+    return targets, None
+
+
 async def action_scheduled_recon(owner: str, **kwargs) -> Tuple[str, bool]:
     """Re-run configured recon checks (open ports, subdomains, TLS cert,
-    known CVEs) against a target, diff against the last stored snapshot
-    (mcp_servers/monitor_server.py), and file a finding only when something
-    actually changed since the last run.
+    known CVEs) against one or more targets, diff each against the last
+    stored snapshot (mcp_servers/monitor_server.py), and file a finding
+    only when something actually changed since the last run. One reminder
+    is sent per run covering every target's drift, not one per target.
 
     kwargs:
       task_id: str  -- the ScheduledTask's own id (see task_scheduler.py's
@@ -3498,6 +3540,13 @@ async def action_scheduled_recon(owner: str, **kwargs) -> Tuple[str, bool]:
       prompt: str    -- JSON config, e.g.:
         {"target": "example.com", "checks": ["ports", "subdomains", "cert", "cve"],
          "engagement_id": "optional-engagement-id-from-engagement_create"}
+        Multi-target alternative to "target":
+        {"targets": ["example.com", "10.0.0.5"], "checks": ["ports"]}
+        Or resolve targets from an engagement's own asset inventory instead
+        of listing them by hand (requires engagement_id):
+        {"use_engagement_assets": true, "engagement_id": "...", "checks": ["ports"]}
+        "target"/"targets"/"use_engagement_assets" are additive, not
+        exclusive -- any combination is merged into one deduplicated list.
     """
     import mcp_servers.engagement_server as engagement_mod
     import mcp_servers.intel_server as intel_mod
@@ -3516,72 +3565,88 @@ async def action_scheduled_recon(owner: str, **kwargs) -> Tuple[str, bool]:
             False,
         )
 
-    target = (config.get("target") or "").strip()
-    if not target:
-        return "scheduled_recon: no target configured in this task's prompt", False
     checks = config.get("checks") or ["ports"]
     engagement_id = config.get("engagement_id") or None
+    use_engagement_assets = bool(config.get("use_engagement_assets"))
+
+    targets, target_err = _resolve_scheduled_recon_targets(config)
+    if target_err:
+        return f"scheduled_recon: {target_err}", False
+    if not targets and not use_engagement_assets:
+        return "scheduled_recon: no target(s) configured in this task's prompt", False
 
     mgr = get_mcp_manager()
     if not mgr:
         return "scheduled_recon: MCP manager not available", False
 
+    if use_engagement_assets:
+        if not engagement_id:
+            return "scheduled_recon: use_engagement_assets requires engagement_id", False
+        for t in await _resolve_engagement_asset_targets(mgr, engagement_id):
+            if t not in targets:
+                targets.append(t)
+    if not targets:
+        return "scheduled_recon: no target(s) configured in this task's prompt", False
+
     findings_tool = await _find_qualified_tool("finding_index")
 
-    drifted_checks: list[tuple[str, list, list]] = []
+    drifted_checks: list[tuple[str, str, list, list]] = []
     errors: list[str] = []
 
-    for check_type in checks:
-        if check_type not in _SCHEDULED_RECON_SEVERITY:
-            errors.append(f"unknown check type: {check_type}")
-            continue
-
-        if check_type == "cve":
-            data = intel_mod._shodan_fetch(target)
-            if "_mcp_error" in data:
-                errors.append(f"cve check for {target}: {data['_mcp_error']}")
+    for target in targets:
+        for check_type in checks:
+            if check_type not in _SCHEDULED_RECON_SEVERITY:
+                errors.append(f"unknown check type: {check_type}")
                 continue
-            items = sorted(data.get("vulns", {}).keys())
-        else:
-            tool_name = _SCHEDULED_RECON_CHECK_TOOLS[check_type]
-            qualified = await _find_qualified_tool(tool_name)
-            if not qualified:
-                errors.append(
-                    f"{check_type} check needs the '{tool_name}' MCP tool, which "
-                    "isn't registered/enabled -- see Settings > Integrations > MCP"
-                )
+
+            if check_type == "cve":
+                data = intel_mod._shodan_fetch(target)
+                if "_mcp_error" in data:
+                    errors.append(f"cve check for {target}: {data['_mcp_error']}")
+                    continue
+                items = sorted(data.get("vulns", {}).keys())
+            else:
+                tool_name = _SCHEDULED_RECON_CHECK_TOOLS[check_type]
+                qualified = await _find_qualified_tool(tool_name)
+                if not qualified:
+                    errors.append(
+                        f"{check_type} check needs the '{tool_name}' MCP tool, which "
+                        "isn't registered/enabled -- see Settings > Integrations > MCP"
+                    )
+                    continue
+                arg_key = "domain" if check_type == "subdomains" else "host" if check_type == "cert" else "target"
+                result = await mgr.call_tool(qualified, {arg_key: target})
+                text = result.get("stdout") or result.get("stderr") or ""
+                if result.get("error") or "[error:" in text:
+                    errors.append(f"{check_type} check for {target} failed: {result.get('error') or text}")
+                    continue
+                items = _parse_scheduled_recon_output(check_type, text)
+
+            new_snapshot = {"items": items}
+            old_snapshot = monitor_mod._get_snapshot(task_id, target, check_type)
+            added, removed = monitor_mod._compute_diff(old_snapshot, new_snapshot)
+            monitor_mod._save_snapshot(task_id, owner, target, check_type, engagement_id, new_snapshot)
+
+            if old_snapshot is None:
+                # First run for this check -- this establishes the baseline;
+                # "everything is new" isn't drift worth a finding.
                 continue
-            arg_key = "domain" if check_type == "subdomains" else "host" if check_type == "cert" else "target"
-            result = await mgr.call_tool(qualified, {arg_key: target})
-            text = result.get("stdout") or result.get("stderr") or ""
-            if result.get("error") or "[error:" in text:
-                errors.append(f"{check_type} check for {target} failed: {result.get('error') or text}")
+            if not added and not removed:
                 continue
-            items = _parse_scheduled_recon_output(check_type, text)
 
-        new_snapshot = {"items": items}
-        old_snapshot = monitor_mod._get_snapshot(task_id, target, check_type)
-        added, removed = monitor_mod._compute_diff(old_snapshot, new_snapshot)
-        monitor_mod._save_snapshot(task_id, owner, target, check_type, engagement_id, new_snapshot)
-
-        if old_snapshot is None:
-            # First run for this check -- this establishes the baseline;
-            # "everything is new" isn't drift worth a finding.
-            continue
-        if not added and not removed:
-            continue
-
-        monitor_mod._record_diff(task_id, target, check_type, added, removed)
-        drifted_checks.append((check_type, added, removed))
+            monitor_mod._record_diff(task_id, target, check_type, added, removed)
+            drifted_checks.append((target, check_type, added, removed))
 
     if not drifted_checks:
         if errors:
             return f"scheduled_recon: no drift; {len(errors)} check(s) had errors: {'; '.join(errors)}", False
-        raise TaskNoop(f"scheduled_recon: no drift detected for {target}")
+        noun = "target" if len(targets) == 1 else "targets"
+        raise TaskNoop(f"scheduled_recon: no drift detected for {len(targets)} {noun}")
 
-    summary_lines = [f"Drift detected for {target}:"]
-    for check_type, added, removed in drifted_checks:
-        summary_lines.append(f"- {check_type}: +{added or '[]'} -{removed or '[]'}")
+    label = targets[0] if len(targets) == 1 else f"{len(targets)} targets"
+    summary_lines = [f"Drift detected for {label}:"]
+    for target, check_type, added, removed in drifted_checks:
+        summary_lines.append(f"- {target} [{check_type}]: +{added or '[]'} -{removed or '[]'}")
         title = f"{check_type} change on {target}"
         description = f"Added: {added or 'none'}  Removed: {removed or 'none'}"
         await _file_drift_finding(
@@ -3596,10 +3661,10 @@ async def action_scheduled_recon(owner: str, **kwargs) -> Tuple[str, bool]:
 
     try:
         from routes.note_routes import dispatch_reminder
-        note_id_seed = "|".join(f"{c}:{a}:{r}" for c, a, r in drifted_checks)
+        note_id_seed = "|".join(f"{t}:{c}:{a}:{r}" for t, c, a, r in drifted_checks)
         note_id = f"scanmon-{task_id}-{hashlib.sha256(note_id_seed.encode()).hexdigest()[:12]}"
         await dispatch_reminder(
-            title=f"Scheduled scan drift: {target}",
+            title=f"Scheduled scan drift: {label}",
             note_body="\n".join(summary_lines),
             note_id=note_id,
             owner=owner or "",
@@ -4374,7 +4439,7 @@ BUILTIN_ACTION_INFO = {
     "test_skills": "Run the per-skill Test on every skill: agent run + LLM judge → records verdict on the skill (pass/needs_work/fail/inconclusive). Advisory only — never rewrites or demotes anything.",
     "audit_skills": "Audit unaudited skills after enough new skills are added: test, narrow metadata, self-edit/retry, optional teacher rewrite, tag duplicates/trivial skills, and publish/draft using the auto-approve threshold.",
     "check_email_urgency": "Scan unread emails hourly, tag urgent/reply-soon/newsletter/marketing/spam, and send a reminder when a new email needs a fast reply.",
-    "scheduled_recon": "Re-run configured recon checks (ports/subdomains/TLS cert/known CVEs) against a target; files a finding and sends a reminder only when something changed since the last run. Configure via this task's prompt as JSON, e.g. {\"target\": \"example.com\", \"checks\": [\"ports\", \"cert\"]}.",
+    "scheduled_recon": "Re-run configured recon checks (ports/subdomains/TLS cert/known CVEs) against one or more targets; files a finding and sends one batched reminder per run only when something changed since the last run. Configure via this task's prompt as JSON, e.g. {\"target\": \"example.com\", \"checks\": [\"ports\", \"cert\"]}, {\"targets\": [...]}, or {\"use_engagement_assets\": true, \"engagement_id\": \"...\"} to resolve targets from an engagement's asset inventory.",
     "watchlist_check": "Re-check every active IOC watchlist entry (Settings > MCP > watchlist_server, or the watchlist_add tool) against Shodan/VirusTotal/OTX/Censys; files a finding and sends a reminder only on a change since the last check.",
     "sigma_sweep": "Convert every stored Sigma rule (or a configured subset) and re-run it against OpenSearch; files a finding and sends a reminder only when a rule's matches changed since the last sweep. Configure via this task's prompt as JSON, e.g. {\"rules\": [\"suspicious-logins\"]}.",
     "yara_sweep": "Run yara_scan against a configured target in the Kali toolchain container; files a finding and sends a reminder only when matches changed since the last sweep. Configure via this task's prompt as JSON, e.g. {\"target\": \"case-123/evidence\"}.",
