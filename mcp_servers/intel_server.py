@@ -146,12 +146,17 @@ def _get(url: str, headers: dict | None = None, params: dict | None = None,
         return {"_mcp_error": str(exc)}
 
 
-def _shodan_host(ip: str) -> str:
+def _shodan_fetch(ip: str) -> dict:
+    """Raw Shodan host lookup. Returns the JSON dict on success, or
+    {"_mcp_error": "..."} on failure (missing key, HTTP error, etc.) so
+    scheduled callers (e.g. src/builtin_actions.py's watchlist/monitor
+    actions) can diff structured data instead of parsing formatted text."""
     if err := _require_key("SHODAN_API_KEY", _SHODAN_KEY):
-        return err
-    data = _get(f"https://api.shodan.io/shodan/host/{ip}", params={"key": _SHODAN_KEY})
-    if "_mcp_error" in data:
-        return mcp_error("shodan", data["_mcp_error"])
+        return {"_mcp_error": err}
+    return _get(f"https://api.shodan.io/shodan/host/{ip}", params={"key": _SHODAN_KEY})
+
+
+def _shodan_format(ip: str, data: dict) -> str:
     ports = data.get("ports", [])
     org = data.get("org", "unknown")
     country = data.get("country_name", "unknown")
@@ -166,9 +171,18 @@ def _shodan_host(ip: str) -> str:
     return "\n".join(lines)
 
 
-def _vt_lookup(indicator: str, kind: str) -> str:
+def _shodan_host(ip: str) -> str:
+    data = _shodan_fetch(ip)
+    if "_mcp_error" in data:
+        return mcp_error("shodan", data["_mcp_error"])
+    return _shodan_format(ip, data)
+
+
+def _vt_fetch(indicator: str, kind: str) -> dict:
+    """Raw VirusTotal lookup. Returns the JSON dict on success, or
+    {"_mcp_error": "..."} on failure."""
     if err := _require_key("VIRUSTOTAL_API_KEY", _VT_KEY):
-        return err
+        return {"_mcp_error": err}
     endpoints = {
         "file": f"https://www.virustotal.com/api/v3/files/{indicator}",
         "url": "https://www.virustotal.com/api/v3/urls",
@@ -176,10 +190,11 @@ def _vt_lookup(indicator: str, kind: str) -> str:
         "ip": f"https://www.virustotal.com/api/v3/ip_addresses/{indicator}",
     }
     if kind not in endpoints:
-        return mcp_error("invalid_kind", f"Unknown indicator kind: {kind}")
-    data = _get(endpoints[kind], headers={"x-apikey": _VT_KEY})
-    if "_mcp_error" in data:
-        return mcp_error("virustotal", data["_mcp_error"])
+        return {"_mcp_error": f"Unknown indicator kind: {kind}"}
+    return _get(endpoints[kind], headers={"x-apikey": _VT_KEY})
+
+
+def _vt_format(data: dict) -> str:
     attrs = data.get("data", {}).get("attributes", {})
     stats = attrs.get("last_analysis_stats", {})
     return (
@@ -190,16 +205,26 @@ def _vt_lookup(indicator: str, kind: str) -> str:
     )
 
 
-def _nvd_lookup(query: str, limit: int = 10) -> str:
+def _vt_lookup(indicator: str, kind: str) -> str:
+    data = _vt_fetch(indicator, kind)
+    if "_mcp_error" in data:
+        return mcp_error("virustotal", data["_mcp_error"])
+    return _vt_format(data)
+
+
+def _nvd_fetch(query: str, limit: int = 10) -> dict:
+    """Raw NVD lookup. Returns the JSON dict on success, or
+    {"_mcp_error": "..."} on failure."""
     params: dict = {"resultsPerPage": limit}
     if query.upper().startswith("CVE-"):
         params["cveId"] = query.upper()
     else:
         params["keywordSearch"] = query
     headers = {"apiKey": _NVD_KEY} if _NVD_KEY else {}
-    data = _get("https://services.nvd.nist.gov/rest/json/cves/2.0", headers=headers, params=params)
-    if "_mcp_error" in data:
-        return mcp_error("nvd", data["_mcp_error"])
+    return _get("https://services.nvd.nist.gov/rest/json/cves/2.0", headers=headers, params=params)
+
+
+def _nvd_format(data: dict, limit: int = 10) -> str:
     vulns = data.get("vulnerabilities", [])
     if not vulns:
         return "No CVEs found."
@@ -221,29 +246,49 @@ def _nvd_lookup(query: str, limit: int = 10) -> str:
     return "\n".join(lines)
 
 
-def _otx_lookup(indicator: str, kind: str) -> str:
+def _nvd_lookup(query: str, limit: int = 10) -> str:
+    data = _nvd_fetch(query, limit)
+    if "_mcp_error" in data:
+        return mcp_error("nvd", data["_mcp_error"])
+    return _nvd_format(data, limit)
+
+
+def _otx_fetch(indicator: str, kind: str) -> dict:
+    """Raw OTX lookup. Returns the JSON dict on success, or
+    {"_mcp_error": "..."} on failure."""
     if err := _require_key("OTX_API_KEY", _OTX_KEY):
-        return err
-    data = _get(
+        return {"_mcp_error": err}
+    return _get(
         f"https://otx.alienvault.com/api/v1/indicators/{kind}/{indicator}/general",
         headers={"X-OTX-API-KEY": _OTX_KEY},
     )
-    if "_mcp_error" in data:
-        return mcp_error("otx", data["_mcp_error"])
+
+
+def _otx_format(data: dict) -> str:
     pulse_count = data.get("pulse_info", {}).get("count", 0)
     reputation = data.get("reputation", 0)
     return f"OTX pulses: {pulse_count}  Reputation score: {reputation}"
 
 
-def _censys_host(ip: str) -> str:
+def _otx_lookup(indicator: str, kind: str) -> str:
+    data = _otx_fetch(indicator, kind)
+    if "_mcp_error" in data:
+        return mcp_error("otx", data["_mcp_error"])
+    return _otx_format(data)
+
+
+def _censys_fetch(ip: str) -> dict:
+    """Raw Censys host lookup. Returns the JSON dict on success, or
+    {"_mcp_error": "..."} on failure."""
     if not _CENSYS_ID or not _CENSYS_SECRET:
-        return mcp_error("no_api_key", "CENSYS_API_ID and CENSYS_API_SECRET not set — add them to .env")
-    data = _get(
+        return {"_mcp_error": "CENSYS_API_ID and CENSYS_API_SECRET not set — add them to .env"}
+    return _get(
         f"https://search.censys.io/api/v2/hosts/{ip}",
         auth=(_CENSYS_ID, _CENSYS_SECRET),
     )
-    if "_mcp_error" in data:
-        return mcp_error("censys", data["_mcp_error"])
+
+
+def _censys_format(ip: str, data: dict) -> str:
     result = data.get("result", {})
     services = result.get("services", [])
     asn = result.get("autonomous_system", {})
@@ -257,6 +302,13 @@ def _censys_host(ip: str) -> str:
         name = svc.get("service_name", "unknown")
         lines.append(f"  {port}/{proto}  {name}")
     return "\n".join(lines)
+
+
+def _censys_host(ip: str) -> str:
+    data = _censys_fetch(ip)
+    if "_mcp_error" in data:
+        return mcp_error("censys", data["_mcp_error"])
+    return _censys_format(ip, data)
 
 
 def _censys_search(query: str, limit: int = 10) -> str:

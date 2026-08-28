@@ -32,14 +32,17 @@
 
 Odysseus Red layers a complete cybersecurity toolchain on top of the [Odysseus](https://github.com/pewdiepie-archdaemon/odysseus) self-hosted AI workspace. The base platform provides chat, agents, memory, deep research, documents, and MCP — this fork adds:
 
-- **14 cybersecurity MCP servers** wired to a Kali-based sidecar, SpiderFoot OSINT platform, OpenSearch, and BentoPDF
-- **Pre-built agent skill workflows** for reconnaissance, OSINT, incident response, threat hunting, malware analysis, web assessment, and reporting
+- **18 cybersecurity MCP servers** wired to a Kali-based sidecar, SpiderFoot OSINT platform, OpenSearch, and BentoPDF
+- **Pre-built agent skill workflows** for reconnaissance, OSINT, incident response, threat hunting, malware analysis, web assessment, continuous monitoring, and reporting
+- **Continuous scanning** — schedule recon (ports/subdomains/TLS cert/CVEs) to re-run on a cron and only file a finding when something actually changed
+- **IOC watchlist** — persistent indicators re-checked against Shodan/VirusTotal/OTX/Censys, with a finding filed on any hit
 - **SpiderFoot** (200+ correlated OSINT modules) running as a persistent REST API sidecar
 - **BentoPDF** — client-side PDF toolkit for metadata extraction, report assembly, and interactive editing
-- **Asset inventory** with SQLite-backed tracking of hosts, services, and findings
+- **Asset inventory** with SQLite-backed tracking of hosts, services, and findings, groupable under named engagements/cases
 - **MITRE ATT&CK mapping** — STIX-based technique lookup and TTP correlation
 - **CVSS risk scoring** — aggregated risk summaries and prioritized remediation plans
 - **OpenSearch findings persistence** — index, search, and track findings across engagements
+- **Sigma detection rules** — the log-detection complement to YARA's file-pattern matching, tested directly against your findings index
 - **Pentest report templates** aligned to PTES and the OWASP Testing Guide
 
 Everything runs locally. No telemetry. All tool execution stays on your own infrastructure.
@@ -119,6 +122,7 @@ The Odysseus core image is **not modified**. All sidecars are managed via `docke
 |------|-------------|
 | `nmap_scan` | Port and service version scan (nmap) |
 | `masscan_scan` | High-speed TCP port discovery (masscan) |
+| `tls_cert_info` | TLS certificate details (issuer, validity, SANs) via nmap's `ssl-cert` script — used by `monitor_server`'s scheduled cert-drift check |
 
 ### `intel_server` — Threat Intelligence
 
@@ -194,6 +198,7 @@ Uses `pypdf` (already in `requirements.txt`) — no additional dependencies. For
 | `yara_list_rules` | List all available YARA rules |
 
 Rules are stored under `/workspaces/yara_rules/` inside the Kali container.
+See `sigma_server` below for the log-detection equivalent.
 
 ### `exploit_server` — Exploit Database
 
@@ -267,6 +272,55 @@ Risk formula: `CVSS_base × criticality_multiplier × exploitability_factor`, ca
 | `finding_update_status` | Update the remediation status of a finding |
 
 Index: `odysseus-findings` in the `opensearch` service (see `docker-compose.security.yml`).
+
+### `engagement_server` — Case / Engagement Grouping
+
+| Tool | Description |
+|------|-------------|
+| `engagement_create` | Create a named engagement (pentest, red-team op, incident) with scope and client metadata |
+| `engagement_list` | List engagements, optionally filtered by status |
+| `engagement_get` | Get full engagement details plus its recent timeline |
+| `engagement_update` | Update description, client, scope, or tags |
+| `engagement_close` | Mark an engagement closed and record its end date |
+| `engagement_log_event` | Append a scan/finding/note event to an engagement's timeline |
+| `engagement_timeline` | Return the chronological timeline for a report |
+
+Pass the returned `engagement_id` to `asset_server`'s `asset_add`/`finding_add` (an `engagement_id` column) and `findings_server`'s `finding_index` (the `engagement` field) to group activity by case; there's no shared database between servers, so `engagement_id` is a convention key, not a foreign key. Backed by a WAL-mode SQLite database at `$ODYSSEUS_DATA_DIR/engagements.db`.
+
+### `monitor_server` — Continuous Scan Drift Tracking
+
+| Tool | Description |
+|------|-------------|
+| `monitor_list_tasks` | List every (scheduled task, target, check) combination currently being monitored |
+| `monitor_get_state` | Get the current stored snapshot for one monitored check |
+| `monitor_diff_history` | List recent drift (added/removed items) recorded for a scheduled scan task |
+| `monitor_reset` | Clear a stored snapshot so the next run re-baselines (use after a known infra change) |
+
+Backs the `scheduled_recon` scheduled-task action (`src/builtin_actions.py`): a `ScheduledTask` with `task_type="action"` and `action="scheduled_recon"` re-runs `nmap_scan`/`subdomain_enum`/`tls_cert_info`/a Shodan CVE lookup against a configured target on a cron schedule, diffs the result against the last stored snapshot here, and only files a finding (via `findings_server`) and sends a reminder when something actually changed — new open port, new subdomain, changed TLS cert fingerprint, or a new CVE. Configure the task's prompt as JSON, e.g. `{"target": "example.com", "checks": ["ports", "cert"], "engagement_id": "..."}`. Backed by a WAL-mode SQLite database at `$ODYSSEUS_DATA_DIR/monitor.db`.
+
+### `watchlist_server` — IOC Watchlist
+
+| Tool | Description |
+|------|-------------|
+| `watchlist_add` | Add an IP, domain, hash, or URL to the persistent watchlist |
+| `watchlist_list` | List watchlist entries, filterable by kind, engagement, or status |
+| `watchlist_remove` | Remove an entry permanently |
+| `watchlist_pause` / `watchlist_resume` | Skip an entry in scheduled checks without losing its history |
+| `watchlist_check_history` | Show each provider's last-checked snapshot for one entry |
+
+Backs the `watchlist_check` scheduled-task action: on a cron schedule, re-checks every active entry against the threat-intel providers relevant to its kind (Shodan/Censys/OTX for IPs, OTX/VirusTotal for domains, VirusTotal for hashes/URLs — whichever have API keys configured), and files a finding + sends one batched reminder only when a provider's result changes since the last check. Backed by a WAL-mode SQLite database at `$ODYSSEUS_DATA_DIR/watchlist.db`.
+
+### `sigma_server` — Sigma Detection Rules
+
+| Tool | Description |
+|------|-------------|
+| `sigma_rule_write` | Save a Sigma detection rule (YAML), validating it parses |
+| `sigma_rule_list` | List stored rules |
+| `sigma_rule_delete` | Delete a stored rule |
+| `sigma_rule_convert` | Convert a rule to an OpenSearch Lucene query, without running it |
+| `sigma_rule_test` | Convert and run a rule against an OpenSearch index (default: `odysseus-findings`), returning match count and sample hits |
+
+The log-detection complement to `yara_server`'s file-pattern detection — Sigma rules match structured log/finding data rather than files, so this runs entirely in-process (no Kali sidecar) via the optional `pysigma` + `pysigma-backend-opensearch` packages (`requirements-optional.txt`). Without them, `sigma_rule_write`/`list`/`delete` still work (rules just need to be valid YAML, not full Sigma structure); `sigma_rule_convert`/`sigma_rule_test` return a clear error until they're installed. Write detection logic against `findings_server`'s indexed fields (`title`, `severity`, `cve_id`, `ip`, `port`, `tool`, `description`, `status`, `tags`) unless pointing at a different index. Rules are stored as YAML files under `$ODYSSEUS_DATA_DIR/sigma_rules/`. v1 is on-demand only — there's no scheduled rule sweep yet (a natural fast-follow alongside `scheduled_recon`/`watchlist_check`).
 
 ---
 
@@ -375,7 +429,11 @@ odysseus-red/
 │   ├── asset_server.py          # SQLite asset + findings inventory
 │   ├── attck_server.py          # MITRE ATT&CK STIX lookup
 │   ├── risk_server.py           # CVSS scoring + remediation plans
-│   └── findings_server.py       # OpenSearch findings persistence
+│   ├── findings_server.py       # OpenSearch findings persistence
+│   ├── engagement_server.py     # SQLite case/engagement grouping + timeline
+│   ├── monitor_server.py        # SQLite scan-drift snapshots for scheduled_recon
+│   ├── watchlist_server.py      # SQLite IOC watchlist for watchlist_check
+│   └── sigma_server.py          # Sigma detection rules (pysigma, in-process)
 ├── skills/
 │   ├── recon/full_recon.yaml
 │   ├── osint/                   # target_profile, spiderfoot_deep_scan, pdf_intel

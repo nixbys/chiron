@@ -4,7 +4,7 @@
 Upstream Odysseus has open reports of MCP servers intermittently failing to
 register or become callable in chat/agent sessions, with tools "disappearing"
 silently rather than raising a visible error. Since Odysseus Red's headline
-differentiator is its 14 cybersecurity MCP servers (plus 4 core-platform
+differentiator is its cybersecurity MCP servers (plus 4 core-platform
 servers: email, memory, image_gen, rag), a registration failure in any one of
 them needs to be loud and specific, not discovered by a user mid-session.
 
@@ -32,7 +32,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# The 14 cybersecurity-focused MCP servers unique to this fork, plus the 4
+# The cybersecurity-focused MCP servers unique to this fork, plus the 4
 # core-platform servers Odysseus Red also ships as built-ins. Kept as an
 # explicit list (rather than globbing mcp_servers/*.py) so a newly added
 # server file that hasn't been wired up yet doesn't silently count as a
@@ -41,7 +41,8 @@ FORK_SECURITY_SERVERS = [
     "recon_server", "intel_server", "osint_server", "web_vuln_server",
     "hashcrack_server", "spiderfoot_server", "pdf_server", "yara_server",
     "exploit_server", "transform_server", "asset_server", "attck_server",
-    "risk_server", "findings_server",
+    "risk_server", "findings_server", "engagement_server", "monitor_server",
+    "watchlist_server", "sigma_server",
 ]
 CORE_SERVERS = ["email_server", "memory_server", "image_gen_server", "rag_server"]
 
@@ -86,7 +87,7 @@ def main() -> int:
         "--core-only", action="store_true", help="check only the 4 core-platform servers"
     )
     parser.add_argument(
-        "--security-only", action="store_true", help="check only the 14 security-focused servers"
+        "--security-only", action="store_true", help="check only the security-focused servers"
     )
     args = parser.parse_args()
 

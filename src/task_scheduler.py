@@ -1242,7 +1242,7 @@ class TaskScheduler:
             def _progress(message: str):
                 self._set_run_progress(run_id, message)
 
-            kwargs = {"owner": task.owner, "task_name": task.name, "progress_cb": _progress}
+            kwargs = {"owner": task.owner, "task_name": task.name, "task_id": task.id, "progress_cb": _progress}
             if task.prompt:
                 kwargs["prompt"] = task.prompt
             if task.action in ("run_script", "run_local", "ssh_command") and task.prompt:

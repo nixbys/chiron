@@ -5,9 +5,11 @@ Registry of built-in automation actions that can be executed by the task
 scheduler without needing an LLM call.
 """
 
+import hashlib
 import logging
 import os
 import json
+import re
 from datetime import datetime
 from typing import Tuple
 
@@ -3391,6 +3393,335 @@ async def action_cookbook_serve(
     return f"Launched {repo_id} (session {sid})", True
 
 
+async def _find_qualified_tool(tool_name: str) -> str | None:
+    """Resolve a bare MCP tool name (e.g. 'nmap_scan') to its qualified
+    mcp__{server_id}__{tool_name} form by scanning the live MCP manager's
+    tool list. Returns None if no connected server currently exposes that
+    tool name -- not registered under Settings > Integrations > MCP, or
+    registered but disabled."""
+    from src.tool_utils import get_mcp_manager
+
+    mgr = get_mcp_manager()
+    if not mgr:
+        return None
+    for t in mgr.get_all_tools():
+        if t["name"] == tool_name and not t.get("is_disabled"):
+            return t["qualified_name"]
+    return None
+
+
+_SCHEDULED_RECON_CHECK_TOOLS = {
+    "ports": "nmap_scan",
+    "subdomains": "subdomain_enum",
+    "cert": "tls_cert_info",
+    # "cve" has no MCP tool of its own -- it calls intel_server's Shodan
+    # lookup directly (see action_scheduled_recon below) since a diffable
+    # CVE list needs structured data, not nmap_scan's raw text output.
+}
+
+_SCHEDULED_RECON_SEVERITY = {
+    "ports": "medium",
+    "subdomains": "low",
+    "cert": "medium",
+    "cve": "high",
+}
+
+
+def _parse_scheduled_recon_output(check_type: str, text: str) -> list[str]:
+    """Reduce one check's raw MCP tool output to a flat list of comparable
+    items, for monitor_server's set-diff. Deliberately conservative (regex
+    over free-text tool output, not a structured parser) since nmap/amass
+    output isn't guaranteed stable across versions -- a parse miss just
+    means fewer detected items, never a crash."""
+    if check_type == "ports":
+        return sorted(set(re.findall(r"^(\d+/(?:tcp|udp))\s+open", text, re.MULTILINE)))
+    if check_type == "subdomains":
+        return sorted({
+            line.strip() for line in text.splitlines()
+            if line.strip() and "[error:" not in line
+        })
+    if check_type == "cert":
+        # Track fingerprints, not the whole cert block -- a renewal with the
+        # same issuer/subject still gets a new fingerprint.
+        return sorted(set(re.findall(r"(?:SHA-1|MD5):\s*([0-9a-fA-F: ]+)", text)))
+    return []
+
+
+def _looks_like_ip(value: str) -> str | None:
+    import ipaddress
+    try:
+        ipaddress.ip_address(value)
+        return value
+    except ValueError:
+        return None
+
+
+async def action_scheduled_recon(owner: str, **kwargs) -> Tuple[str, bool]:
+    """Re-run configured recon checks (open ports, subdomains, TLS cert,
+    known CVEs) against a target, diff against the last stored snapshot
+    (mcp_servers/monitor_server.py), and file a finding only when something
+    actually changed since the last run.
+
+    kwargs:
+      task_id: str  -- the ScheduledTask's own id (see task_scheduler.py's
+                        _execute_action, which now passes this through);
+                        drift state is keyed per-task so the same target
+                        monitored by two different tasks doesn't collide.
+      prompt: str    -- JSON config, e.g.:
+        {"target": "example.com", "checks": ["ports", "subdomains", "cert", "cve"],
+         "engagement_id": "optional-engagement-id-from-engagement_create"}
+    """
+    import mcp_servers.engagement_server as engagement_mod
+    import mcp_servers.intel_server as intel_mod
+    import mcp_servers.monitor_server as monitor_mod
+    from src.event_bus import fire_event
+    from src.tool_utils import get_mcp_manager
+
+    task_id = kwargs.get("task_id") or ""
+    raw_prompt = kwargs.get("prompt") or "{}"
+    try:
+        config = json.loads(raw_prompt)
+    except (TypeError, ValueError):
+        return (
+            "scheduled_recon: prompt must be JSON, e.g. "
+            '{"target": "example.com", "checks": ["ports"]}',
+            False,
+        )
+
+    target = (config.get("target") or "").strip()
+    if not target:
+        return "scheduled_recon: no target configured in this task's prompt", False
+    checks = config.get("checks") or ["ports"]
+    engagement_id = config.get("engagement_id") or None
+
+    mgr = get_mcp_manager()
+    if not mgr:
+        return "scheduled_recon: MCP manager not available", False
+
+    findings_tool = await _find_qualified_tool("finding_index")
+
+    drifted_checks: list[tuple[str, list, list]] = []
+    errors: list[str] = []
+
+    for check_type in checks:
+        if check_type not in _SCHEDULED_RECON_SEVERITY:
+            errors.append(f"unknown check type: {check_type}")
+            continue
+
+        if check_type == "cve":
+            data = intel_mod._shodan_fetch(target)
+            if "_mcp_error" in data:
+                errors.append(f"cve check for {target}: {data['_mcp_error']}")
+                continue
+            items = sorted(data.get("vulns", {}).keys())
+        else:
+            tool_name = _SCHEDULED_RECON_CHECK_TOOLS[check_type]
+            qualified = await _find_qualified_tool(tool_name)
+            if not qualified:
+                errors.append(
+                    f"{check_type} check needs the '{tool_name}' MCP tool, which "
+                    "isn't registered/enabled -- see Settings > Integrations > MCP"
+                )
+                continue
+            arg_key = "domain" if check_type == "subdomains" else "host" if check_type == "cert" else "target"
+            result = await mgr.call_tool(qualified, {arg_key: target})
+            text = result.get("stdout") or result.get("stderr") or ""
+            if result.get("error") or "[error:" in text:
+                errors.append(f"{check_type} check for {target} failed: {result.get('error') or text}")
+                continue
+            items = _parse_scheduled_recon_output(check_type, text)
+
+        new_snapshot = {"items": items}
+        old_snapshot = monitor_mod._get_snapshot(task_id, target, check_type)
+        added, removed = monitor_mod._compute_diff(old_snapshot, new_snapshot)
+        monitor_mod._save_snapshot(task_id, owner, target, check_type, engagement_id, new_snapshot)
+
+        if old_snapshot is None:
+            # First run for this check -- this establishes the baseline;
+            # "everything is new" isn't drift worth a finding.
+            continue
+        if not added and not removed:
+            continue
+
+        monitor_mod._record_diff(task_id, target, check_type, added, removed)
+        drifted_checks.append((check_type, added, removed))
+
+    if not drifted_checks:
+        if errors:
+            return f"scheduled_recon: no drift; {len(errors)} check(s) had errors: {'; '.join(errors)}", False
+        raise TaskNoop(f"scheduled_recon: no drift detected for {target}")
+
+    summary_lines = [f"Drift detected for {target}:"]
+    for check_type, added, removed in drifted_checks:
+        summary_lines.append(f"- {check_type}: +{added or '[]'} -{removed or '[]'}")
+        title = f"{check_type} change on {target}"
+        description = f"Added: {added or 'none'}  Removed: {removed or 'none'}"
+        if findings_tool:
+            await mgr.call_tool(findings_tool, {
+                "title": title,
+                "severity": _SCHEDULED_RECON_SEVERITY.get(check_type, "low"),
+                "ip": _looks_like_ip(target),
+                "tool": "scheduled_recon",
+                "description": description,
+                "engagement": engagement_id,
+                "tags": ["continuous-monitoring", "drift", check_type],
+            })
+        if engagement_id:
+            engagement_mod._log_event(engagement_id, "scan_completed", title, description)
+    if errors:
+        summary_lines.append(f"({len(errors)} check(s) had errors: {'; '.join(errors)})")
+
+    try:
+        from routes.note_routes import dispatch_reminder
+        note_id_seed = "|".join(f"{c}:{a}:{r}" for c, a, r in drifted_checks)
+        note_id = f"scanmon-{task_id}-{hashlib.sha256(note_id_seed.encode()).hexdigest()[:12]}"
+        await dispatch_reminder(
+            title=f"Scheduled scan drift: {target}",
+            note_body="\n".join(summary_lines),
+            note_id=note_id,
+            owner=owner or "",
+        )
+    except Exception as e:
+        logger.warning(f"scheduled_recon: reminder dispatch failed: {e}")
+
+    fire_event("security_finding_added", owner)
+
+    return "\n".join(summary_lines), True
+
+
+# Which intel_server providers apply to which watchlist indicator kind, and
+# the module-level API-key attribute (intel_server.py) that gates each.
+_WATCHLIST_PROVIDERS_BY_KIND = {
+    "ip": ["shodan", "censys", "otx", "virustotal"],
+    "domain": ["otx", "virustotal"],
+    "hash": ["virustotal"],
+    "url": ["virustotal"],
+}
+_WATCHLIST_PROVIDER_KEY_ATTR = {
+    "shodan": "_SHODAN_KEY",
+    "censys": "_CENSYS_ID",
+    "otx": "_OTX_KEY",
+    "virustotal": "_VT_KEY",
+}
+# VirusTotal's "kind" param differs from the watchlist's own kind vocabulary
+# only for "hash" -> "file".
+_VT_KIND_MAP = {"ip": "ip", "domain": "domain", "hash": "file", "url": "url"}
+
+
+def _watchlist_provider_fetch(intel_mod, provider: str, indicator: str, kind: str) -> dict:
+    if provider == "shodan":
+        return intel_mod._shodan_fetch(indicator)
+    if provider == "censys":
+        return intel_mod._censys_fetch(indicator)
+    if provider == "otx":
+        otx_kind = {"ip": "IPv4", "domain": "domain", "hash": "file", "url": "url"}.get(kind, kind)
+        return intel_mod._otx_fetch(indicator, otx_kind)
+    if provider == "virustotal":
+        return intel_mod._vt_fetch(indicator, _VT_KIND_MAP.get(kind, kind))
+    return {"_mcp_error": f"unknown provider: {provider}"}
+
+
+def _watchlist_provider_signature(provider: str, data: dict) -> dict:
+    """Reduce one provider's raw response to the small comparable subset
+    that actually indicates a meaningful change -- not the whole payload,
+    which includes noisy fields (timestamps, scan ids) that would make
+    every check look like drift."""
+    if provider == "shodan":
+        return {"ports": sorted(data.get("ports", [])), "vulns": sorted(data.get("vulns", {}).keys())}
+    if provider == "censys":
+        result = data.get("result", {})
+        services = sorted(f"{s.get('port')}/{s.get('transport_protocol')}" for s in result.get("services", []))
+        return {"services": services}
+    if provider == "otx":
+        return {"pulse_count": data.get("pulse_info", {}).get("count", 0)}
+    if provider == "virustotal":
+        stats = data.get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
+        return {"malicious": stats.get("malicious", 0), "suspicious": stats.get("suspicious", 0)}
+    return {}
+
+
+async def action_watchlist_check(owner: str, **kwargs) -> Tuple[str, bool]:
+    """Re-check every active watchlist entry (mcp_servers/watchlist_server.py)
+    against the threat-intel providers relevant to its indicator kind, and
+    file a finding (+ send one batched reminder) when a provider's result
+    changes since the last check. Like action_scheduled_recon, the first
+    check for a given (entry, provider) establishes the baseline silently.
+    """
+    import mcp_servers.intel_server as intel_mod
+    import mcp_servers.watchlist_server as watchlist_mod
+    from src.event_bus import fire_event
+
+    entries = watchlist_mod._list_active_watchlist()
+    if not entries:
+        raise TaskNoop("watchlist_check: watchlist is empty")
+
+    qualified_findings_tool = await _find_qualified_tool("finding_index")
+    from src.tool_utils import get_mcp_manager
+    mgr = get_mcp_manager()
+
+    hits: list[str] = []
+    any_provider_configured = False
+
+    for entry in entries:
+        indicator, kind, watchlist_id = entry["indicator"], entry["kind"], entry["id"]
+        for provider in _WATCHLIST_PROVIDERS_BY_KIND.get(kind, []):
+            key_attr = _WATCHLIST_PROVIDER_KEY_ATTR[provider]
+            if provider == "censys":
+                if not getattr(intel_mod, "_CENSYS_ID", "") or not getattr(intel_mod, "_CENSYS_SECRET", ""):
+                    continue
+            elif not getattr(intel_mod, key_attr, ""):
+                continue
+            any_provider_configured = True
+
+            data = _watchlist_provider_fetch(intel_mod, provider, indicator, kind)
+            if "_mcp_error" in data:
+                continue
+            signature = _watchlist_provider_signature(provider, data)
+
+            prior = watchlist_mod._get_last_check(watchlist_id, provider)
+            watchlist_mod._save_check(watchlist_id, provider, signature)
+
+            if prior is None:
+                continue
+            if json.loads(prior["snapshot"]) == signature:
+                continue
+
+            hit = f"{provider} change on {indicator} ({kind}): {signature}"
+            hits.append(hit)
+            if qualified_findings_tool and mgr:
+                await mgr.call_tool(qualified_findings_tool, {
+                    "title": f"Watchlist hit: {provider} change on {indicator}",
+                    "severity": "medium",
+                    "tool": "watchlist_check",
+                    "description": hit,
+                    "engagement": entry.get("engagement_id"),
+                    "tags": ["watchlist", "threat-intel", provider],
+                })
+
+    if not hits:
+        if not any_provider_configured:
+            raise TaskNoop("watchlist_check: no threat-intel API keys configured")
+        raise TaskNoop("watchlist_check: no changes detected")
+
+    summary = f"Watchlist drift detected ({len(hits)}):\n" + "\n".join(f"- {h}" for h in hits)
+
+    try:
+        from routes.note_routes import dispatch_reminder
+        note_id = f"watchlist-{hashlib.sha256(summary.encode()).hexdigest()[:12]}"
+        await dispatch_reminder(
+            title="Watchlist hit(s) detected",
+            note_body=summary,
+            note_id=note_id,
+            owner=owner or "",
+        )
+    except Exception as e:
+        logger.warning(f"watchlist_check: reminder dispatch failed: {e}")
+
+    fire_event("security_finding_added", owner)
+
+    return summary, True
+
+
 BUILTIN_ACTIONS = {
     "tidy_sessions": action_tidy_sessions,
     "tidy_documents": action_tidy_documents,
@@ -3412,6 +3743,8 @@ BUILTIN_ACTIONS = {
     "audit_skills": action_audit_skills,
     "check_email_urgency": action_check_email_urgency,
     "cookbook_serve": action_cookbook_serve,
+    "scheduled_recon": action_scheduled_recon,
+    "watchlist_check": action_watchlist_check,
     # ping_notes removed from the registry — runs only inside `_note_pings_loop`.
 }
 
@@ -3433,4 +3766,6 @@ BUILTIN_ACTION_INFO = {
     "test_skills": "Run the per-skill Test on every skill: agent run + LLM judge → records verdict on the skill (pass/needs_work/fail/inconclusive). Advisory only — never rewrites or demotes anything.",
     "audit_skills": "Audit unaudited skills after enough new skills are added: test, narrow metadata, self-edit/retry, optional teacher rewrite, tag duplicates/trivial skills, and publish/draft using the auto-approve threshold.",
     "check_email_urgency": "Scan unread emails hourly, tag urgent/reply-soon/newsletter/marketing/spam, and send a reminder when a new email needs a fast reply.",
+    "scheduled_recon": "Re-run configured recon checks (ports/subdomains/TLS cert/known CVEs) against a target; files a finding and sends a reminder only when something changed since the last run. Configure via this task's prompt as JSON, e.g. {\"target\": \"example.com\", \"checks\": [\"ports\", \"cert\"]}.",
+    "watchlist_check": "Re-check every active IOC watchlist entry (Settings > MCP > watchlist_server, or the watchlist_add tool) against Shodan/VirusTotal/OTX/Censys; files a finding and sends a reminder only on a change since the last check.",
 }

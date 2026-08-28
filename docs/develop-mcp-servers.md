@@ -140,6 +140,21 @@ Common codes:
 2. Register it as a stdio MCP server pointing at `python mcp_servers/my_server.py` — Odysseus has no static config file for this; servers are registered as rows in the app's own `McpServer` table, either through **Settings → Integrations → MCP** in the UI, or by an admin-authenticated `POST /api/mcp/servers` call (see `routes/mcp/mcp_routes.py`). There's no separate seed step for a fresh install: the built-in fork servers aren't auto-registered by default, so exercising a new one locally means adding it the same way an operator would.
 3. Add the file path to the CI `paths:` trigger in `.github/workflows/ci-security.yml`
 4. Add the file to the bandit scan list in the same workflow
+5. Also add it to `scripts/mcp_health_check.py`'s `FORK_SECURITY_SERVERS` list and `.pre-commit-config.yaml`'s file alternation, and give it a `### my_server` section in `README.md` (tool table + repo-layout tree) — easy to miss since none of these three are enforced by CI.
+
+If the server needs a heavyweight or niche Python package that most installs won't use (e.g. `sigma_server.py`'s `pysigma`), add it to `requirements-optional.txt` instead of `requirements.txt`, and gate the import:
+
+```python
+try:
+    import pysigma
+    _PYSIGMA_AVAILABLE = True
+except ImportError:
+    _PYSIGMA_AVAILABLE = False
+```
+
+Two variants exist depending on how central the dependency is:
+- If it's required by *every* tool in the server (`pdf_server.py`'s `pypdf`), have `list_tools()` swap the whole `TOOLS` list for a single placeholder tool explaining what to install, and `call_tool()` short-circuit the same way — see `pdf_server.py`'s `_PYPDF_AVAILABLE` checks in both.
+- If only *some* tools need it (`sigma_server.py`'s `pysigma` — `sigma_rule_write`/`list`/`delete` work without it, only `convert`/`test` don't), keep `list_tools()` returning the full `TOOLS` list unconditionally, and have just the handlers that need the package check the flag and return `mcp_error("not_installed", ...)`. Shrinking the list here would make a client unable to tell "not installed" from "tool doesn't exist."
 
 ---
 

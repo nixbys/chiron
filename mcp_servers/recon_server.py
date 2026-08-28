@@ -67,6 +67,22 @@ TOOLS = [
             "required": ["target"],
         },
     ),
+    Tool(
+        name="tls_cert_info",
+        description=(
+            "Fetch TLS certificate details (issuer, subject, validity dates, SANs) "
+            "for a host:port via nmap's ssl-cert script. Useful for detecting cert "
+            "renewals/changes on a monitored host."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "host": {"type": "string", "description": "IP address or hostname (authorized targets only)"},
+                "port": {"type": "integer", "default": 443},
+            },
+            "required": ["host"],
+        },
+    ),
 ]
 
 
@@ -94,6 +110,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         result = exec_in_toolchain(
             ["masscan", target, "-p", ports, "--rate", str(rate), "--output-format", "list"],
             timeout=600,
+        )
+
+    elif name == "tls_cert_info":
+        host = arguments["host"]
+        if err := validate_ip(host):
+            return [TextContent(type="text", text=err)]
+        port = int(arguments.get("port", 443))
+        result = exec_in_toolchain(
+            ["nmap", "-p", str(port), "--script", "ssl-cert", "-Pn", host],
+            timeout=60,
         )
 
     else:
