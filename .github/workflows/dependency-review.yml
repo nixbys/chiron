@@ -68,4 +68,16 @@ jobs:
         run: |
           set -euo pipefail
           pip install pip-audit==2.10.0
-          pip-audit -r requirements.txt -r requirements-optional.txt --strict
+          pip-audit -r requirements.txt -r requirements-optional.txt --strict \
+            --ignore-vuln PYSEC-2026-2447
+            # PYSEC-2026-2447 / CVE-2025-69872 (GHSA-w8v5-vhqr-4h9v): diskcache's
+            # unsafe pickle deserialization when reading a cache directory an
+            # attacker already has write access to. No fixed version exists
+            # for any diskcache release as of this writing (upstream has not
+            # patched it). diskcache is a transitive dependency pulled in by
+            # pysigma-backend-opensearch (requirements-optional.txt, for
+            # mcp_servers/sigma_server.py) -- this fork's own code never
+            # imports diskcache directly or exposes a cache directory to
+            # untrusted writers, so the accepted risk is limited to whatever
+            # pysigma's own dependency chain does with it. Re-evaluate (drop
+            # this ignore) once a fixed diskcache version exists upstream.
