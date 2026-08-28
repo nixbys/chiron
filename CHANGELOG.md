@@ -10,6 +10,19 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 
 ## [Unreleased]
 
+### Added
+- `sigma_sweep` and `yara_sweep` scheduled-task actions (`src/builtin_actions.py`)
+  — the scheduled-sweep fast-follow `sigma_server`/`yara_server` called out
+  in 0.5.0's "v1 is on-demand only" notes. `sigma_sweep` converts every
+  stored Sigma rule (or a configured subset) and re-runs it against
+  OpenSearch; `yara_sweep` re-runs `yara_scan` against a configured target
+  in the Kali toolchain container. Both diff their results against the last
+  stored snapshot (`monitor_server`, extended with per-rule/per-target
+  check types) and only file a finding + send a reminder when something
+  actually changed since the last sweep — same drift-only-alerting design
+  as `scheduled_recon`/`watchlist_check`. `sigma_sweep` reads each rule's
+  own `level:` field for the filed finding's severity.
+
 ---
 
 ## [0.5.0] — 2026-08-27
