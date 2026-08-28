@@ -11,6 +11,16 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 ## [Unreleased]
 
 ### Added
+- `verify_remediation` scheduled-task action (`src/builtin_actions.py`) — the
+  remediation-verification loop: re-checks every `scheduled_recon`-sourced
+  finding marked `remediated` to confirm the underlying issue is actually
+  still gone, reconstructing what to re-test entirely from the finding's
+  own `title`/`description` (no separate state store). Reopens the
+  finding + sends a reminder if it's back; logs a confirming
+  `engagement_server` event if it's genuinely still remediated. Scoped to
+  `scheduled_recon` findings only — deliberately not `watchlist_check`/
+  `sigma_sweep`/`host_monitor` findings, none of which carry an
+  equivalently well-defined single re-testable item.
 - `sigma_sweep` and `yara_sweep` scheduled-task actions (`src/builtin_actions.py`)
   — the scheduled-sweep fast-follow `sigma_server`/`yara_server` called out
   in 0.5.0's "v1 is on-demand only" notes. `sigma_sweep` converts every

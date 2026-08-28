@@ -4157,6 +4157,175 @@ async def action_host_monitor(owner: str, **kwargs) -> Tuple[str, bool]:
     return "\n".join(summary_lines), True
 
 
+_TITLE_CHECK_TARGET_RE = re.compile(r"^(\w+) change on (.+)$")
+_DESCRIPTION_ADDED_RE = re.compile(r"Added:\s*(\[.*?\]|none)")
+
+
+async def _reverify_scheduled_recon_check(mgr, intel_mod, check_type: str, target: str) -> tuple[list | None, str | None]:
+    """Re-run one scheduled_recon check type against a target and return its
+    current item list, exactly the way action_scheduled_recon itself would.
+    Returns (items, error)."""
+    if check_type == "cve":
+        data = intel_mod._shodan_fetch(target)
+        if "_mcp_error" in data:
+            return None, data["_mcp_error"]
+        return sorted(data.get("vulns", {}).keys()), None
+
+    tool_name = _SCHEDULED_RECON_CHECK_TOOLS.get(check_type)
+    if not tool_name:
+        return None, f"unknown check type: {check_type}"
+    qualified = await _find_qualified_tool(tool_name)
+    if not qualified:
+        return None, f"needs the '{tool_name}' MCP tool, which isn't registered/enabled"
+    arg_key = "domain" if check_type == "subdomains" else "host" if check_type == "cert" else "target"
+    result = await mgr.call_tool(qualified, {arg_key: target})
+    text = result.get("stdout") or result.get("stderr") or ""
+    if result.get("error") or "[error:" in text:
+        return None, result.get("error") or text
+    return _parse_scheduled_recon_output(check_type, text), None
+
+
+async def action_verify_remediation(owner: str, **kwargs) -> Tuple[str, bool]:
+    """Re-check every scheduled_recon-sourced finding marked "remediated" to
+    confirm the underlying issue is actually still gone -- reopens the
+    finding + sends a reminder if it's back, logs a confirming engagement
+    event if it's genuinely still remediated. Never touches findings from
+    any other tool: watchlist/sigma/host_monitor findings don't carry an
+    equivalently well-defined single re-testable item (a changed threat-
+    intel signature, a log match, a host-state entry aren't "is this exact
+    thing still present?" checks the same way an open port is) -- out of
+    v1 scope.
+
+    Reconstructs what to re-check entirely from the finding's own fields --
+    no separate state store needed. action_scheduled_recon writes
+    title=f"{check_type} change on {target}" and
+    description=f"Added: {added} Removed: {removed}"; this parses both
+    back out, so it only works on findings scheduled_recon itself filed.
+
+    kwargs:
+      prompt: str  -- JSON config, e.g.:
+        {"limit": 20, "engagement_id": "optional-scope-to-one-engagement"}
+    """
+    import ast
+    import mcp_servers.engagement_server as engagement_mod
+    import mcp_servers.findings_server as findings_mod
+    import mcp_servers.intel_server as intel_mod
+    from src.event_bus import fire_event
+    from src.tool_utils import get_mcp_manager
+
+    raw_prompt = kwargs.get("prompt") or "{}"
+    try:
+        config = json.loads(raw_prompt)
+    except (TypeError, ValueError):
+        return 'verify_remediation: prompt must be JSON, e.g. {"limit": 20}', False
+
+    limit = int(config.get("limit", 20))
+    engagement_filter = config.get("engagement_id") or None
+
+    mgr = get_mcp_manager()
+    if not mgr:
+        return "verify_remediation: MCP manager not available", False
+
+    update_tool = await _find_qualified_tool("finding_update_status")
+
+    body_filter = [{"term": {"status": "remediated"}}, {"term": {"tool": "scheduled_recon"}}]
+    if engagement_filter:
+        body_filter.append({"term": {"engagement": engagement_filter}})
+    body = {
+        "query": {"bool": {"filter": body_filter}},
+        "size": limit,
+        "_source": ["title", "description", "engagement"],
+    }
+    try:
+        if err := findings_mod._ensure_index():
+            return f"verify_remediation: OpenSearch index setup failed: {err}", False
+        resp = findings_mod._req("POST", f"/{findings_mod._INDEX}/_search", body)
+    except Exception as exc:  # noqa: BLE001
+        return f"verify_remediation: OpenSearch query failed: {exc}", False
+
+    hits = resp.get("hits", {}).get("hits", [])
+    if not hits:
+        raise TaskNoop("verify_remediation: no remediated scheduled_recon findings to verify")
+
+    reopened: list[str] = []
+    confirmed: list[str] = []
+    errors: list[str] = []
+
+    for hit in hits:
+        src = hit.get("_source", {})
+        doc_id = hit["_id"]
+        title = src.get("title", "")
+        description = src.get("description", "")
+        engagement_id = src.get("engagement") or None
+
+        title_match = _TITLE_CHECK_TARGET_RE.match(title)
+        added_match = _DESCRIPTION_ADDED_RE.search(description)
+        if not title_match or not added_match or added_match.group(1) == "none":
+            errors.append(f"{doc_id}: couldn't reconstruct a re-checkable item from this finding")
+            continue
+        check_type, target = title_match.group(1), title_match.group(2)
+        try:
+            previously_added = ast.literal_eval(added_match.group(1))
+        except Exception:  # noqa: BLE001
+            errors.append(f"{doc_id}: couldn't parse the 'Added' list from this finding's description")
+            continue
+
+        current_items, err = await _reverify_scheduled_recon_check(mgr, intel_mod, check_type, target)
+        if err:
+            errors.append(f"{doc_id}: {check_type} re-check for {target} failed: {err}")
+            continue
+
+        still_present = sorted(set(previously_added) & set(current_items))
+        if still_present:
+            reopened.append(f"{title}: still present {still_present}")
+            if update_tool:
+                await mgr.call_tool(update_tool, {
+                    "doc_id": doc_id, "status": "open",
+                    "notes": f"Remediation check found this still present: {still_present}",
+                })
+            if engagement_id:
+                engagement_mod._log_event(
+                    engagement_id, "scan_completed", f"Remediation check reopened: {title}",
+                    f"Still present: {still_present}",
+                )
+        else:
+            confirmed.append(title)
+            if engagement_id:
+                engagement_mod._log_event(
+                    engagement_id, "scan_completed", f"Remediation confirmed: {title}",
+                    f"Previously flagged items no longer present: {previously_added}",
+                )
+
+    if not reopened:
+        if errors:
+            return f"verify_remediation: nothing reopened; {len(errors)} skipped: {'; '.join(errors)}", False
+        raise TaskNoop(f"verify_remediation: {len(confirmed)} confirmed still remediated, nothing reopened")
+
+    summary_lines = [f"Remediation check reopened {len(reopened)} finding(s):"]
+    summary_lines.extend(f"- {r}" for r in reopened)
+    if confirmed:
+        summary_lines.append(f"({len(confirmed)} confirmed still remediated)")
+    if errors:
+        summary_lines.append(f"({len(errors)} skipped: {'; '.join(errors)})")
+
+    try:
+        from routes.note_routes import dispatch_reminder
+        note_id_seed = "|".join(reopened)
+        note_id = f"remediation-{hashlib.sha256(note_id_seed.encode()).hexdigest()[:12]}"
+        await dispatch_reminder(
+            title="Remediation check: issue(s) reopened",
+            note_body="\n".join(summary_lines),
+            note_id=note_id,
+            owner=owner or "",
+        )
+    except Exception as e:
+        logger.warning(f"verify_remediation: reminder dispatch failed: {e}")
+
+    fire_event("security_finding_added", owner)
+
+    return "\n".join(summary_lines), True
+
+
 BUILTIN_ACTIONS = {
     "tidy_sessions": action_tidy_sessions,
     "tidy_documents": action_tidy_documents,
@@ -4183,6 +4352,7 @@ BUILTIN_ACTIONS = {
     "sigma_sweep": action_sigma_sweep,
     "yara_sweep": action_yara_sweep,
     "host_monitor": action_host_monitor,
+    "verify_remediation": action_verify_remediation,
     # ping_notes removed from the registry — runs only inside `_note_pings_loop`.
 }
 
@@ -4209,4 +4379,5 @@ BUILTIN_ACTION_INFO = {
     "sigma_sweep": "Convert every stored Sigma rule (or a configured subset) and re-run it against OpenSearch; files a finding and sends a reminder only when a rule's matches changed since the last sweep. Configure via this task's prompt as JSON, e.g. {\"rules\": [\"suspicious-logins\"]}.",
     "yara_sweep": "Run yara_scan against a configured target in the Kali toolchain container; files a finding and sends a reminder only when matches changed since the last sweep. Configure via this task's prompt as JSON, e.g. {\"target\": \"case-123/evidence\"}.",
     "host_monitor": "Re-check host telemetry (processes/listening ports/logged-in users, plus opt-in cron/packages) on the host Odysseus itself runs in; files a finding and sends a reminder only when something changed since the last run. Configure via this task's prompt as JSON, e.g. {\"checks\": [\"processes\", \"listening_ports\"]}.",
+    "verify_remediation": "Re-check every 'remediated' finding scheduled_recon filed to confirm the issue is actually still gone; reopens it and sends a reminder if it's back, otherwise logs a confirming engagement event. Configure via this task's prompt as JSON, e.g. {\"limit\": 20}.",
 }
