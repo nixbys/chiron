@@ -63,6 +63,7 @@ jobs:
             mcp_servers/monitor_server.py \
             mcp_servers/watchlist_server.py \
             mcp_servers/sigma_server.py \
+            mcp_servers/host_telemetry_server.py \
             modules/ \
             -ll -f json -o bandit-report.json 2>/dev/null || \
           bandit -r \
@@ -85,6 +86,7 @@ jobs:
             mcp_servers/monitor_server.py \
             mcp_servers/watchlist_server.py \
             mcp_servers/sigma_server.py \
+            mcp_servers/host_telemetry_server.py \
             modules/ \
             -ll
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

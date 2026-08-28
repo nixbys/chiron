@@ -32,7 +32,7 @@
 
 Odysseus Red layers a complete cybersecurity toolchain on top of the [Odysseus](https://github.com/pewdiepie-archdaemon/odysseus) self-hosted AI workspace. The base platform provides chat, agents, memory, deep research, documents, and MCP — this fork adds:
 
-- **18 cybersecurity MCP servers** wired to a Kali-based sidecar, SpiderFoot OSINT platform, OpenSearch, and BentoPDF
+- **19 cybersecurity MCP servers** wired to a Kali-based sidecar, SpiderFoot OSINT platform, OpenSearch, and BentoPDF
 - **Pre-built agent skill workflows** for reconnaissance, OSINT, incident response, threat hunting, malware analysis, web assessment, continuous monitoring, and reporting
 - **Continuous scanning** — schedule recon (ports/subdomains/TLS cert/CVEs) to re-run on a cron and only file a finding when something actually changed
 - **IOC watchlist** — persistent indicators re-checked against Shodan/VirusTotal/OTX/Censys, with a finding filed on any hit
@@ -302,7 +302,7 @@ Pass the returned `engagement_id` to `asset_server`'s `asset_add`/`finding_add` 
 | `monitor_diff_history` | List recent drift (added/removed items) recorded for a scheduled scan task |
 | `monitor_reset` | Clear a stored snapshot so the next run re-baselines (use after a known infra change) |
 
-Backs the `scheduled_recon` scheduled-task action (`src/builtin_actions.py`): a `ScheduledTask` with `task_type="action"` and `action="scheduled_recon"` re-runs `nmap_scan`/`subdomain_enum`/`tls_cert_info`/a Shodan CVE lookup against a configured target on a cron schedule, diffs the result against the last stored snapshot here, and only files a finding (via `findings_server`) and sends a reminder when something actually changed — new open port, new subdomain, changed TLS cert fingerprint, or a new CVE. Configure the task's prompt as JSON, e.g. `{"target": "example.com", "checks": ["ports", "cert"], "engagement_id": "..."}`. Also backs the `sigma_sweep` and `yara_sweep` actions below the same way — same snapshot/diff mechanism, one row per (task, target, check type). Backed by a WAL-mode SQLite database at `$ODYSSEUS_DATA_DIR/monitor.db`.
+Backs the `scheduled_recon` scheduled-task action (`src/builtin_actions.py`): a `ScheduledTask` with `task_type="action"` and `action="scheduled_recon"` re-runs `nmap_scan`/`subdomain_enum`/`tls_cert_info`/a Shodan CVE lookup against a configured target on a cron schedule, diffs the result against the last stored snapshot here, and only files a finding (via `findings_server`) and sends a reminder when something actually changed — new open port, new subdomain, changed TLS cert fingerprint, or a new CVE. Configure the task's prompt as JSON, e.g. `{"target": "example.com", "checks": ["ports", "cert"], "engagement_id": "..."}`. Also backs the `sigma_sweep`, `yara_sweep`, and `host_monitor` actions below the same way — same snapshot/diff mechanism, one row per (task, target, check type). Backed by a WAL-mode SQLite database at `$ODYSSEUS_DATA_DIR/monitor.db`.
 
 ### `watchlist_server` — IOC Watchlist
 
@@ -329,6 +329,20 @@ Backs the `watchlist_check` scheduled-task action: on a cron schedule, re-checks
 The log-detection complement to `yara_server`'s file-pattern detection — Sigma rules match structured log/finding data rather than files, so this runs entirely in-process (no Kali sidecar) via the optional `pysigma` + `pysigma-backend-opensearch` packages (`requirements-optional.txt`). Without them, `sigma_rule_write`/`list`/`delete` still work (rules just need to be valid YAML, not full Sigma structure); `sigma_rule_convert`/`sigma_rule_test` return a clear error until they're installed. Write detection logic against `findings_server`'s indexed fields (`title`, `severity`, `cve_id`, `ip`, `port`, `tool`, `description`, `status`, `tags`) unless pointing at a different index. Rules are stored as YAML files under `$ODYSSEUS_DATA_DIR/sigma_rules/`.
 
 Backs the `sigma_sweep` scheduled-task action (`src/builtin_actions.py`): on a cron schedule, converts every stored rule (or a configured subset) and re-runs it against OpenSearch, diffing each rule's match IDs against the last stored snapshot (`monitor_server`) and filing a finding + reminder only when a rule's matches changed since the last sweep — severity is read from the rule's own `level:` field when present. Configure via the task's prompt as JSON, e.g. `{"rules": ["suspicious-logins"], "engagement_id": "..."}` (omit `"rules"` to sweep everything stored).
+
+### `host_telemetry_server` — Host Telemetry
+
+| Tool | Description |
+|------|-------------|
+| `host_processes` | List running processes (pid, name, user, cmdline) |
+| `host_listening_ports` | List TCP/UDP sockets in LISTEN state, with owning pid where visible |
+| `host_users` | List currently logged-in users (interactive sessions) |
+| `host_cron_jobs` | List the invoking user's crontab plus system `cron.d` entries (Linux-only) |
+| `host_packages` | List installed OS packages via `dpkg` or `rpm`, whichever is present (Linux-only) |
+
+The blue-team complement to `recon_server`'s offensive scanning — read-only introspection of the host/container Odysseus itself is running in, not an arbitrary pentest target. Runs entirely via `psutil` (pure Python, in-process) rather than `exec_in_toolchain()`, since the Kali toolchain sidecar's own process list is useless for defensive monitoring of anything real. **Scope caveat**: when Odysseus runs inside a Docker container (the default deployment), these tools only ever see that container's own namespace — not the true underlying host — since no host-namespace passthrough (bind-mounted `/proc`, `pid: host`, etc.) exists in this fork yet; true host-level visibility from inside a container is a known gap, not solved here.
+
+Backs the `host_monitor` scheduled-task action (`src/builtin_actions.py`): on a cron schedule, re-runs a configured subset of these checks and diffs each against the last stored snapshot (`monitor_server`), filing a finding + reminder only when something changed since the last run. Process-name churn from kernel worker threads (`kworker/N:M`, which the kernel renumbers constantly) is filtered out before diffing. Configure via the task's prompt as JSON, e.g. `{"checks": ["processes", "listening_ports", "users"], "engagement_id": "..."}` — defaults to `["processes", "listening_ports", "users"]`; `cron`/`packages` are opt-in and Linux-only.
 
 ---
 
@@ -439,9 +453,10 @@ odysseus-red/
 │   ├── risk_server.py           # CVSS scoring + remediation plans
 │   ├── findings_server.py       # OpenSearch findings persistence
 │   ├── engagement_server.py     # SQLite case/engagement grouping + timeline
-│   ├── monitor_server.py        # SQLite scan-drift snapshots for scheduled_recon/sigma_sweep/yara_sweep
+│   ├── monitor_server.py        # SQLite scan-drift snapshots for scheduled_recon/sigma_sweep/yara_sweep/host_monitor
 │   ├── watchlist_server.py      # SQLite IOC watchlist for watchlist_check
-│   └── sigma_server.py          # Sigma detection rules (pysigma, in-process)
+│   ├── sigma_server.py          # Sigma detection rules (pysigma, in-process)
+│   └── host_telemetry_server.py # Host processes/ports/users/cron/packages (psutil, in-process)
 ├── skills/
 │   ├── recon/full_recon.yaml
 │   ├── osint/                   # target_profile, spiderfoot_deep_scan, pdf_intel
