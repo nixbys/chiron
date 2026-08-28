@@ -3722,6 +3722,279 @@ async def action_watchlist_check(owner: str, **kwargs) -> Tuple[str, bool]:
     return summary, True
 
 
+_SIGMA_LEVEL_TO_SEVERITY = {
+    "critical": "critical",
+    "high": "high",
+    "medium": "medium",
+    "low": "low",
+    "informational": "info",
+}
+
+
+def _sigma_rule_severity(sigma_mod, rule_name: str) -> str:
+    """Best-effort read of a stored Sigma rule's own `level:` field, mapped
+    onto findings_server's severity vocabulary. Falls back to "medium" if
+    the rule has no level or can't be parsed -- this is a convenience read,
+    never worth failing the sweep over."""
+    import yaml
+
+    path = sigma_mod._rule_path(rule_name)
+    if path is None or not path.exists():
+        return "medium"
+    try:
+        parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
+        level = (parsed or {}).get("level", "") if isinstance(parsed, dict) else ""
+        return _SIGMA_LEVEL_TO_SEVERITY.get(str(level).lower(), "medium")
+    except Exception:  # noqa: BLE001
+        return "medium"
+
+
+async def action_sigma_sweep(owner: str, **kwargs) -> Tuple[str, bool]:
+    """Convert every stored Sigma rule (mcp_servers/sigma_server.py) and
+    re-run it against OpenSearch, diffing each rule's match IDs against the
+    last stored snapshot (mcp_servers/monitor_server.py), and file a finding
+    only when a rule's matches changed since the last sweep. The log-
+    detection complement to action_yara_sweep below and the pattern-based
+    equivalent of action_scheduled_recon above.
+
+    kwargs:
+      task_id: str  -- the ScheduledTask's own id; drift state is keyed per-task
+                        the same way action_scheduled_recon's is.
+      prompt: str    -- JSON config, e.g.:
+        {"rules": ["suspicious-logins"], "index": "odysseus-findings",
+         "engagement_id": "optional-engagement-id-from-engagement_create"}
+        Omit "rules" to sweep every stored Sigma rule.
+    """
+    import mcp_servers.engagement_server as engagement_mod
+    import mcp_servers.monitor_server as monitor_mod
+    import mcp_servers.sigma_server as sigma_mod
+    from src.event_bus import fire_event
+    from src.tool_utils import get_mcp_manager
+
+    task_id = kwargs.get("task_id") or ""
+    raw_prompt = kwargs.get("prompt") or "{}"
+    try:
+        config = json.loads(raw_prompt)
+    except (TypeError, ValueError):
+        return (
+            'sigma_sweep: prompt must be JSON, e.g. {"rules": ["my-rule"]}',
+            False,
+        )
+
+    if not sigma_mod._PYSIGMA_AVAILABLE:
+        return (
+            "sigma_sweep: pysigma / pysigma-backend-opensearch not installed "
+            "-- see requirements-optional.txt",
+            False,
+        )
+
+    index = config.get("index") or sigma_mod._DEFAULT_INDEX
+    limit = int(config.get("limit", 100))
+    engagement_id = config.get("engagement_id") or None
+
+    rule_names = config.get("rules")
+    if not rule_names:
+        sigma_mod._RULES_DIR.mkdir(parents=True, exist_ok=True)
+        rule_names = sorted(p.stem for p in sigma_mod._RULES_DIR.glob("*.yml"))
+    if not rule_names:
+        raise TaskNoop("sigma_sweep: no stored Sigma rules to sweep")
+
+    findings_tool = await _find_qualified_tool("finding_index")
+    mgr = get_mcp_manager()
+
+    drifted_rules: list[tuple[str, list, list]] = []
+    errors: list[str] = []
+
+    for rule_name in rule_names:
+        queries, err = sigma_mod._convert_rule(rule_name)
+        if err:
+            errors.append(f"{rule_name}: {err}")
+            continue
+
+        match_ids: set[str] = set()
+        any_query_succeeded = False
+        for q in queries:
+            data = sigma_mod._os_search(index, q, limit)
+            if "_mcp_error" in data:
+                errors.append(f"{rule_name}: {data['_mcp_error']}")
+                continue
+            any_query_succeeded = True
+            for hit in data.get("hits", {}).get("hits", []):
+                match_ids.add(hit.get("_id", ""))
+        if not any_query_succeeded:
+            continue
+
+        new_snapshot = {"items": sorted(match_ids)}
+        check_type = f"sigma_rule:{rule_name}"
+        old_snapshot = monitor_mod._get_snapshot(task_id, index, check_type)
+        added, removed = monitor_mod._compute_diff(old_snapshot, new_snapshot)
+        monitor_mod._save_snapshot(task_id, owner, index, check_type, engagement_id, new_snapshot)
+
+        if old_snapshot is None:
+            # First sweep for this rule -- establishes the baseline; every
+            # existing match isn't "new" drift worth a finding.
+            continue
+        if not added and not removed:
+            continue
+
+        monitor_mod._record_diff(task_id, index, check_type, added, removed)
+        drifted_rules.append((rule_name, added, removed))
+
+    if not drifted_rules:
+        if errors:
+            return f"sigma_sweep: no drift; {len(errors)} rule(s) had errors: {'; '.join(errors)}", False
+        raise TaskNoop("sigma_sweep: no drift detected")
+
+    summary_lines = ["Sigma sweep drift detected:"]
+    for rule_name, added, removed in drifted_rules:
+        summary_lines.append(f"- {rule_name}: +{len(added)} new match(es), -{len(removed)} cleared")
+        title = f"Sigma rule match: {rule_name}"
+        description = f"New matches: {added or 'none'}  Cleared matches: {removed or 'none'}"
+        if findings_tool and mgr:
+            await mgr.call_tool(findings_tool, {
+                "title": title,
+                "severity": _sigma_rule_severity(sigma_mod, rule_name),
+                "tool": "sigma_sweep",
+                "description": description,
+                "engagement": engagement_id,
+                "tags": ["continuous-monitoring", "sigma", "drift", rule_name],
+            })
+        if engagement_id:
+            engagement_mod._log_event(engagement_id, "scan_completed", title, description)
+    if errors:
+        summary_lines.append(f"({len(errors)} rule(s) had errors: {'; '.join(errors)})")
+
+    try:
+        from routes.note_routes import dispatch_reminder
+        note_id_seed = "|".join(f"{r}:{a}:{rm}" for r, a, rm in drifted_rules)
+        note_id = f"sigmasweep-{task_id}-{hashlib.sha256(note_id_seed.encode()).hexdigest()[:12]}"
+        await dispatch_reminder(
+            title="Sigma sweep drift detected",
+            note_body="\n".join(summary_lines),
+            note_id=note_id,
+            owner=owner or "",
+        )
+    except Exception as e:
+        logger.warning(f"sigma_sweep: reminder dispatch failed: {e}")
+
+    fire_event("security_finding_added", owner)
+
+    return "\n".join(summary_lines), True
+
+
+# yara_scan's toolchain output is `rulename /path/to/match` per line.
+_YARA_MATCH_RE = re.compile(r"^(\S+)\s+(\S+)$", re.MULTILINE)
+
+
+async def action_yara_sweep(owner: str, **kwargs) -> Tuple[str, bool]:
+    """Run yara_scan (mcp_servers/yara_server.py, inside the Kali toolchain
+    container) against a configured target, diff the matched (rule, path)
+    pairs against the last stored snapshot (mcp_servers/monitor_server.py),
+    and file a finding only when matches changed since the last sweep. The
+    file-pattern complement to action_sigma_sweep above.
+
+    kwargs:
+      task_id: str  -- the ScheduledTask's own id; drift state is keyed per-task.
+      prompt: str    -- JSON config, e.g.:
+        {"target": "case-123/evidence", "rule_file": "optional.yar",
+         "engagement_id": "optional-engagement-id-from-engagement_create"}
+        target is relative to /workspaces/ inside the toolchain container,
+        same as yara_scan's own "target" argument. Omit rule_file to scan
+        with every rule under /workspaces/yara_rules/.
+    """
+    import mcp_servers.engagement_server as engagement_mod
+    import mcp_servers.monitor_server as monitor_mod
+    from src.event_bus import fire_event
+    from src.tool_utils import get_mcp_manager
+
+    task_id = kwargs.get("task_id") or ""
+    raw_prompt = kwargs.get("prompt") or "{}"
+    try:
+        config = json.loads(raw_prompt)
+    except (TypeError, ValueError):
+        return (
+            'yara_sweep: prompt must be JSON, e.g. {"target": "case-123/evidence"}',
+            False,
+        )
+
+    target = (config.get("target") or "").strip()
+    if not target:
+        return "yara_sweep: no target configured in this task's prompt", False
+    rule_file = config.get("rule_file") or ""
+    engagement_id = config.get("engagement_id") or None
+
+    mgr = get_mcp_manager()
+    if not mgr:
+        return "yara_sweep: MCP manager not available", False
+
+    qualified = await _find_qualified_tool("yara_scan")
+    if not qualified:
+        return (
+            "yara_sweep: needs the 'yara_scan' MCP tool, which isn't "
+            "registered/enabled -- see Settings > Integrations > MCP",
+            False,
+        )
+
+    call_args = {"target": target}
+    if rule_file:
+        call_args["rule_file"] = rule_file
+    result = await mgr.call_tool(qualified, call_args)
+    text = result.get("stdout") or result.get("stderr") or ""
+    if result.get("error") or "[error:" in text:
+        return f"yara_sweep: scan of {target} failed: {result.get('error') or text}", False
+
+    matches = sorted({f"{m[0]}:{m[1]}" for m in _YARA_MATCH_RE.findall(text)})
+
+    # check_type carries which rule_file was used (same convention as
+    # action_scheduled_recon's check_type distinguishing check kinds for one
+    # target); monitor's own "target" column holds the scanned path itself.
+    check_type = f"yara:{rule_file}" if rule_file else "yara"
+    new_snapshot = {"items": matches}
+    old_snapshot = monitor_mod._get_snapshot(task_id, target, check_type)
+    added, removed = monitor_mod._compute_diff(old_snapshot, new_snapshot)
+    monitor_mod._save_snapshot(task_id, owner, target, check_type, engagement_id, new_snapshot)
+
+    if old_snapshot is None:
+        raise TaskNoop(f"yara_sweep: baseline established for {target}")
+    if not added and not removed:
+        raise TaskNoop(f"yara_sweep: no drift detected for {target}")
+
+    monitor_mod._record_diff(task_id, target, check_type, added, removed)
+
+    title = f"YARA match change on {target}"
+    description = f"New matches: {added or 'none'}  Cleared matches: {removed or 'none'}"
+    summary = f"YARA sweep drift for {target}:\n- +{added or '[]'} -{removed or '[]'}"
+
+    findings_tool = await _find_qualified_tool("finding_index")
+    if findings_tool:
+        await mgr.call_tool(findings_tool, {
+            "title": title,
+            "severity": "high",
+            "tool": "yara_sweep",
+            "description": description,
+            "engagement": engagement_id,
+            "tags": ["continuous-monitoring", "yara", "drift"],
+        })
+    if engagement_id:
+        engagement_mod._log_event(engagement_id, "scan_completed", title, description)
+
+    try:
+        from routes.note_routes import dispatch_reminder
+        note_id = f"yarasweep-{task_id}-{hashlib.sha256((title + description).encode()).hexdigest()[:12]}"
+        await dispatch_reminder(
+            title=f"YARA sweep drift: {target}",
+            note_body=summary,
+            note_id=note_id,
+            owner=owner or "",
+        )
+    except Exception as e:
+        logger.warning(f"yara_sweep: reminder dispatch failed: {e}")
+
+    fire_event("security_finding_added", owner)
+
+    return summary, True
+
+
 BUILTIN_ACTIONS = {
     "tidy_sessions": action_tidy_sessions,
     "tidy_documents": action_tidy_documents,
@@ -3745,6 +4018,8 @@ BUILTIN_ACTIONS = {
     "cookbook_serve": action_cookbook_serve,
     "scheduled_recon": action_scheduled_recon,
     "watchlist_check": action_watchlist_check,
+    "sigma_sweep": action_sigma_sweep,
+    "yara_sweep": action_yara_sweep,
     # ping_notes removed from the registry — runs only inside `_note_pings_loop`.
 }
 
@@ -3768,4 +4043,6 @@ BUILTIN_ACTION_INFO = {
     "check_email_urgency": "Scan unread emails hourly, tag urgent/reply-soon/newsletter/marketing/spam, and send a reminder when a new email needs a fast reply.",
     "scheduled_recon": "Re-run configured recon checks (ports/subdomains/TLS cert/known CVEs) against a target; files a finding and sends a reminder only when something changed since the last run. Configure via this task's prompt as JSON, e.g. {\"target\": \"example.com\", \"checks\": [\"ports\", \"cert\"]}.",
     "watchlist_check": "Re-check every active IOC watchlist entry (Settings > MCP > watchlist_server, or the watchlist_add tool) against Shodan/VirusTotal/OTX/Censys; files a finding and sends a reminder only on a change since the last check.",
+    "sigma_sweep": "Convert every stored Sigma rule (or a configured subset) and re-run it against OpenSearch; files a finding and sends a reminder only when a rule's matches changed since the last sweep. Configure via this task's prompt as JSON, e.g. {\"rules\": [\"suspicious-logins\"]}.",
+    "yara_sweep": "Run yara_scan against a configured target in the Kali toolchain container; files a finding and sends a reminder only when matches changed since the last sweep. Configure via this task's prompt as JSON, e.g. {\"target\": \"case-123/evidence\"}.",
 }

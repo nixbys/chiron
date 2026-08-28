@@ -198,7 +198,13 @@ Uses `pypdf` (already in `requirements.txt`) — no additional dependencies. For
 | `yara_list_rules` | List all available YARA rules |
 
 Rules are stored under `/workspaces/yara_rules/` inside the Kali container.
-See `sigma_server` below for the log-detection equivalent.
+See `sigma_server` below for the log-detection equivalent. Backs the
+`yara_sweep` scheduled-task action (`src/builtin_actions.py`): on a cron
+schedule, re-runs `yara_scan` against a configured target and diffs the
+matched (rule, path) pairs against the last stored snapshot
+(`monitor_server`), filing a finding + reminder only when matches changed
+since the last sweep. Configure via the task's prompt as JSON, e.g.
+`{"target": "case-123/evidence", "engagement_id": "..."}`.
 
 ### `exploit_server` — Exploit Database
 
@@ -296,7 +302,7 @@ Pass the returned `engagement_id` to `asset_server`'s `asset_add`/`finding_add` 
 | `monitor_diff_history` | List recent drift (added/removed items) recorded for a scheduled scan task |
 | `monitor_reset` | Clear a stored snapshot so the next run re-baselines (use after a known infra change) |
 
-Backs the `scheduled_recon` scheduled-task action (`src/builtin_actions.py`): a `ScheduledTask` with `task_type="action"` and `action="scheduled_recon"` re-runs `nmap_scan`/`subdomain_enum`/`tls_cert_info`/a Shodan CVE lookup against a configured target on a cron schedule, diffs the result against the last stored snapshot here, and only files a finding (via `findings_server`) and sends a reminder when something actually changed — new open port, new subdomain, changed TLS cert fingerprint, or a new CVE. Configure the task's prompt as JSON, e.g. `{"target": "example.com", "checks": ["ports", "cert"], "engagement_id": "..."}`. Backed by a WAL-mode SQLite database at `$ODYSSEUS_DATA_DIR/monitor.db`.
+Backs the `scheduled_recon` scheduled-task action (`src/builtin_actions.py`): a `ScheduledTask` with `task_type="action"` and `action="scheduled_recon"` re-runs `nmap_scan`/`subdomain_enum`/`tls_cert_info`/a Shodan CVE lookup against a configured target on a cron schedule, diffs the result against the last stored snapshot here, and only files a finding (via `findings_server`) and sends a reminder when something actually changed — new open port, new subdomain, changed TLS cert fingerprint, or a new CVE. Configure the task's prompt as JSON, e.g. `{"target": "example.com", "checks": ["ports", "cert"], "engagement_id": "..."}`. Also backs the `sigma_sweep` and `yara_sweep` actions below the same way — same snapshot/diff mechanism, one row per (task, target, check type). Backed by a WAL-mode SQLite database at `$ODYSSEUS_DATA_DIR/monitor.db`.
 
 ### `watchlist_server` — IOC Watchlist
 
@@ -320,7 +326,9 @@ Backs the `watchlist_check` scheduled-task action: on a cron schedule, re-checks
 | `sigma_rule_convert` | Convert a rule to an OpenSearch Lucene query, without running it |
 | `sigma_rule_test` | Convert and run a rule against an OpenSearch index (default: `odysseus-findings`), returning match count and sample hits |
 
-The log-detection complement to `yara_server`'s file-pattern detection — Sigma rules match structured log/finding data rather than files, so this runs entirely in-process (no Kali sidecar) via the optional `pysigma` + `pysigma-backend-opensearch` packages (`requirements-optional.txt`). Without them, `sigma_rule_write`/`list`/`delete` still work (rules just need to be valid YAML, not full Sigma structure); `sigma_rule_convert`/`sigma_rule_test` return a clear error until they're installed. Write detection logic against `findings_server`'s indexed fields (`title`, `severity`, `cve_id`, `ip`, `port`, `tool`, `description`, `status`, `tags`) unless pointing at a different index. Rules are stored as YAML files under `$ODYSSEUS_DATA_DIR/sigma_rules/`. v1 is on-demand only — there's no scheduled rule sweep yet (a natural fast-follow alongside `scheduled_recon`/`watchlist_check`).
+The log-detection complement to `yara_server`'s file-pattern detection — Sigma rules match structured log/finding data rather than files, so this runs entirely in-process (no Kali sidecar) via the optional `pysigma` + `pysigma-backend-opensearch` packages (`requirements-optional.txt`). Without them, `sigma_rule_write`/`list`/`delete` still work (rules just need to be valid YAML, not full Sigma structure); `sigma_rule_convert`/`sigma_rule_test` return a clear error until they're installed. Write detection logic against `findings_server`'s indexed fields (`title`, `severity`, `cve_id`, `ip`, `port`, `tool`, `description`, `status`, `tags`) unless pointing at a different index. Rules are stored as YAML files under `$ODYSSEUS_DATA_DIR/sigma_rules/`.
+
+Backs the `sigma_sweep` scheduled-task action (`src/builtin_actions.py`): on a cron schedule, converts every stored rule (or a configured subset) and re-runs it against OpenSearch, diffing each rule's match IDs against the last stored snapshot (`monitor_server`) and filing a finding + reminder only when a rule's matches changed since the last sweep — severity is read from the rule's own `level:` field when present. Configure via the task's prompt as JSON, e.g. `{"rules": ["suspicious-logins"], "engagement_id": "..."}` (omit `"rules"` to sweep everything stored).
 
 ---
 
@@ -431,7 +439,7 @@ odysseus-red/
 │   ├── risk_server.py           # CVSS scoring + remediation plans
 │   ├── findings_server.py       # OpenSearch findings persistence
 │   ├── engagement_server.py     # SQLite case/engagement grouping + timeline
-│   ├── monitor_server.py        # SQLite scan-drift snapshots for scheduled_recon
+│   ├── monitor_server.py        # SQLite scan-drift snapshots for scheduled_recon/sigma_sweep/yara_sweep
 │   ├── watchlist_server.py      # SQLite IOC watchlist for watchlist_check
 │   └── sigma_server.py          # Sigma detection rules (pysigma, in-process)
 ├── skills/
