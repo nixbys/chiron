@@ -54,3 +54,39 @@ async def test_yara_rule_write_valid():
 async def test_unknown_tool_returns_error():
     results = await ys.call_tool("no_such_tool", {})
     assert "[error:" in results[0].text
+
+
+def test_list_rule_names_helper():
+    with _mock_exec("rule1.yar\nrule2.yar\nREADME.md"):
+        names = ys._list_rule_names()
+    assert names == ["rule1", "rule2"]  # non-.yar files filtered, sorted
+
+
+def test_list_rule_names_helper_empty_dir():
+    with _mock_exec("(no output)"):
+        assert ys._list_rule_names() == []
+
+
+def test_list_rule_names_helper_sidecar_unreachable():
+    with patch("mcp_servers.yara_server.exec_in_toolchain", return_value="[error:network] connection refused"):
+        assert ys._list_rule_names() is None
+
+
+def test_read_rule_helper():
+    with _mock_exec("rule Test { condition: true }"):
+        content, err = ys._read_rule("my_rule")
+    assert err is None
+    assert "rule Test" in content
+
+
+def test_read_rule_helper_not_found():
+    with _mock_exec("cat: /workspaces/yara_rules/nope.yar: No such file or directory"):
+        content, err = ys._read_rule("nope")
+    assert content is None
+    assert "[error:not_found]" in err
+
+
+def test_read_rule_helper_invalid_name():
+    content, err = ys._read_rule("../../etc/passwd")
+    assert content is None
+    assert "[error:invalid_name]" in err

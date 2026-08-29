@@ -110,6 +110,45 @@ def _list_active_watchlist() -> list[dict]:
         conn.close()
 
 
+def _list_watchlist(kind: str | None = None, engagement_id: str | None = None, status: str = "active") -> list[dict]:
+    """Structured (not text-table) entry list, for direct import by the
+    security dashboard's watchlist-management route. `_list_active_watchlist`
+    above stays as-is (status='active' only, no other filters) since the
+    scheduled watchlist-check action already depends on that exact shape."""
+    conn = _get_db()
+    try:
+        query = "SELECT id, indicator, kind, engagement_id, status, source, notes, created_at FROM watchlist WHERE 1=1"
+        params: list = []
+        if kind:
+            query += " AND kind=?"
+            params.append(kind)
+        if engagement_id:
+            query += " AND engagement_id=?"
+            params.append(engagement_id)
+        if status:
+            query += " AND status=?"
+            params.append(status)
+        query += " ORDER BY id DESC"
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _list_checks(watchlist_id: int) -> list[dict]:
+    """Structured check history for one entry, for direct import by the
+    security dashboard's watchlist-detail route."""
+    conn = _get_db()
+    try:
+        rows = conn.execute(
+            "SELECT provider, snapshot, checked_at FROM watchlist_checks WHERE watchlist_id=? ORDER BY checked_at DESC",
+            (watchlist_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def _hash_snapshot(snapshot: dict) -> str:
     canonical = json.dumps(snapshot, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()
@@ -237,19 +276,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:  # noqa: C
                     result = mcp_error("duplicate", f"{indicator!r} ({kind}) is already on the watchlist.")
 
         elif name == "watchlist_list":
-            query = "SELECT id, indicator, kind, engagement_id, status, source FROM watchlist WHERE 1=1"
-            params: list = []
-            if kind := arguments.get("kind"):
-                query += " AND kind=?"
-                params.append(kind)
-            if engagement_id := arguments.get("engagement_id"):
-                query += " AND engagement_id=?"
-                params.append(engagement_id)
-            status = arguments.get("status", "active")
-            query += " AND status=?"
-            params.append(status)
-            query += " ORDER BY id DESC"
-            rows = conn.execute(query, params).fetchall()
+            rows = _list_watchlist(
+                kind=arguments.get("kind"),
+                engagement_id=arguments.get("engagement_id"),
+                status=arguments.get("status", "active"),
+            )
             if not rows:
                 result = "No watchlist entries found."
             else:
@@ -275,10 +306,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:  # noqa: C
             result = f"Resumed watchlist entry {arguments['watchlist_id']}." if cur.rowcount else mcp_error("not_found", f"No watchlist entry {arguments['watchlist_id']}")
 
         elif name == "watchlist_check_history":
-            rows = conn.execute(
-                "SELECT provider, snapshot, checked_at FROM watchlist_checks WHERE watchlist_id=? ORDER BY checked_at DESC",
-                (arguments["watchlist_id"],),
-            ).fetchall()
+            rows = _list_checks(arguments["watchlist_id"])
             if not rows:
                 result = "No checks recorded yet for this entry."
             else:

@@ -1,31 +1,46 @@
 # routes/security_dashboard_routes.py
-"""Security dashboard: one admin-gated endpoint aggregating a snapshot
-across the security MCP servers' own stores.
-
-This is the minimal v1 page -- a later pass turns it into the full
-Security Hub anchor (engagement/watchlist/rule-management sub-panels,
-new design system), not a bigger version of this same page.
+"""Security Hub: the admin-gated dashboard snapshot, plus management
+sub-panels for engagements, the watchlist, and Sigma/YARA rules.
 
 Reads each source via direct import of the relevant mcp_servers module
 (bypassing the MCP text-tool interface for structured data) rather than
 through the MCP manager -- routes/ files can cross-import mcp_servers
 modules; the no-cross-import rule is only mcp_servers-to-mcp_servers.
-Every source is best-effort: one section failing (e.g. OpenSearch
-unreachable) surfaces as an `error` field on that section, not a 500 for
-the whole dashboard.
+Every dashboard section is best-effort: one section failing (e.g.
+OpenSearch unreachable) surfaces as an `error` field on that section, not
+a 500 for the whole dashboard.
+
+Writes (create/update/close an engagement, add/remove/pause a watchlist
+entry) go through the *same* MCP server module's `call_tool()` that the
+chat/MCP-tool path uses -- `_call_tool()` below awaits it directly and
+maps its `[error:code]` text convention onto an HTTP status, so there is
+exactly one place each write's validation/business logic lives, not a
+second copy reimplemented in SQL here. Reads that need structured JSON
+(not text-table output) go through small `_list_*`/`_get_*` helpers each
+module exposes for direct import, same pattern `_list_engagements` /
+`_list_active_watchlist` already established for the dashboard's own
+summary sections.
 """
 
 import asyncio
 import json
 import logging
+import re
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from core.middleware import require_admin
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/security", tags=["security-dashboard"])
+
+# Maps an MCP `[error:<code>]` code onto an HTTP status. Anything not
+# listed here (a validation error like `invalid_kind`, `invalid_hash`,
+# `db_error`) falls back to 400 -- "the request itself was bad" is the
+# correct default for this fork's MCP servers' error vocabulary.
+_ERROR_STATUS = {"not_found": 404, "duplicate": 409}
 
 
 def _fetch_findings_summary() -> dict:
@@ -113,8 +128,50 @@ def _fetch_host_telemetry_summary() -> dict:
     return summary
 
 
+async def _call_tool(mod, tool_name: str, arguments: dict) -> str:
+    """Await one MCP server module's call_tool() directly and map its
+    `[error:code]` text convention onto an HTTPException, or return the
+    raw result text on success. This is the one place a write from the
+    Security Hub UI touches server state -- same function, same
+    validation, as the chat/MCP-tool path; see the module docstring."""
+    results = await mod.call_tool(tool_name, arguments)
+    text = results[0].text
+    if match := re.match(r"^\[error:(\w+)\]\s*(.*)", text):
+        code, message = match.group(1), match.group(2)
+        raise HTTPException(_ERROR_STATUS.get(code, 400), message or text)
+    return text
+
+
+_CREATED_ID_RE = re.compile(r"\(id=([0-9a-f]+)\)")
+
+
+class EngagementCreateBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str = ""
+    client: str = ""
+    scope: list[str] = Field(default_factory=list)
+    out_of_scope: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
+class EngagementUpdateBody(BaseModel):
+    description: str | None = None
+    client: str | None = None
+    scope: list[str] | None = None
+    out_of_scope: list[str] | None = None
+    tags: list[str] | None = None
+
+
+class WatchlistAddBody(BaseModel):
+    indicator: str = Field(..., min_length=1, max_length=500)
+    kind: str
+    engagement_id: str | None = None
+    notes: str = ""
+    source: str = "manual"
+
+
 def setup_security_dashboard_routes():
-    """Setup the security dashboard route. Mirrors setup_mcp_routes'
+    """Setup the Security Hub routes. Mirrors setup_mcp_routes'
     factory-function shape (routes/mcp/mcp_routes.py) for consistency,
     even though this router doesn't need any injected dependency yet."""
 
@@ -137,5 +194,125 @@ def setup_security_dashboard_routes():
             "engagements": engagements,
             "host_telemetry": host_telemetry,
         }
+
+    # ---- Engagements ----------------------------------------------------
+
+    @router.get("/engagements")
+    async def list_engagements(request: Request, status: str | None = None, limit: int = 50):
+        require_admin(request)
+        import mcp_servers.engagement_server as mod
+        limit = max(1, min(limit, 200))
+        return {"list": await asyncio.to_thread(mod._list_engagements, status, limit)}
+
+    @router.get("/engagements/{engagement_id}")
+    async def get_engagement(request: Request, engagement_id: str, timeline_limit: int = 200):
+        require_admin(request)
+        import mcp_servers.engagement_server as mod
+        engagement = await asyncio.to_thread(mod._get_engagement, engagement_id)
+        if engagement is None:
+            raise HTTPException(404, f"No engagement with id {engagement_id!r}")
+        for field in ("scope", "out_of_scope", "tags"):
+            engagement[field] = json.loads(engagement.get(field) or "[]")
+        timeline = await asyncio.to_thread(mod._get_timeline, engagement_id, max(1, min(timeline_limit, 1000)))
+        return {"engagement": engagement, "timeline": timeline}
+
+    @router.post("/engagements", status_code=201)
+    async def create_engagement(request: Request, body: EngagementCreateBody):
+        require_admin(request)
+        import mcp_servers.engagement_server as mod
+        text = await _call_tool(mod, "engagement_create", body.model_dump())
+        match = _CREATED_ID_RE.search(text)
+        return {"message": text, "engagement_id": match.group(1) if match else None}
+
+    @router.patch("/engagements/{engagement_id}")
+    async def update_engagement(request: Request, engagement_id: str, body: EngagementUpdateBody):
+        require_admin(request)
+        import mcp_servers.engagement_server as mod
+        args = {"engagement_id": engagement_id, **{k: v for k, v in body.model_dump().items() if v is not None}}
+        return {"message": await _call_tool(mod, "engagement_update", args)}
+
+    @router.post("/engagements/{engagement_id}/close")
+    async def close_engagement(request: Request, engagement_id: str):
+        require_admin(request)
+        import mcp_servers.engagement_server as mod
+        return {"message": await _call_tool(mod, "engagement_close", {"engagement_id": engagement_id})}
+
+    # ---- Watchlist --------------------------------------------------------
+
+    @router.get("/watchlist")
+    async def list_watchlist(
+        request: Request, kind: str | None = None, engagement_id: str | None = None, status: str = "active",
+    ):
+        require_admin(request)
+        import mcp_servers.watchlist_server as mod
+        return {"list": await asyncio.to_thread(mod._list_watchlist, kind, engagement_id, status)}
+
+    @router.post("/watchlist", status_code=201)
+    async def add_watchlist_entry(request: Request, body: WatchlistAddBody):
+        require_admin(request)
+        import mcp_servers.watchlist_server as mod
+        return {"message": await _call_tool(mod, "watchlist_add", body.model_dump())}
+
+    @router.delete("/watchlist/{watchlist_id}")
+    async def remove_watchlist_entry(request: Request, watchlist_id: int):
+        require_admin(request)
+        import mcp_servers.watchlist_server as mod
+        return {"message": await _call_tool(mod, "watchlist_remove", {"watchlist_id": watchlist_id})}
+
+    @router.post("/watchlist/{watchlist_id}/pause")
+    async def pause_watchlist_entry(request: Request, watchlist_id: int):
+        require_admin(request)
+        import mcp_servers.watchlist_server as mod
+        return {"message": await _call_tool(mod, "watchlist_pause", {"watchlist_id": watchlist_id})}
+
+    @router.post("/watchlist/{watchlist_id}/resume")
+    async def resume_watchlist_entry(request: Request, watchlist_id: int):
+        require_admin(request)
+        import mcp_servers.watchlist_server as mod
+        return {"message": await _call_tool(mod, "watchlist_resume", {"watchlist_id": watchlist_id})}
+
+    @router.get("/watchlist/{watchlist_id}/checks")
+    async def get_watchlist_checks(request: Request, watchlist_id: int):
+        require_admin(request)
+        import mcp_servers.watchlist_server as mod
+        checks = await asyncio.to_thread(mod._list_checks, watchlist_id)
+        for c in checks:
+            c["snapshot"] = json.loads(c["snapshot"])
+        return {"checks": checks}
+
+    # ---- Rules (Sigma / YARA) ---------------------------------------------
+
+    @router.get("/rules/sigma")
+    async def list_sigma_rules(request: Request):
+        require_admin(request)
+        import mcp_servers.sigma_server as mod
+        return {"list": await asyncio.to_thread(mod._list_rules)}
+
+    @router.get("/rules/sigma/{name}")
+    async def get_sigma_rule(request: Request, name: str):
+        require_admin(request)
+        import mcp_servers.sigma_server as mod
+        content, err = await asyncio.to_thread(mod._read_rule, name)
+        if err:
+            raise HTTPException(404, err)
+        return {"name": name, "content": content}
+
+    @router.get("/rules/yara")
+    async def list_yara_rules(request: Request):
+        require_admin(request)
+        import mcp_servers.yara_server as mod
+        names = await asyncio.to_thread(mod._list_rule_names)
+        if names is None:
+            return {"list": [], "error": "toolchain sidecar unreachable"}
+        return {"list": names}
+
+    @router.get("/rules/yara/{name}")
+    async def get_yara_rule(request: Request, name: str):
+        require_admin(request)
+        import mcp_servers.yara_server as mod
+        content, err = await asyncio.to_thread(mod._read_rule, name)
+        if err:
+            raise HTTPException(404, err)
+        return {"name": name, "content": content}
 
     return router

@@ -48,16 +48,26 @@ Update this file at the end of every phase/checkpoint, same discipline as `CHANG
       docs/config; the underlying upstream platform's own name, its container/service names,
       and its `ODYSSEUS_*` env var prefix were deliberately left alone (renaming those would
       break every existing self-hosted install for no real gain). Full scope and rationale
-      in [ADR 008](adr/008-project-rebrand.md).
+      in [ADR 008](adr/008-project-rebrand.md). A follow-up pass also caught several
+      "Odysseus" strings the file-level sweep missed because JS writes them into the DOM at
+      runtime rather than sitting in `index.html` source (chat placeholder, assistant role
+      labels, onboarding copy, various toasts/tooltips) — see `CHANGELOG.md`'s Unreleased
+      section for the full list and what was deliberately left alone (the built-in
+      "Odysseus" AI persona, an Odyssey-themed research example, an easter egg, real
+      `swift/odysseus-mlx-image-bridge` path references, the `X-Odysseus-Run-Id` wire header).
+- [x] **Phase 2.4 — Security Hub UI.** The security dashboard is now a tabbed Security Hub —
+      Overview (unchanged) plus Engagements (browse/expand/create/close), Watchlist
+      (browse/add/pause/resume/remove), and Rules (browse + view raw content for stored
+      Sigma rules and YARA rule names). Every write goes through the same MCP server
+      module's `call_tool()` the chat/MCP-tool path already used, not a second write path.
+      See `CHANGELOG.md`'s Unreleased section for the full list of new structured-read
+      helpers each `mcp_servers/*.py` module gained.
 
 ## Near-Term
 
-- [ ] **Phase 2.4 — Security Hub UI.** The security dashboard (Phase 1 checkpoint G) already
-      renders with the new design system, but engagements, watchlist entries, and Sigma/YARA
-      rules are still chat/MCP-only — no way to browse or manage them from the web UI. Add
-      thin list/CRUD endpoints over `engagement_server`/`watchlist_server`/`sigma_server`/
-      `yara_server`'s existing private helpers (same pattern as
-      `routes/security_dashboard_routes.py`), plus the panels to drive them.
+Nothing currently queued — the 4-phase rebrand/redesign plan this doc was created to track
+is now fully shipped. See "Ideas, Not Commitments" below for what's next if this fork keeps
+growing.
 
 ## Ideas, Not Commitments
 

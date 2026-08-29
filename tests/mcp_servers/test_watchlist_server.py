@@ -145,3 +145,30 @@ async def test_module_import_survives_unwritable_data_dir(tmp_path, monkeypatch)
 
     results = await watchlist_mod.call_tool("watchlist_add", {"indicator": "203.0.113.1", "kind": "ip"})
     assert "[error:" in results[0].text
+
+
+@pytest.mark.asyncio
+async def test_list_watchlist_helper_filters(tmp_data_dir):
+    """_list_watchlist (used by the security dashboard's watchlist route)
+    supports the same kind/engagement_id/status filters as the
+    watchlist_list tool that shares its query."""
+    mod = tmp_data_dir
+    await mod.call_tool("watchlist_add", {"indicator": "203.0.113.5", "kind": "ip", "engagement_id": "eng-1"})
+    await mod.call_tool("watchlist_add", {"indicator": "evil.example", "kind": "domain"})
+
+    assert len(mod._list_watchlist()) == 2
+    assert [e["indicator"] for e in mod._list_watchlist(kind="domain")] == ["evil.example"]
+    assert [e["indicator"] for e in mod._list_watchlist(engagement_id="eng-1")] == ["203.0.113.5"]
+    assert mod._list_watchlist(status="paused") == []
+
+
+@pytest.mark.asyncio
+async def test_list_checks_helper(tmp_data_dir):
+    mod = tmp_data_dir
+    await mod.call_tool("watchlist_add", {"indicator": "203.0.113.5", "kind": "ip"})
+    watchlist_id = mod._list_watchlist()[0]["id"]
+    assert mod._list_checks(watchlist_id) == []
+    mod._save_check(watchlist_id, "shodan", {"ports": [22, 80]})
+    checks = mod._list_checks(watchlist_id)
+    assert len(checks) == 1
+    assert checks[0]["provider"] == "shodan"

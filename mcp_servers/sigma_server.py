@@ -71,6 +71,24 @@ def _rule_path(name: str) -> Path | None:
     return _RULES_DIR / f"{name}.yml"
 
 
+def _list_rules() -> list[str]:
+    """Stored rule names, for direct import by the security dashboard's
+    rule-management route (and reused by the sigma_rule_list tool below so
+    there's one source of truth for what "stored rules" means)."""
+    _RULES_DIR.mkdir(parents=True, exist_ok=True)
+    return sorted(p.stem for p in _RULES_DIR.glob("*.yml"))
+
+
+def _read_rule(name: str) -> tuple[str | None, str | None]:
+    """Load a stored rule's raw YAML. Returns (content, error)."""
+    path = _rule_path(name)
+    if path is None:
+        return None, mcp_error("invalid_name", f"{name!r} must be alnum/underscore/hyphen only")
+    if not path.exists():
+        return None, mcp_error("not_found", f"No stored rule named {name!r}")
+    return path.read_text(encoding="utf-8"), None
+
+
 def _os_search(index: str, query_string: str, limit: int) -> dict:
     try:
         resp = requests.post(
@@ -188,8 +206,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:  # noqa: C
                         result += " (pysigma not installed — only YAML syntax was checked, not Sigma rule structure; convert/test are unavailable until it's installed)"
 
         elif name == "sigma_rule_list":
-            _RULES_DIR.mkdir(parents=True, exist_ok=True)
-            rules = sorted(p.stem for p in _RULES_DIR.glob("*.yml"))
+            rules = _list_rules()
             result = "\n".join(rules) if rules else "No stored rules."
 
         elif name == "sigma_rule_delete":
