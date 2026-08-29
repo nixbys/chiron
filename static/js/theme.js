@@ -9,7 +9,12 @@ import { makeWindowDraggable } from './windowDrag.js';
 import { snapModalToZone } from './tileManager.js';
 
 export const THEMES = {
-  dark:       { bg:'#282c34', fg:'#9cdef2', panel:'#111111', border:'#355a66', red:'#e06c75' },
+  // Chiron identity (rebrand redesign, Phase 2.2) — applyColors() below sets
+  // these as inline styles on :root on every load (default theme or not),
+  // which beats anything in style.css's own :root block. Keep this in sync
+  // with style.css's :root { --bg/--fg/--panel/--border/--red } by hand —
+  // there's no single source of truth between the two today.
+  dark:       { bg:'#0a0d12', fg:'#e4e9f0', panel:'#12161d', border:'#232a35', red:'#e5484d' },
   light:      { bg:'#f0ebe3', fg:'#5a5248', panel:'#faf6f0', border:'#d4cdc2', red:'#c47d5a' },
   midnight:   { bg:'#0d1117', fg:'#c9d1d9', panel:'#161b22', border:'#30363d', red:'#f85149' },
   paper:      { bg:'#faf8f5', fg:'#3b3836', panel:'#ffffff', border:'#d5d0c8', red:'#c5ac4a' },
@@ -36,7 +41,7 @@ const LS_KEY = 'odysseus-theme';
 const CUSTOM_THEMES_KEY = 'odysseus-custom-themes';
 
 const FONT_MAP = {
-  mono: "'Fira Code', monospace",
+  mono: "'IBM Plex Mono', 'Fira Code', monospace",
   sans: "system-ui, -apple-system, 'Segoe UI', sans-serif",
   serif: "Georgia, 'Times New Roman', serif",
   opendyslexic: "'OpenDyslexic', sans-serif",

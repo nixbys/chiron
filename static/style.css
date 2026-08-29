@@ -16,22 +16,47 @@
  */
 
 :root {
-  /* Core palette */
-  --bg: #282c34;
-  --fg: #9cdef2;
-  --panel: #111;
-  --border: #355a66;
-  --red: #e06c75;
-  /* Were `var(--green)` / `var(--warn)` — self-referential, so they
-     resolved to invalid and every site fell back to its own literal
-     (or, for sites with no fallback, painted as transparent/inherit).
-     Anchor them to real hex so the token layer actually works. */
-  --green: #50fa7b;
-  --warn: #f0ad4e;
+  /* ── Chiron identity tokens (rebrand redesign, Phase 2.2) ──
+     Duality palette: --accent (blue, defense) and --red (crimson, offense)
+     are two co-equal brand accents, not one accent plus an error color.
+     --accent was referenced ~850 times across this file already
+     (var(--accent, var(--red)) fallback chains) but never once defined —
+     it silently fell through to --red everywhere. Defining it here is
+     what actually activates the dual-accent look; none of those call
+     sites needed touching. --fg-muted (93 call sites, no fallback) and
+     --font-family/--font-body (phantom the same way) got the same
+     treatment. */
+  --bg: #0a0d12;
+  --panel: #12161d;
+  --panel-alt: #171c24;
+  --border: #232a35;
+  --fg: #e4e9f0;
+  --fg-muted: #8892a0;
+  --red: #e5484d;
+  --accent: #4d8eff;
+  --green: #22c55e;
+  --warn: #f5a623;
+
+  /* Shape — new (border-radius/box-shadow were 1,094/287 hardcoded
+     per-selector px values before this pass, no token layer existed).
+     Sharper + flatter: small radius ceiling, shadows dropped in favor of
+     the --border token for separation. Not swept across every existing
+     declaration in this pass — new component CSS uses these; old
+     selectors keep their literal values until 2.3 touches that panel. */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+
+  /* Type — Chakra Petch (display/headers), IBM Plex Sans (body/interface),
+     IBM Plex Mono (code/data, replaces Fira Code as --font-family's
+     primary face; Fira Code stays as its own fallback/option below). */
+  --font-display: 'Chakra Petch', 'Segoe UI', sans-serif;
+  --font-body: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-family: 'IBM Plex Mono', 'Fira Code', monospace;
 
   /* Syntax highlighting */
-  --hl-bg: #1e2228;
-  --hl-fg: #9cdef2;
+  --hl-bg: #12161d;
+  --hl-fg: #e4e9f0;
   --hl-keyword: #c678dd;
   --hl-string: #e5c07b;
   --hl-comment: #828997;
@@ -42,21 +67,21 @@
   --hl-params: #a8c0d4;
 
   /* Semantic colors */
-  --color-error: #ff4444;
-  --color-error-light: #ff6666;
-  --color-success: #4caf50;
-  --color-warning: #f0ad4e;
-  --color-danger: #c0392b;
+  --color-error: #ef4444;
+  --color-error-light: #f87171;
+  --color-success: #22c55e;
+  --color-warning: #f5a623;
+  --color-danger: #dc2626;
   --color-recording: #ff3b30;
   --color-recording-hover: #d63031;
-  --color-muted: #888;
+  --color-muted: #7c8594;
   --color-muted-alt: #6b7280;
-  --color-accent: #00aaff;
+  --color-accent: #4d8eff;
   --color-agent-active: #00ff00;
-  --color-brand-blue: #3b82f6;
+  --color-brand-blue: #4d8eff;
   --color-blind-orange: #ff9800;
   --color-save-green: var(--color-success);
-  --color-link-hover: #66c7ff;
+  --color-link-hover: #7db4ff;
   --color-subheader: #6b8a94;
   --select-bg: var(--bg);
   --select-fg: var(--fg);
@@ -66,12 +91,33 @@
   /* Warm accent — used by the Goals/Today UI in Notes. Lives as a token so
      themes can override without touching the goal CSS. */
   --accent-warm: #d19a66;
+
+  /* Security severity scale — new, distinct from the generic
+     success/warning/danger semantic tokens above so a severity badge never
+     visually collides with an unrelated success/error state nearby. */
+  --sev-critical: #e5484d;
+  --sev-critical-bg: rgba(229, 72, 77, 0.12);
+  --sev-critical-border: #a3363a;
+  --sev-high: #f5822a;
+  --sev-high-bg: rgba(245, 130, 42, 0.1);
+  --sev-high-border: #a35f2a;
+  --sev-medium: #f5a623;
+  --sev-medium-bg: rgba(245, 166, 35, 0.1);
+  --sev-medium-border: #a3812a;
+  --sev-low: #6b84a3;
+  --sev-low-bg: rgba(77, 142, 255, 0.08);
+  --sev-low-border: #3d5170;
+  --sev-info: #4d8eff;
+  --sev-info-bg: rgba(77, 142, 255, 0.1);
+  --sev-info-border: #2a5cb8;
 }
 
 :root.light {
   --bg: #f5f5f5;
   --fg: #2b2b2b;
+  --fg-muted: #5b6472;
   --panel: #fff;
+  --panel-alt: #f0f1f3;
   --border: #bbb;
   --hl-bg: #f9f9f9;
   --hl-fg: #2b2b2b;
@@ -117,6 +163,37 @@ body {
 /* Self-hosted OpenDyslexic — dyslexia-friendly accessibility font option (SIL OFL 1.1) */
 @font-face { font-family: 'OpenDyslexic'; font-weight: 400; font-style: normal; font-display: swap; src: url('/static/fonts/OpenDyslexic-Regular.woff2') format('woff2'); }
 @font-face { font-family: 'OpenDyslexic'; font-weight: 700; font-style: normal; font-display: swap; src: url('/static/fonts/OpenDyslexic-Bold.woff2') format('woff2'); }
+
+/* Chiron identity type system (rebrand redesign, Phase 2.2) — Chakra Petch for
+   display/headers, IBM Plex Sans for body/interface text, IBM Plex Mono for
+   code/timestamps/tabular data (replaces Fira Code as the default; Fira Code
+   stays above as a font option). Two @font-face rules per weight (latin +
+   latin-ext unicode-range) is the standard modern subsetting split — the
+   browser only fetches the range actually needed, unlike Fira Code/
+   OpenDyslexic above which ship one unsplit file per weight. */
+/* Self-hosted Chakra Petch (display/headers) */
+@font-face { font-family: 'Chakra Petch'; font-weight: 500; font-style: normal; font-display: swap; src: url('/static/fonts/ChakraPetch-MediumExt.woff2') format('woff2'); unicode-range: U+0100-02AF,U+0304,U+0308,U+0329,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20CF,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: 'Chakra Petch'; font-weight: 500; font-style: normal; font-display: swap; src: url('/static/fonts/ChakraPetch-Medium.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'Chakra Petch'; font-weight: 600; font-style: normal; font-display: swap; src: url('/static/fonts/ChakraPetch-SemiBoldExt.woff2') format('woff2'); unicode-range: U+0100-02AF,U+0304,U+0308,U+0329,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20CF,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: 'Chakra Petch'; font-weight: 600; font-style: normal; font-display: swap; src: url('/static/fonts/ChakraPetch-SemiBold.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'Chakra Petch'; font-weight: 700; font-style: normal; font-display: swap; src: url('/static/fonts/ChakraPetch-BoldExt.woff2') format('woff2'); unicode-range: U+0100-02AF,U+0304,U+0308,U+0329,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20CF,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: 'Chakra Petch'; font-weight: 700; font-style: normal; font-display: swap; src: url('/static/fonts/ChakraPetch-Bold.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+
+/* Self-hosted IBM Plex Sans (body / interface text) */
+@font-face { font-family: 'IBM Plex Sans'; font-weight: 400; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexSans-RegularExt.woff2') format('woff2'); unicode-range: U+0100-02AF,U+0304,U+0308,U+0329,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20CF,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: 'IBM Plex Sans'; font-weight: 400; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexSans-Regular.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'IBM Plex Sans'; font-weight: 500; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexSans-MediumExt.woff2') format('woff2'); unicode-range: U+0100-02AF,U+0304,U+0308,U+0329,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20CF,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: 'IBM Plex Sans'; font-weight: 500; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexSans-Medium.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'IBM Plex Sans'; font-weight: 600; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexSans-SemiBoldExt.woff2') format('woff2'); unicode-range: U+0100-02AF,U+0304,U+0308,U+0329,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20CF,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: 'IBM Plex Sans'; font-weight: 600; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexSans-SemiBold.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+
+/* Self-hosted IBM Plex Mono (code / timestamps / tabular data) */
+@font-face { font-family: 'IBM Plex Mono'; font-weight: 400; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexMono-RegularExt.woff2') format('woff2'); unicode-range: U+0100-02AF,U+0304,U+0308,U+0329,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20CF,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: 'IBM Plex Mono'; font-weight: 400; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexMono-Regular.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'IBM Plex Mono'; font-weight: 500; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexMono-MediumExt.woff2') format('woff2'); unicode-range: U+0100-02AF,U+0304,U+0308,U+0329,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20CF,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: 'IBM Plex Mono'; font-weight: 500; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexMono-Medium.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'IBM Plex Mono'; font-weight: 600; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexMono-SemiBoldExt.woff2') format('woff2'); unicode-range: U+0100-02AF,U+0304,U+0308,U+0329,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20CF,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: 'IBM Plex Mono'; font-weight: 600; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexMono-SemiBold.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 
 /* Code block baseline */
 pre, code, .hljs {
@@ -5641,7 +5718,7 @@ body.bg-pattern-sparkles {
       border:1px solid var(--border);
       width:min(520px, 92vw); max-height:85vh; padding:10px;
       box-sizing:border-box; font-size:14px;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-family: var(--font-body, 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
       letter-spacing: -0.015em;
       display:flex; flex-direction:column;
       position:relative;
@@ -14435,7 +14512,7 @@ mark.doc-find-mark.current {
   box-shadow: 4px 0 16px rgba(0,0,0,0.35);
   animation: version-slide-in 0.2s ease-out;
   /* Match the app modal aesthetic so nothing inherits the large body font. */
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-body, 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
   font-size: 12px;
   letter-spacing: -0.01em;
 }
@@ -17139,15 +17216,16 @@ body:not(.email-doc-split-active) #email-lib-modal.email-lib-fullscreen:not(.mod
   cursor: pointer;
   /* These buttons live inside .doclib-card-preview, which forces a
      monospace font. The chat/research footer buttons instead inherit the
-     modal font, which is the app font (Fira Code) on mobile and Inter on
-     desktop (.modal-content's Inter rule is inside @media min-width:769px).
-     Mirror that here so all three footers match in both contexts. */
+     modal font, which is the app mono font (var(--font-family)) on mobile
+     and var(--font-body) on desktop (.modal-content's rule is inside
+     @media min-width:769px). Mirror that here so all three footers match
+     in both contexts. */
   font-family: var(--font-family, 'Fira Code', monospace);
   transition: border-color 0.15s, color 0.15s;
 }
 @media (min-width: 769px) {
   .doclib-card-action-btn {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: var(--font-body, 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
     letter-spacing: -0.015em;
   }
 }
@@ -34284,7 +34362,7 @@ body.notes-drag-mode .note-card-pin svg {
   height: min(80vh, 820px);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
   box-sizing: border-box;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-body, 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
   letter-spacing: -0.015em;
   /* Smooth open: scale up + fade in from the centre. */
   animation: notes-pane-enter 200ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
@@ -34417,7 +34495,7 @@ body.notes-drag-mode .note-card-pin svg {
 }
 .notes-pane-title {
   /* Match the other tool headers (.modal-header h4). */
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-body, 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
   font-size: 1rem;
   font-weight: 600;
   letter-spacing: -0.03em;
@@ -41398,4 +41476,141 @@ body.settings-sidebar-resize-active {
   .settings-sidebar-toggle {
     display: none;
   }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Security UI primitives (rebrand redesign, Phase 2.2)
+
+   New component vocabulary — didn't exist before this pass. `.sec-`
+   prefixed so nothing collides with an existing or future upstream class
+   name (see ADR 005 on sync-conflict avoidance). Consumed by the security
+   dashboard (static/js/securityDashboard.js) and available to any other
+   panel that needs a severity badge, a stat tile, or a timeline row —
+   these are shared primitives, not dashboard-only styling.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Severity badges — 5-step scale, deliberately distinct from the generic
+   --color-success/--color-warning/--color-danger tokens above so a
+   severity badge never reads as a generic UI success/error state. */
+.sec-badge {
+  font-family: var(--font-family, 'IBM Plex Mono', monospace);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.sec-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  flex-shrink: 0;
+}
+.sec-badge-critical { color: #ff9b9d; border-color: var(--sev-critical-border); background: var(--sev-critical-bg); }
+.sec-badge-critical::before { background: var(--sev-critical); }
+.sec-badge-high { color: #ffbd8a; border-color: var(--sev-high-border); background: var(--sev-high-bg); }
+.sec-badge-high::before { background: var(--sev-high); }
+.sec-badge-medium { color: #ffd88a; border-color: var(--sev-medium-border); background: var(--sev-medium-bg); }
+.sec-badge-medium::before { background: var(--sev-medium); }
+.sec-badge-low { color: #9db3cc; border-color: var(--sev-low-border); background: var(--sev-low-bg); }
+.sec-badge-low::before { background: var(--sev-low); }
+.sec-badge-info { color: #9dc3ff; border-color: var(--sev-info-border); background: var(--sev-info-bg); }
+.sec-badge-info::before { background: var(--sev-info); }
+
+/* Stat tiles — findings/watchlist/drift summary counts. */
+.sec-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.sec-stat-tile {
+  background: var(--panel);
+  padding: 14px 16px;
+}
+.sec-stat-tile-label {
+  font-family: var(--font-family, 'IBM Plex Mono', monospace);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin-bottom: 8px;
+}
+.sec-stat-tile-value {
+  font-family: var(--font-display, 'Chakra Petch', sans-serif);
+  font-size: 26px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+.sec-stat-tile-value.sec-crimson { color: var(--red); }
+.sec-stat-tile-value.sec-blue { color: var(--accent); }
+.sec-stat-tile-delta {
+  font-family: var(--font-family, 'IBM Plex Mono', monospace);
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-top: 4px;
+}
+.sec-stat-tile-delta.sec-up { color: var(--red); }
+.sec-stat-tile-delta.sec-down { color: var(--green); }
+
+/* Timeline / drift rows — engagement timeline, scan-drift list. Dot color
+   carries red/blue (offense/defense) provenance at a glance. */
+.sec-timeline {
+  display: flex;
+  flex-direction: column;
+}
+.sec-tl-row {
+  display: grid;
+  grid-template-columns: 92px 20px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+.sec-tl-row:last-child { border-bottom: none; }
+.sec-tl-time {
+  font-family: var(--font-family, 'IBM Plex Mono', monospace);
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.sec-tl-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  justify-self: center;
+}
+.sec-tl-dot.sec-crimson { background: var(--red); }
+.sec-tl-dot.sec-blue { background: var(--accent); }
+.sec-tl-dot.sec-muted { background: var(--fg-muted); }
+.sec-tl-text {
+  font-size: 13px;
+  color: var(--fg);
+}
+.sec-tl-text .sec-tl-target {
+  font-family: var(--font-family, 'IBM Plex Mono', monospace);
+  color: var(--fg-muted);
+}
+.sec-tl-tag {
+  font-family: var(--font-family, 'IBM Plex Mono', monospace);
+  font-size: 10px;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+@media (max-width: 640px) {
+  .sec-tl-row { grid-template-columns: 70px 16px 1fr; }
+  .sec-tl-tag { display: none; }
 }
