@@ -1,7 +1,7 @@
 {
   "name": "Chiron",
   "short_name": "Chiron",
-  "description": "Self-hosted AI chat with memory, documents, and tools",
+  "description": "Self-hosted AI workspace with a built-in cybersecurity toolchain — pentesting, OSINT, and threat intelligence",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
