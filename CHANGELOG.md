@@ -11,6 +11,16 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 ## [Unreleased]
 
 ### Added
+- `mcp_servers/compliance_server.py` (20th MCP server) — NIST SP 800-53
+  Rev 5 control lookup and mapping, same fetch-and-cache shape as
+  `attck_server.py`: downloads and caches NIST's free OSCAL JSON catalog
+  (`usnistgov/oscal-content` on GitHub, 7-day TTL). Tools:
+  `nist_update`/`nist_control`/`nist_family`/`nist_search`/`nist_map`.
+  `nist_map` maps ATT&CK tactic names and/or Odysseus finding tags to
+  control families via a small hand-authored heuristic table — a rough
+  compliance-summary grouping, explicitly not authoritative NIST
+  guidance. CIS Controls v8 is deliberately out of scope — unlike NIST's
+  OSCAL catalog, its control text isn't freely redistributable.
 - Multi-target support for `scheduled_recon` (`src/builtin_actions.py`): the
   task prompt now also accepts a `"targets"` array (merged with a single
   `"target"` string if both are present) and a `"use_engagement_assets":
