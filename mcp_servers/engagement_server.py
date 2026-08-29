@@ -121,6 +121,22 @@ def _list_engagements(status: str | None = None, limit: int = 50) -> list[dict]:
         conn.close()
 
 
+def _get_timeline(engagement_id: str, limit: int = 200) -> list[dict]:
+    """Chronological (oldest-first) event list for one engagement, for
+    direct import by the security dashboard's engagement-detail route.
+    Same query `engagement_timeline` formats as text; extracted here so
+    both share one source of truth instead of the route re-deriving it."""
+    conn = _get_db()
+    try:
+        rows = conn.execute(
+            "SELECT event_type, summary, detail, ts FROM engagement_events WHERE engagement_id=? ORDER BY ts ASC LIMIT ?",
+            (engagement_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def _log_event(engagement_id: str, event_type: str, summary: str, detail: str = "") -> None:
     """Append a timeline event. Silently no-ops if the engagement doesn't
     exist, since callers (scheduled scans, watchlist checks) treat
@@ -349,10 +365,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:  # noqa: C
                 result = "Event logged."
 
         elif name == "engagement_timeline":
-            rows = conn.execute(
-                "SELECT event_type, summary, detail, ts FROM engagement_events WHERE engagement_id=? ORDER BY ts ASC LIMIT ?",
-                (arguments["engagement_id"], arguments.get("limit", 200)),
-            ).fetchall()
+            rows = _get_timeline(arguments["engagement_id"], arguments.get("limit", 200))
             if not rows:
                 result = "No events recorded for this engagement."
             else:

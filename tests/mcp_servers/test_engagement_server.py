@@ -134,3 +134,26 @@ async def test_module_import_survives_unwritable_data_dir(tmp_path, monkeypatch)
 
     results = await engagement_mod.call_tool("engagement_create", {"name": "x"})
     assert "[error:" in results[0].text
+
+
+@pytest.mark.asyncio
+async def test_get_timeline_helper_matches_tool_output(tmp_data_dir):
+    """_get_timeline (used by the security dashboard's engagement-detail
+    route) must return the same events, in the same order, as the
+    engagement_timeline tool that shares its implementation."""
+    mod = tmp_data_dir
+    engagement_id = await _create(mod)
+    await mod.call_tool("engagement_log_event", {
+        "engagement_id": engagement_id, "event_type": "scan_started", "summary": "first",
+    })
+    await mod.call_tool("engagement_log_event", {
+        "engagement_id": engagement_id, "event_type": "scan_completed", "summary": "second",
+    })
+    events = mod._get_timeline(engagement_id)
+    assert [e["summary"] for e in events] == ["first", "second"]
+    assert events[0]["event_type"] == "scan_started"
+
+
+def test_get_timeline_empty(tmp_data_dir):
+    mod = tmp_data_dir
+    assert mod._get_timeline("no-such-engagement") == []

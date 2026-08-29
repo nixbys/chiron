@@ -155,3 +155,39 @@ async def test_sigma_rule_test_against_mocked_opensearch(tmp_data_dir):
     text = results[0].text
     assert "Matches: 1" in text
     assert "Suspicious download" in text
+
+
+def test_list_rules_helper_empty(tmp_data_dir):
+    mod = tmp_data_dir
+    assert mod._list_rules() == []
+
+
+@pytest.mark.asyncio
+async def test_list_rules_helper_matches_tool_output(tmp_data_dir):
+    mod = tmp_data_dir
+    await mod.call_tool("sigma_rule_write", {"name": "zzz_rule", "rule_yaml": _VALID_RULE})
+    await mod.call_tool("sigma_rule_write", {"name": "aaa_rule", "rule_yaml": _VALID_RULE})
+    assert mod._list_rules() == ["aaa_rule", "zzz_rule"]  # sorted
+
+
+@pytest.mark.asyncio
+async def test_read_rule_helper(tmp_data_dir):
+    mod = tmp_data_dir
+    await mod.call_tool("sigma_rule_write", {"name": "real_rule", "rule_yaml": _VALID_RULE})
+    content, err = mod._read_rule("real_rule")
+    assert err is None
+    assert "DownloadString" in content
+
+
+def test_read_rule_helper_not_found(tmp_data_dir):
+    mod = tmp_data_dir
+    content, err = mod._read_rule("nope")
+    assert content is None
+    assert "[error:not_found]" in err
+
+
+def test_read_rule_helper_invalid_name(tmp_data_dir):
+    mod = tmp_data_dir
+    content, err = mod._read_rule("../etc/passwd")
+    assert content is None
+    assert "[error:invalid_name]" in err

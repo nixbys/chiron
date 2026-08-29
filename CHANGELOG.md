@@ -10,7 +10,54 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 
 ## [Unreleased]
 
+### Added
+- Security Hub management sub-panels (Phase 2.4): the security dashboard
+  (Phase 1 checkpoint G) is now a tabbed Security Hub — Overview (the
+  original aggregated snapshot, unchanged) plus Engagements, Watchlist, and
+  Rules. Engagements: browse, expand for scope/timeline detail, create,
+  close. Watchlist: browse, add, pause/resume, remove. Rules: browse
+  stored Sigma rules and YARA rule names (the latter via the toolchain
+  sidecar, reporting "toolchain sidecar unreachable" as a normal degraded
+  state rather than an error when it's down) with a raw-content viewer for
+  either. Every write goes through the *same* MCP server module's
+  `call_tool()` the chat/MCP-tool path already used — `routes/
+  security_dashboard_routes.py`'s new `_call_tool()` helper awaits it
+  directly and maps its `[error:code]` convention onto an HTTP status, so
+  there's exactly one place each write's validation lives, not a second
+  copy reimplemented in SQL for the REST route. New structured (JSON, not
+  text-table) read helpers added to `engagement_server.py`
+  (`_get_timeline`), `watchlist_server.py` (`_list_watchlist`,
+  `_list_checks`), `sigma_server.py` (`_list_rules`, `_read_rule`), and
+  `yara_server.py` (`_list_rule_names`, `_read_rule`) — each also adopted
+  by that module's own MCP tool handler in place of its old inline query,
+  so the dashboard and the chat/MCP path share one source of truth instead
+  of two. New `.sec-hub-btn`/`.sec-hub-input`/`.sec-rule-item` component
+  CSS alongside the existing `.sec-*` primitives; reuses the site's
+  existing `.admin-tab` tab-bar component for the new tab strip rather
+  than inventing another one.
+
 ### Changed
+- Found and fixed several "Odysseus" strings the Phase 3 rebrand's file-
+  level sweep missed because they're written into the DOM by JavaScript
+  rather than sitting in `index.html`/`login.html` source: `app.js`'s
+  responsive chat-input placeholder and default session-name fallback;
+  `chatRenderer.js`/`slashCommands.js`/`sessions.js`/
+  `keyboard-shortcuts.js`'s assistant role labels shown in the chat
+  transcript; onboarding-tour copy and various toast/tooltip/help text in
+  `slashCommands.js`, `settings.js`, `emailLibrary.js`, `cookbook.js`,
+  `cookbook-diagnosis.js`, `cookbookRunning.js`, `cookbookServe.js`,
+  `document.js` (including a downloaded attachment-bundle filename,
+  `odysseus-attachments.zip` → `chiron-attachments.zip`). Deliberately
+  left alone: the built-in "Odysseus" AI persona (`presets.js`/`tasks.js`
+  — a mythological-hero character, unrelated to the platform's own name),
+  an Odyssey-themed research-topic example (`research/panel.js`) and an
+  easter-egg quote (`slashCommands.js`), the real
+  `swift/odysseus-mlx-image-bridge` checkout path referenced in a
+  Cookbook shell snippet, the `X-Odysseus-Run-Id` wire header, and every
+  internal-only function/variable name (`startOdysseusApp`,
+  `_closeOdysseusAttachMenu`, etc.) — same rationale as ADR 008: rename
+  user-facing branding, not internal identifiers or genuine mythological
+  references that happen to share the name.
 - Renamed the fork from "Odysseus Red" to **Chiron** (Phase 3). New wordmark
   (`docs/chiron-wordmark.png`, self-hosted Chakra Petch, replaces the deleted
   `docs/odysseus-wordmark.png`) and a new single-path shield icon (favicon,

@@ -41617,3 +41617,66 @@ body.settings-sidebar-resize-active {
   .sec-tl-row { grid-template-columns: 70px 16px 1fr; }
   .sec-tl-tag { display: none; }
 }
+
+/* Security Hub management sub-panels (Phase 2.4) — engagement/watchlist/
+   rule-management controls added to the same `.sec-` primitive vocabulary
+   above. Button/input styling is deliberately small and utilitarian
+   (this is an admin management surface, not a marketing form) rather than
+   reusing the larger site-wide `.btn`/`.form-input` components, which are
+   sized for the main chat/settings surfaces. */
+.sec-hub-btn {
+  font-family: var(--font-family, 'IBM Plex Mono', monospace);
+  font-size: 11px;
+  color: var(--fg-muted);
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.1s, border-color 0.1s, background 0.1s;
+}
+.sec-hub-btn:hover {
+  color: var(--fg);
+  border-color: var(--fg-muted);
+}
+.sec-hub-btn-primary {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--sev-info-bg);
+}
+.sec-hub-btn-primary:hover {
+  color: var(--fg);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.sec-hub-input {
+  font-family: var(--font-family, 'IBM Plex Mono', monospace);
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+}
+.sec-hub-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Rule browser (Sigma / YARA) — a plain clickable name list, not the
+   timeline/badge vocabulary above; a rule name isn't a severity or an
+   event, just a file to select. */
+.sec-rule-item {
+  font-family: var(--font-family, 'IBM Plex Mono', monospace);
+  font-size: 12px;
+  color: var(--fg);
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.sec-rule-item:hover { background: var(--panel-alt); }
+.sec-rule-item-active {
+  background: var(--sev-info-bg);
+  color: var(--accent);
+}

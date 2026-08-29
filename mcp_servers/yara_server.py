@@ -22,6 +22,33 @@ server = Server("yara")
 _RULES_DIR = "/workspaces/yara_rules"
 _SCAN_DIR = "/workspaces"
 
+def _list_rule_names() -> list[str] | None:
+    """Structured rule-name list (no extension), for direct import by the
+    security dashboard's rule-management route. Returns None if the
+    toolchain sidecar is unreachable/misconfigured rather than raising --
+    the route treats this as a best-effort panel, same as the dashboard's
+    other sections."""
+    raw = exec_in_toolchain(["sh", "-c", f"ls -1 {_RULES_DIR} 2>/dev/null"], timeout=10)
+    if raw.startswith("[error:"):
+        return None
+    if raw == "(no output)":
+        return []
+    return sorted(name[:-4] for name in raw.splitlines() if name.endswith(".yar"))
+
+
+def _read_rule(name: str) -> tuple[str | None, str | None]:
+    """Load a stored rule's raw content via the toolchain sidecar. Returns
+    (content, error)."""
+    if not name.replace("_", "").isalnum():
+        return None, mcp_error("invalid_name", "Rule name must be alphanumeric and underscores only")
+    raw = exec_in_toolchain(["cat", f"{_RULES_DIR}/{name}.yar"], timeout=10)
+    if raw.startswith("[error:"):
+        return None, raw
+    if "No such file or directory" in raw:
+        return None, mcp_error("not_found", f"No stored rule named {name!r}")
+    return raw, None
+
+
 TOOLS = [
     Tool(
         name="yara_scan",
