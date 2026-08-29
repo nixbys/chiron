@@ -307,7 +307,7 @@ function _maybeOpenFromHash() {
 // Tint helper — turns the urgent-email-scanner's max_score into a dot color.
 // Falls back to the default (blue / unset) when scanner is off or no urgent.
 function _urgencyColor(score) {
-  if (score >= 3) return 'var(--color-error, #e06c75)';   // red — urgent now
+  if (score >= 3) return 'var(--color-error, #e5484d)';   // red — urgent now
   if (score === 2) return '#f0ad4e';                       // orange — reply soon
   return '';                                                // default (blue / theme)
 }
@@ -600,7 +600,7 @@ function _createEmailItem(em) {
         if (k.endsWith(suffix)) {
           const v = us.per_uid[k] || {};
           const score = v.score || 0;
-          if (score >= 3) { _unreadColor = 'var(--color-error, #e06c75)'; _unreadTitle = 'Urgent — ' + (v.reason || 'needs reply now'); }
+          if (score >= 3) { _unreadColor = 'var(--color-error, #e5484d)'; _unreadTitle = 'Urgent — ' + (v.reason || 'needs reply now'); }
           else if (score === 2) { _unreadColor = '#f0ad4e'; _unreadTitle = 'Reply soon — ' + (v.reason || ''); }
           break;
         }

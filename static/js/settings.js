@@ -2224,7 +2224,7 @@ async function initReminderSettings() {
           await _postSettings({ app_public_url: val });
           if (pubUrlMsg) {
             pubUrlMsg.textContent = val ? 'Saved' : 'Cleared (deep-links disabled)';
-            pubUrlMsg.style.color = 'var(--green,#50fa7b)';
+            pubUrlMsg.style.color = 'var(--green,#22c55e)';
             setTimeout(() => { pubUrlMsg.textContent = ''; }, 2000);
           }
         } catch (_) {
@@ -2640,7 +2640,7 @@ async function initReminderSettings() {
         if (data.email_sent) status += ' — email sent';
         if (data.ntfy_sent) status += ' — ntfy sent';
         if (data.webhook_sent) status += ' — webhook sent';
-        if (testMsg) { testMsg.textContent = status; testMsg.style.color = 'var(--green, #50fa7b)'; }
+        if (testMsg) { testMsg.textContent = status; testMsg.style.color = 'var(--green, #22c55e)'; }
         // Also fire a browser notification so user can see it
         if ('Notification' in window && Notification.permission === 'granted') {
           try {
@@ -2711,7 +2711,7 @@ async function initEmailAccountsSettings() {
   function renderRow(a) {
     const imap = a.imap_host ? `${a.imap_host}:${a.imap_port}` : '<no IMAP>';
     const badge = a.is_default
-      ? '<span style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;padding:1px 6px;border-radius:3px;background:color-mix(in srgb, var(--accent,#50fa7b) 15%, transparent);color:var(--accent,#50fa7b)">Default</span>'
+      ? '<span style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;padding:1px 6px;border-radius:3px;background:color-mix(in srgb, var(--accent,#22c55e) 15%, transparent);color:var(--accent,#22c55e)">Default</span>'
       : (a.enabled ? '' : '<span style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;padding:1px 6px;border-radius:3px;opacity:0.4">Disabled</span>');
     return `<div class="email-account-row" data-acc-id="${esc(a.id)}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:6px">
       <div style="flex:1;min-width:0">
@@ -2788,7 +2788,7 @@ async function initEmailAccountsSettings() {
         <div class="settings-row"><label class="settings-label">Name${_hint('Optional label for this account (e.g. “Work” or “Personal”). Leave blank to use the email address.')}</label><input id="eaf-name" class="settings-input" placeholder="(optional — leave blank to use email)" value="${esc(a.name || '')}"></div>
         <div class="settings-row"><label class="settings-label">Email${_hint('Your email address. Used as the From: header on outgoing mail and as the display label when Name is blank.')}</label><input id="eaf-from" class="settings-input" placeholder="you@example.com" value="${esc(a.from_address || '')}"></div>
         <div class="settings-row"><label class="settings-label">Display Name${_hint('Your name as it appears in the From: field of emails you send, e.g. Jane Smith. Auto-filled from Google during OAuth.')}</label><input id="eaf-display-name" class="settings-input" placeholder="Your Name" value="${esc(a.display_name || '')}"></div>
-        <div id="eaf-oauth-section" style="display:none;margin:8px 0;padding:10px;border:1px solid var(--border);border-radius:6px;background:color-mix(in srgb,var(--accent,#50fa7b) 6%,transparent)">
+        <div id="eaf-oauth-section" style="display:none;margin:8px 0;padding:10px;border:1px solid var(--border);border-radius:6px;background:color-mix(in srgb,var(--accent,#22c55e) 6%,transparent)">
           <div style="font-size:11px;font-weight:600;margin-bottom:6px">Google OAuth2 — required for Workspace / .edu accounts</div>
           <div id="eaf-oauth-status" style="font-size:11px;opacity:0.7;margin-bottom:6px">${a.oauth_provider === 'google' ? '✓ Connected via Google OAuth' : 'Not connected — click below to authorize'}</div>
           <button type="button" id="eaf-oauth-btn" class="admin-btn-add" style="font-size:11px">${a.oauth_provider === 'google' ? 'Reconnect with Google' : 'Connect with Google'}</button>
@@ -2946,7 +2946,7 @@ async function initEmailAccountsSettings() {
         const d = await r.json();
         if (d.ok || d.id) {
           el('eaf-msg').textContent = 'Saved';
-          el('eaf-msg').style.color = 'var(--green,#50fa7b)';
+          el('eaf-msg').style.color = 'var(--green,#22c55e)';
           setTimeout(() => { formEl.style.display = 'none'; renderList(); }, 400);
         } else {
           el('eaf-msg').textContent = d.error || 'Save failed';
@@ -3307,7 +3307,7 @@ async function initIntegrations() {
       const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), credentials: 'same-origin' });
       if (res.ok) {
         statusEl.textContent = 'Saved';
-        statusEl.style.color = 'var(--green, #98c379)';
+        statusEl.style.color = 'var(--green, #22c55e)';
         formCard.style.display = 'none';
         await renderList();
         notifyIntegrationsChanged();
@@ -3331,7 +3331,7 @@ async function initIntegrations() {
       const res = await fetch(`/api/auth/integrations/${editingId}/test`, { method: 'POST', credentials: 'same-origin' });
       const data = await res.json();
       statusEl.textContent = data.message || (data.ok ? 'OK' : 'Failed');
-      statusEl.style.color = data.ok ? 'var(--green, #98c379)' : 'var(--red)';
+      statusEl.style.color = data.ok ? 'var(--green, #22c55e)' : 'var(--red)';
     } catch (e) {
       statusEl.textContent = 'Connection failed';
       statusEl.style.color = 'var(--red)';
@@ -3535,7 +3535,7 @@ async function initUnifiedIntegrations() {
     // type gets. (The clickable glow-on-test variant for email was
     // removed earlier; this matches the API/CalDAV/MCP pattern.)
     const statusDot = item.enabled
-      ? '<span style="width:8px;height:8px;border-radius:50%;background:var(--color-success,#50fa7b);flex-shrink:0;--notif-glow:var(--color-success,#50fa7b);animation:cookbook-notif-pulse 2s ease-in-out infinite;" title="Active"></span>'
+      ? '<span style="width:8px;height:8px;border-radius:50%;background:var(--color-success,#22c55e);flex-shrink:0;--notif-glow:var(--color-success,#22c55e);animation:cookbook-notif-pulse 2s ease-in-out infinite;" title="Active"></span>'
       : '<span style="width:8px;height:8px;border-radius:50%;background:var(--fg);opacity:0.3;flex-shrink:0" title="Disabled"></span>';
     return `<div class="intg-card" data-intg-id="${item.id}" data-intg-type="${item.type}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:color-mix(in srgb, var(--fg) 3%, transparent);margin-bottom:6px;cursor:pointer;transition:all 0.15s;" title="Click to edit">
       <span style="color:var(--accent, var(--red));flex-shrink:0">${t.icon}</span>
@@ -3802,7 +3802,7 @@ async function initUnifiedIntegrations() {
         // level would silently miss, leaving Test perpetually stuck on
         // "Save first" until the form was reopened.
         if (!_editId && saved) _editId = saved.integration?.id || saved.id;
-        el('uf-api-msg').textContent = 'Saved'; el('uf-api-msg').style.color = 'var(--green,#50fa7b)';
+        el('uf-api-msg').textContent = 'Saved'; el('uf-api-msg').style.color = 'var(--green,#22c55e)';
         await renderList();
         notifyIntegrationsChanged();
       } catch (_) { el('uf-api-msg').textContent = 'Failed'; el('uf-api-msg').style.color = 'var(--red)'; }
@@ -3815,7 +3815,7 @@ async function initUnifiedIntegrations() {
         // Backend returns {ok: bool, message: str}
         if (d.ok) {
           el('uf-api-msg').textContent = d.message || 'Connected';
-          el('uf-api-msg').style.color = 'var(--green,#50fa7b)';
+          el('uf-api-msg').style.color = 'var(--green,#22c55e)';
         } else {
           el('uf-api-msg').textContent = (d.message || d.error || d.detail || `HTTP ${r.status}`).slice(0, 360);
           el('uf-api-msg').style.color = 'var(--red)';
@@ -3881,7 +3881,7 @@ async function initUnifiedIntegrations() {
     const _setCalDavMsg = (text, ok) => {
       const msg = el('uf-caldav-msg');
       msg.textContent = text;
-      msg.style.color = ok ? 'var(--green, #50fa7b)' : 'var(--red)';
+      msg.style.color = ok ? 'var(--green, #22c55e)' : 'var(--red)';
     };
 
     el('uf-caldav-save').addEventListener('click', async () => {
@@ -3992,7 +3992,7 @@ async function initUnifiedIntegrations() {
       try {
         await fetch('/api/contacts/config', { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         el('uf-carddav-msg').textContent = 'Saved';
-        el('uf-carddav-msg').style.color = 'var(--green, #50fa7b)';
+        el('uf-carddav-msg').style.color = 'var(--green, #22c55e)';
         // Refresh both the sub-panel (contacts manager) AND the
         // outer integrations list so the CardDAV row appears
         // immediately instead of waiting for a page reload.
@@ -4296,7 +4296,7 @@ async function initUnifiedIntegrations() {
           <div class="settings-row"><label class="settings-label">Name${_hint('Optional label for this account (e.g. “Work” or “Personal”). Leave blank to use the email address.')}</label><input id="uf-email-name" class="settings-input" placeholder="(optional — leave blank to use email)"></div>
           <div class="settings-row"><label class="settings-label">Email${_hint('Your email address. Used as the From: header on outgoing mail and as the display label when Name is blank.')}</label><input id="uf-email-from" class="settings-input" placeholder="you@example.com"></div>
           <div class="settings-row"><label class="settings-label">Display Name${_hint('Your name as it appears in the From: field of emails you send, e.g. Jane Smith. Auto-filled from Google during OAuth.')}</label><input id="uf-display-name" class="settings-input" placeholder="Your Name"></div>
-          <div id="uf-oauth-section" style="display:none;margin:8px 0;padding:10px;border:1px solid var(--border);border-radius:6px;background:color-mix(in srgb,var(--accent,#50fa7b) 6%,transparent)">
+          <div id="uf-oauth-section" style="display:none;margin:8px 0;padding:10px;border:1px solid var(--border);border-radius:6px;background:color-mix(in srgb,var(--accent,#22c55e) 6%,transparent)">
             <div style="font-size:11px;font-weight:600;margin-bottom:6px">Google OAuth2 — required for Workspace / .edu accounts</div>
             <div id="uf-oauth-status" style="font-size:11px;opacity:0.7;margin-bottom:6px">${existing && existing.oauth_provider === 'google' ? '✓ Connected via Google OAuth' : 'Not connected — click below to authorize'}</div>
             <button type="button" id="uf-oauth-btn" class="admin-btn-add" style="font-size:11px">${existing && existing.oauth_provider === 'google' ? 'Reconnect with Google' : 'Connect with Google'}</button>
@@ -4656,12 +4656,12 @@ async function initUnifiedIntegrations() {
           // Button becomes the indicator — green checkmark with the
           // cookbook-style halo + breathing animation. No status text;
           // the glow is the signal.
-          btn.style.background = 'var(--green, #50fa7b)';
-          btn.style.borderColor = 'var(--green, #50fa7b)';
+          btn.style.background = 'var(--green, #22c55e)';
+          btn.style.borderColor = 'var(--green, #22c55e)';
           btn.style.color = '#0b0';
           btn.style.boxShadow =
-            '0 0 0 2px color-mix(in srgb, var(--green, #50fa7b) 25%, transparent),'
-          + ' 0 0 10px 2px color-mix(in srgb, var(--green, #50fa7b) 55%, transparent)';
+            '0 0 0 2px color-mix(in srgb, var(--green, #22c55e) 25%, transparent),'
+          + ' 0 0 10px 2px color-mix(in srgb, var(--green, #22c55e) 55%, transparent)';
           btn.style.animation = 'cookbook-srv-glow-ok 2.4s ease-in-out infinite';
           ico.innerHTML = _checkIcon;
         } else {
@@ -4719,7 +4719,7 @@ async function initUnifiedIntegrations() {
           return;
         }
         el('uf-email-msg').textContent = 'Saved';
-        el('uf-email-msg').style.color = 'var(--green,#50fa7b)';
+        el('uf-email-msg').style.color = 'var(--green,#22c55e)';
         integrationNotice = 'Email account saved. For more settings, go to Settings > Email.';
         formEl.style.display = 'none';
         await renderList();
@@ -4780,7 +4780,7 @@ async function initUnifiedIntegrations() {
         if (d.unlocked_at) parts.push(`Last unlock: ${d.unlocked_at.replace('T',' ').slice(0,19)}`);
         const statusEl = el('uf-vault-status');
         statusEl.textContent = parts.join(' — ');
-        statusEl.style.color = !installed ? 'var(--red)' : d.unlocked ? 'var(--green,#50fa7b)' : '';
+        statusEl.style.color = !installed ? 'var(--red)' : d.unlocked ? 'var(--green,#22c55e)' : '';
       } catch (_) {
         el('uf-vault-status').textContent = 'Failed to load vault status';
       }
@@ -4798,7 +4798,7 @@ async function initUnifiedIntegrations() {
           body: JSON.stringify({ server_url: el('uf-vault-url').value, email: el('uf-vault-email').value }),
         });
         const d = await r.json();
-        if (d.ok) { msg('Saved', 'var(--green,#50fa7b)'); await refreshStatus(); await renderList(); }
+        if (d.ok) { msg('Saved', 'var(--green,#22c55e)'); await refreshStatus(); await renderList(); }
         else msg(d.error || 'Failed', 'var(--red)');
       } catch (e) { msg('Error: ' + e.message, 'var(--red)'); }
     });
@@ -4816,7 +4816,7 @@ async function initUnifiedIntegrations() {
         });
         const d = await r.json();
         if (d.ok) {
-          msg(d.already ? 'Already logged in — use Unlock' : 'Logged in', 'var(--green,#50fa7b)');
+          msg(d.already ? 'Already logged in — use Unlock' : 'Logged in', 'var(--green,#22c55e)');
           el('uf-vault-pass').value = '';
           await refreshStatus(); await renderList();
         } else msg(d.error || 'Login failed', 'var(--red)');
@@ -4835,7 +4835,7 @@ async function initUnifiedIntegrations() {
         });
         const d = await r.json();
         if (d.ok) {
-          msg('Vault unlocked', 'var(--green,#50fa7b)');
+          msg('Vault unlocked', 'var(--green,#22c55e)');
           el('uf-vault-pass').value = '';
           await refreshStatus(); await renderList();
         } else msg(d.error || 'Unlock failed', 'var(--red)');
@@ -4846,7 +4846,7 @@ async function initUnifiedIntegrations() {
       msg('Locking...');
       try {
         await fetch('/api/vault/lock', { method: 'POST', credentials: 'same-origin' });
-        msg('Locked', 'var(--green,#50fa7b)');
+        msg('Locked', 'var(--green,#22c55e)');
         await refreshStatus(); await renderList();
       } catch (e) { msg('Error: ' + e.message, 'var(--red)'); }
     });
@@ -4856,7 +4856,7 @@ async function initUnifiedIntegrations() {
       msg('Logging out...');
       try {
         await fetch('/api/vault/logout', { method: 'POST', credentials: 'same-origin' });
-        msg('Logged out', 'var(--green,#50fa7b)');
+        msg('Logged out', 'var(--green,#22c55e)');
         await refreshStatus(); await renderList();
       } catch (e) { msg('Error: ' + e.message, 'var(--red)'); }
     });
@@ -4935,7 +4935,7 @@ async function initUnifiedIntegrations() {
         const srv = servers.find(s => (s.id || s.name) === editId);
         if (!srv) { formEl.innerHTML = '<div class="admin-card" style="margin-top:8px">Server not found</div>'; return; }
         const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
-        const statusColor = srv.needs_oauth ? '#e5a33a' : srv.status === 'connected' ? 'var(--green,#50fa7b)' : srv.status === 'error' ? 'var(--red)' : 'var(--fg)';
+        const statusColor = srv.needs_oauth ? '#e5a33a' : srv.status === 'connected' ? 'var(--green,#22c55e)' : srv.status === 'error' ? 'var(--red)' : 'var(--fg)';
         const toolInfo = srv.status === 'connected' ? `${srv.enabled_tool_count}/${srv.tool_count} tools` : '';
         const statusText = srv.needs_oauth ? 'Needs authorization' : srv.status === 'connected' ? `Connected (${toolInfo})` : srv.status === 'error' ? `Error: ${esc(srv.error || 'unknown')}` : 'Disconnected';
         formEl.innerHTML = `
@@ -5246,7 +5246,7 @@ async function initUnifiedIntegrations() {
             });
             const d = await r.json().catch(() => ({}));
             if (!r.ok) throw new Error(d.detail || 'Failed');
-            if (msg) { msg.textContent = 'Saved'; msg.style.color = 'var(--green, #50fa7b)'; setTimeout(() => { msg.textContent = ''; }, 1200); }
+            if (msg) { msg.textContent = 'Saved'; msg.style.color = 'var(--green, #22c55e)'; setTimeout(() => { msg.textContent = ''; }, 1200); }
             notifyIntegrationsChanged();
           } catch (err) {
             cb.checked = !cb.checked;
@@ -5287,7 +5287,7 @@ async function initUnifiedIntegrations() {
         });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(d.detail || 'Failed');
-        if (msg) { msg.textContent = 'Saved'; msg.style.color = 'var(--green, #50fa7b)'; }
+        if (msg) { msg.textContent = 'Saved'; msg.style.color = 'var(--green, #22c55e)'; }
         await renderList();
         setTimeout(() => { formEl.style.display = 'none'; }, 350);
       } catch (err) {
@@ -5387,7 +5387,7 @@ async function initUnifiedIntegrations() {
         formEl.dataset.createdTokenId = String(uiToken.id);
         if (msg) {
           msg.textContent = `Created "${name}".`;
-          msg.style.color = 'var(--green, #50fa7b)';
+          msg.style.color = 'var(--green, #22c55e)';
         }
         await renderList();
       } catch (err) {
@@ -5490,7 +5490,7 @@ async function initUnifiedIntegrations() {
             });
             const d = await r.json().catch(() => ({}));
             if (!r.ok) throw new Error(d.detail || 'Failed');
-            if (msg) { msg.textContent = 'Saved'; msg.style.color = 'var(--green, #50fa7b)'; }
+            if (msg) { msg.textContent = 'Saved'; msg.style.color = 'var(--green, #22c55e)'; }
             await renderList();
           } catch (err) {
             cb.checked = !cb.checked;
@@ -5634,7 +5634,7 @@ export function close() {
       : `Google OAuth failed: ${errMsg || 'unknown error'}`;
     Object.assign(banner.style, {
       position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
-      background: success ? 'var(--accent, #50fa7b)' : 'var(--red, #ff5555)',
+      background: success ? 'var(--accent, #22c55e)' : 'var(--red, #ff5555)',
       color: '#000', padding: '8px 18px', borderRadius: '6px', fontSize: '12px',
       fontWeight: '600', zIndex: '99999', pointerEvents: 'none',
       boxShadow: '0 2px 12px rgba(0,0,0,0.3)',

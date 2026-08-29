@@ -2402,7 +2402,7 @@ export function _renderRunningTab() {
       <div class="cookbook-task-header">
         <span class="cookbook-task-type${(task.status === 'done' && task.type === 'download') ? ' cookbook-task-type-done' : ''}" data-type="${esc(task.type)}">${esc((task.status === 'done' && task.type === 'download') ? 'finished' : task.type)}</span>
         <span class="cookbook-task-name">${modelLogo(logoName)}${esc(displayName)}</span>
-        <span class="cookbook-task-indicator"><span class="cookbook-task-wave" style="display:${task.status === 'running' ? '' : 'none'}"></span>${_canLaunchDownloadedTask(task) ? '<button type="button" class="cookbook-task-serve-btn" title="Open in Launch"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg><span>Launch</span></button>' : ''}<span class="cookbook-task-check" title="Clear" style="display:${_canClearTask(task) ? '' : 'none'}"><svg class="cookbook-task-check-ico" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#50fa7b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><svg class="cookbook-task-clear-ico" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg><span class="cookbook-task-done-label">${esc(_clearPillLabel(task))}</span><span class="cookbook-task-clear-label">clear</span></span></span>
+        <span class="cookbook-task-indicator"><span class="cookbook-task-wave" style="display:${task.status === 'running' ? '' : 'none'}"></span>${_canLaunchDownloadedTask(task) ? '<button type="button" class="cookbook-task-serve-btn" title="Open in Launch"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg><span>Launch</span></button>' : ''}<span class="cookbook-task-check" title="Clear" style="display:${_canClearTask(task) ? '' : 'none'}"><svg class="cookbook-task-check-ico" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><svg class="cookbook-task-clear-ico" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg><span class="cookbook-task-done-label">${esc(_clearPillLabel(task))}</span><span class="cookbook-task-clear-label">clear</span></span></span>
         <button type="button" class="cookbook-task-start-now" title="Start this queued download now" style="display:${(task.type === 'download' && task.status === 'queued') ? '' : 'none'}"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="8 5 19 12 8 19 8 5"/></svg><span>start now</span></button>
         <span class="cookbook-task-status ${_bdg.cls}"${_bdgTitle}>${esc(_bdg.text)}</span>
         <button type="button" class="cookbook-task-menu-btn" title="Actions">&#8942;</button>
@@ -3927,12 +3927,12 @@ function _syncSettingsServerDots(byKey) {
     if (failed) {
       msg.textContent = 'Server not responding';
       msg.title = 'Server not responding - running serve may have crashed';
-      msg.style.color = 'var(--red,#e06c75)';
+      msg.style.color = 'var(--red,#e5484d)';
       msg.style.opacity = '0.75';
     } else if (/failed|crashed|not responding|unreachable/i.test(msg.textContent || '')) {
       msg.textContent = 'Reachable';
       msg.title = 'Reachable';
-      msg.style.color = 'var(--green,#50fa7b)';
+      msg.style.color = 'var(--green,#22c55e)';
       msg.style.opacity = '0.75';
     }
   });

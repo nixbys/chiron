@@ -165,7 +165,7 @@ function hslToHex(h, s, l) {
 function deriveSyntaxColors(colors) {
   const [fgH, fgS, fgL] = hexToHSL(colors.fg);
   const [bgH, bgS, bgL] = hexToHSL(colors.bg);
-  const [redH, redS, redL] = hexToHSL(colors.red || '#e06c75');
+  const [redH, redS, redL] = hexToHSL(colors.red || '#e5484d');
   const isDark = bgL < 50;
   const codeBgL = isDark ? Math.max(bgL - 4, 0) : Math.min(bgL + 4, 100);
   return {
@@ -203,7 +203,7 @@ const ADV_KEYS = [
 
 function computeAdvancedDefaults(colors) {
   const syn = deriveSyntaxColors(colors);
-  const red = colors.red || '#e06c75';
+  const red = colors.red || '#e5484d';
   return {
     userBubbleBg: colors.bg,
     aiBubbleBg: colors.panel,
@@ -293,7 +293,7 @@ export function applyColors(colors) {
   }
 
   // Update favicon to match theme accent color
-  _updateFavicon(colors.red || '#e06c75');
+  _updateFavicon(colors.red || '#e5484d');
 }
 
 // Per-route SVG shape registry — kept in sync with the inline favicon
@@ -739,7 +739,7 @@ export function initThemeUI() {
         if (fs) fs.value = f;
         if (ds) ds.value = d;
         if (ps) ps.value = p;
-        if (ecs) ecs.value = ec || colors.fg || '#9cdef2';
+        if (ecs) ecs.value = ec || colors.fg || '#e4e9f0';
         if (eis) eis.value = String(Math.round(ei * 100));
         if (szs) szs.value = String(Math.round(sz * 100));
         if (frs) frs.checked = fr;
@@ -1071,7 +1071,7 @@ export function initThemeUI() {
     newBtn.addEventListener('click', () => {
       const ec = document.getElementById('theme-bg-effect-color');
       if (ec) {
-        const fg = currentColors.fg || '#9cdef2';
+        const fg = currentColors.fg || '#e4e9f0';
         ec.value = fg;
         applyBgEffectColor('');
         const s = getSaved(); if (s) _saveFull(s.name, s.colors);
@@ -1176,7 +1176,7 @@ export function initThemeUI() {
 
   const effectColorPicker = document.getElementById('theme-bg-effect-color');
   if (effectColorPicker) {
-    effectColorPicker.value = _initEffectColor || currentColors.fg || '#9cdef2';
+    effectColorPicker.value = _initEffectColor || currentColors.fg || '#e4e9f0';
     effectColorPicker.addEventListener('input', () => {
       applyBgEffectColor(effectColorPicker.value);
       const s = getSaved(); if (s) _saveFull(s.name, s.colors);
@@ -1224,7 +1224,7 @@ export function initThemeUI() {
   // Keep the hex display chip in sync with whatever the picker reports.
   const _harmonyHex = document.getElementById('harmony-accent-hex');
   if (harmonyAccentEl && _harmonyHex) {
-    _harmonyHex.textContent = harmonyAccentEl.value || '#e06c75';
+    _harmonyHex.textContent = harmonyAccentEl.value || '#e5484d';
     harmonyAccentEl.addEventListener('input', () => {
       _harmonyHex.textContent = harmonyAccentEl.value;
     });
@@ -1556,7 +1556,7 @@ function _initSynapse() {
 
   function getColor() {
     const s = getComputedStyle(document.documentElement);
-    return s.getPropertyValue('--bg-effect-color').trim() || s.getPropertyValue('--fg').trim() || '#9cdef2';
+    return s.getPropertyValue('--bg-effect-color').trim() || s.getPropertyValue('--fg').trim() || '#e4e9f0';
   }
 
   function spawnPulse() {
@@ -1647,7 +1647,7 @@ function _initRain() {
 
   function getColor() {
     const s = getComputedStyle(document.documentElement);
-    return s.getPropertyValue('--bg-effect-color').trim() || s.getPropertyValue('--fg').trim() || '#9cdef2';
+    return s.getPropertyValue('--bg-effect-color').trim() || s.getPropertyValue('--fg').trim() || '#e4e9f0';
   }
 
   function spawn() {
@@ -1738,7 +1738,7 @@ function _initConstellations() {
 
   function getColor() {
     const s = getComputedStyle(document.documentElement);
-    return s.getPropertyValue('--bg-effect-color').trim() || s.getPropertyValue('--fg').trim() || '#9cdef2';
+    return s.getPropertyValue('--bg-effect-color').trim() || s.getPropertyValue('--fg').trim() || '#e4e9f0';
   }
 
   let t = 0;
@@ -1824,8 +1824,8 @@ function _initPerlinFlow() {
   resize();
   const _onResize = () => resize();
   window.addEventListener('resize', _onResize);
-  function getColor() { const s = getComputedStyle(document.documentElement); return s.getPropertyValue('--bg-effect-color').trim() || s.getPropertyValue('--fg').trim() || '#9cdef2'; }
-  function getBg() { return getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#282c34'; }
+  function getColor() { const s = getComputedStyle(document.documentElement); return s.getPropertyValue('--bg-effect-color').trim() || s.getPropertyValue('--fg').trim() || '#e4e9f0'; }
+  function getBg() { return getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#0a0d12'; }
   let _cachedBg = '', _fadeStyle = '';
   function getFade() {
     const bg = getBg();
@@ -1890,7 +1890,7 @@ function _initPetals() {
   resize();
   const _onResize = () => resize();
   window.addEventListener('resize', _onResize);
-  function getColor() { const s = getComputedStyle(document.documentElement); return s.getPropertyValue('--bg-effect-color').trim() || s.getPropertyValue('--fg').trim() || '#9cdef2'; }
+  function getColor() { const s = getComputedStyle(document.documentElement); return s.getPropertyValue('--bg-effect-color').trim() || s.getPropertyValue('--fg').trim() || '#e4e9f0'; }
   function draw() {
     if (!document.body.classList.contains('bg-pattern-petals')) { window.removeEventListener('resize', _onResize); canvas.remove(); return; }
     requestAnimationFrame(draw);
@@ -1941,7 +1941,7 @@ function _initSparkles() {
   resize();
   const _onResize = () => resize();
   window.addEventListener('resize', _onResize);
-  function getColor() { const s = getComputedStyle(document.documentElement); return s.getPropertyValue('--bg-effect-color').trim() || s.getPropertyValue('--fg').trim() || '#9cdef2'; }
+  function getColor() { const s = getComputedStyle(document.documentElement); return s.getPropertyValue('--bg-effect-color').trim() || s.getPropertyValue('--fg').trim() || '#e4e9f0'; }
   function drawStar(x, y, r, c, alpha) {
     ctx.save(); ctx.translate(x, y); ctx.fillStyle = c; ctx.globalAlpha = alpha;
     // 4-point star

@@ -2872,12 +2872,12 @@ function _wireTabEvents(body) {
           check.className = 'hwfit-hf-check';
           check.title = 'Token stored';
           check.textContent = '✓';
-          check.style.cssText = 'font-weight:800;color:var(--green,#50fa7b);font-size:15px;line-height:1;flex-shrink:0;position:relative;top:2px;';
+          check.style.cssText = 'font-weight:800;color:var(--green,#22c55e);font-size:15px;line-height:1;flex-shrink:0;position:relative;top:2px;';
           hfInput.parentNode.insertBefore(check, hfInput);
         }
         const flash = document.createElement('span');
         flash.textContent = 'Saved';
-        flash.style.cssText = 'margin-left:8px;font-size:11px;color:var(--green,#50fa7b);opacity:0;transition:opacity 0.18s;flex-shrink:0;position:relative;top:1px;';
+        flash.style.cssText = 'margin-left:8px;font-size:11px;color:var(--green,#22c55e);opacity:0;transition:opacity 0.18s;flex-shrink:0;position:relative;top:1px;';
         hfInput.parentNode.appendChild(flash);
         requestAnimationFrame(() => { flash.style.opacity = '1'; });
         setTimeout(() => { flash.style.opacity = '0'; setTimeout(() => flash.remove(), 220); }, 1400);
@@ -2894,7 +2894,7 @@ function _wireTabEvents(body) {
 // forceRemote renders an editable remote entry even before a host is typed
 // (a new server's host is empty, which would otherwise read as "Local").
 export function _serverDefaultHtml(active) {
-  const check = active ? '<span class="hwfit-hf-check cookbook-srv-default-check" title="Default server" style="font-weight:800;color:var(--green,#50fa7b);font-size:15px;line-height:1;flex-shrink:0;position:relative;top:2px;">✓</span>' : '';
+  const check = active ? '<span class="hwfit-hf-check cookbook-srv-default-check" title="Default server" style="font-weight:800;color:var(--green,#22c55e);font-size:15px;line-height:1;flex-shrink:0;position:relative;top:2px;">✓</span>' : '';
   return `${check}<span class="cookbook-srv-default-label">default</span>`;
 }
 
@@ -3252,7 +3252,7 @@ function _renderRecipes() {
   // Bold green check shown when a token is stored (a placeholder can't style a
   // single glyph, so it's its own element next to the input).
   if (_es.hfTokenConfigured) {
-    html += `<span class="hwfit-hf-check" title="Token stored" style="font-weight:800;color:var(--green,#50fa7b);font-size:15px;line-height:1;flex-shrink:0;position:relative;top:2px;">✓</span>`;
+    html += `<span class="hwfit-hf-check" title="Token stored" style="font-weight:800;color:var(--green,#22c55e);font-size:15px;line-height:1;flex-shrink:0;position:relative;top:2px;">✓</span>`;
   }
   const hfPlaceholder = _es.hfTokenConfigured
     ? `Stored (${esc(_es.hfTokenMasked || 'configured')}) - enter a new token to replace`
