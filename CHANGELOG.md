@@ -11,6 +11,13 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 ## [Unreleased]
 
 ### Added
+- New PWA icons (`static/icons/icon-192.png`, `icon-512.png`, `icon-maskable-512.png`) — the
+  new crimson shield mark on the Duality dark background, replacing icons generated before
+  the rebrand (the old boat logo in the pre-redesign pink/rose palette). A new README hero
+  screenshot (`docs/chiron-interface.png`, a real Playwright capture of the current
+  interface) replaces `docs/odysseus-browser.jpg`; a second, unreferenced pre-rebrand
+  screenshot (`docs/odysseus.jpg`) was also removed.
+
 - Security Hub management sub-panels (Phase 2.4): the security dashboard
   (Phase 1 checkpoint G) is now a tabbed Security Hub — Overview (the
   original aggregated snapshot, unchanged) plus Engagements, Watchlist, and
@@ -37,6 +44,23 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
   than inventing another one.
 
 ### Changed
+- README consistency pass: reworded or removed every remaining "Odysseus" reference that
+  wasn't either (a) the explicit upstream-credit line/badge/link, or (b) a real technical
+  identifier (`ODYSSEUS_*` env vars, the `odysseus`/`odysseus-toolchain`/`odysseus-spiderfoot`/
+  `odysseus-bentopdf` container names, the `odysseus-findings` OpenSearch index) that must
+  stay as-is for running installs to keep working. Also refreshed two stale sections: "ADR
+  001–006" → "ADR 001–008" in the repo-layout tree, the `modules/engagement_manager`/
+  `finding_tracker`/`report_builder` placeholders (empty since the fork's initial scaffold
+  commit, long since superseded by `engagement_server.py`/`findings_server.py`/`pdf_server.py`)
+  no longer labeled "in development", and the "Security Dashboard" section rewritten to
+  describe the actual four-tab Security Hub shipped in Phase 2.4 rather than the old
+  single-page v1 description. `.gitignore`'s own "Odysseus-red additions" section header
+  updated to "Chiron additions". `static/manifest.json`'s PWA description updated to describe
+  Chiron's actual security-focused identity instead of the generic base-platform wording.
+  The GitHub repository's own description/topics were also updated to match (credit to
+  Odysseus retained in the description text). The local `origin` git remote now points
+  directly at `https://github.com/nixbys/chiron.git` instead of relying on GitHub's redirect
+  from the old `odysseus-red` URL.
 - Found and fixed several "Odysseus" strings the Phase 3 rebrand's file-
   level sweep missed because they're written into the DOM by JavaScript
   rather than sitting in `index.html`/`login.html` source: `app.js`'s

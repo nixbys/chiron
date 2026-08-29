@@ -108,6 +108,6 @@ _scratch/
 /odysseus/
 .agents/
 
-# Odysseus-red additions
+# Chiron additions
 *.jsonl
 data/attck_enterprise.json

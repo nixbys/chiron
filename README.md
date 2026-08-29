@@ -24,14 +24,14 @@
 </p>
 
 <p align="center">
-  <img src="docs/odysseus-browser.jpg" alt="Odysseus interface">
+  <img src="docs/chiron-interface.png" alt="Chiron interface">
 </p>
 
 ---
 
 ## What This Is
 
-Chiron layers a complete cybersecurity toolchain on top of the [Odysseus](https://github.com/pewdiepie-archdaemon/odysseus) self-hosted AI workspace. The base platform provides chat, agents, memory, deep research, documents, and MCP — this fork adds:
+Chiron layers a complete cybersecurity toolchain on top of a self-hosted AI workspace (see credit above). The base platform provides chat, agents, memory, deep research, documents, and MCP — this fork adds:
 
 - **20 cybersecurity MCP servers** wired to a Kali-based sidecar, SpiderFoot OSINT platform, OpenSearch, and BentoPDF
 - **Pre-built agent skill workflows** for reconnaissance, OSINT, incident response, threat hunting, malware analysis, web assessment, continuous monitoring, and reporting
@@ -97,13 +97,13 @@ Native installs, GPU notes, Windows/macOS instructions, and HTTPS are covered in
 │ exploit      │ │spiderfoot  │ ┌─────▼──────────┐
 │ transform    │ │200+ modules│ │ OpenSearch     │
 └──────┬───────┘ └────────────┘ │ :9200          │
-       │ HTTP :8088             │ findings index  │
+       │ HTTP :8088             │ findings index │
        ▼                        └────────────────┘
 ┌──────────────────────┐   ┌───────────────────────┐
-│ odysseus-toolchain   │   │ odysseus-bentopdf      │
-│ (Kali Rolling)       │   │ localhost:3000          │
-│ nmap  masscan  ffuf  │   │ client-side WASM/JS     │
-│ nikto gobuster sqlmap│   │ edit · redact · sign    │
+│ odysseus-toolchain   │   │ odysseus-bentopdf     │
+│ (Kali Rolling)       │   │ localhost:3000        │
+│ nmap  masscan  ffuf  │   │ client-side WASM/JS   │
+│ nikto gobuster sqlmap│   │ edit · redact · sign  │
 │ nuclei  subfinder    │   └───────────────────────┘
 │ john  hydra  yara    │
 │ theHarvester recon-ng│
@@ -111,7 +111,7 @@ Native installs, GPU notes, Windows/macOS instructions, and HTTPS are covered in
 └──────────────────────┘
 ```
 
-The Odysseus core image is **not modified**. All sidecars are managed via `docker-compose.security.yml` and attach to the same internal network.
+The upstream core image is **not modified**. All sidecars are managed via `docker-compose.security.yml` and attach to the same internal network.
 
 ---
 
@@ -269,9 +269,9 @@ STIX data sourced from `github.com/mitre/cti`, cached locally.
 | `nist_control` | Look up a control by ID (e.g. `AC-2` or `AC-2.1` for an enhancement) — title, statement, guidance, related controls |
 | `nist_family` | List all controls under a control family (e.g. `AC`, `SC`, `IA`) |
 | `nist_search` | Search control titles by keyword |
-| `nist_map` | Map a list of ATT&CK tactic names and/or Odysseus finding tags to control families via a small hand-authored heuristic table |
+| `nist_map` | Map a list of ATT&CK tactic names and/or Chiron finding tags to control families via a small hand-authored heuristic table |
 
-Same shape as `attck_server` above: fetches and caches NIST's free OSCAL JSON catalog (`usnistgov/oscal-content` on GitHub) rather than bundling it. CIS Controls v8 is deliberately out of scope — unlike NIST's OSCAL data, CIS's control text isn't freely redistributable. `nist_map`'s table is explicitly a rough grouping for a compliance summary, not authoritative NIST guidance — it keys on ATT&CK's own small tactic-name vocabulary and Odysseus's finding tags/check types, not a per-technique crosswalk.
+Same shape as `attck_server` above: fetches and caches NIST's free OSCAL JSON catalog (`usnistgov/oscal-content` on GitHub) rather than bundling it. CIS Controls v8 is deliberately out of scope — unlike NIST's OSCAL data, CIS's control text isn't freely redistributable. `nist_map`'s table is explicitly a rough grouping for a compliance summary, not authoritative NIST guidance — it keys on ATT&CK's own small tactic-name vocabulary and Chiron's finding tags/check types, not a per-technique crosswalk.
 
 ### `risk_server` — CVSS Risk Scoring
 
@@ -358,17 +358,22 @@ Backs the `sigma_sweep` scheduled-task action (`src/builtin_actions.py`): on a c
 | `host_cron_jobs` | List the invoking user's crontab plus system `cron.d` entries (Linux-only) |
 | `host_packages` | List installed OS packages via `dpkg` or `rpm`, whichever is present (Linux-only) |
 
-The blue-team complement to `recon_server`'s offensive scanning — read-only introspection of the host/container Odysseus itself is running in, not an arbitrary pentest target. Runs entirely via `psutil` (pure Python, in-process) rather than `exec_in_toolchain()`, since the Kali toolchain sidecar's own process list is useless for defensive monitoring of anything real. **Scope caveat**: when Odysseus runs inside a Docker container (the default deployment), these tools only ever see that container's own namespace — not the true underlying host — since no host-namespace passthrough (bind-mounted `/proc`, `pid: host`, etc.) exists in this fork yet; true host-level visibility from inside a container is a known gap, not solved here.
+The blue-team complement to `recon_server`'s offensive scanning — read-only introspection of the host/container Chiron itself is running in, not an arbitrary pentest target. Runs entirely via `psutil` (pure Python, in-process) rather than `exec_in_toolchain()`, since the Kali toolchain sidecar's own process list is useless for defensive monitoring of anything real. **Scope caveat**: when Chiron runs inside a Docker container (the default deployment), these tools only ever see that container's own namespace — not the true underlying host — since no host-namespace passthrough (bind-mounted `/proc`, `pid: host`, etc.) exists in this fork yet; true host-level visibility from inside a container is a known gap, not solved here.
 
 Backs the `host_monitor` scheduled-task action (`src/builtin_actions.py`): on a cron schedule, re-runs a configured subset of these checks and diffs each against the last stored snapshot (`monitor_server`), filing a finding + reminder only when something changed since the last run. Process-name churn from kernel worker threads (`kworker/N:M`, which the kernel renumbers constantly) is filtered out before diffing. Configure via the task's prompt as JSON, e.g. `{"checks": ["processes", "listening_ports", "users"], "engagement_id": "..."}` — defaults to `["processes", "listening_ports", "users"]`; `cron`/`packages` are opt-in and Linux-only.
 
 ---
 
-## Security Dashboard
+## Security Hub
 
-Admin-only (`GET /api/security/dashboard`, `routes/security_dashboard_routes.py`) snapshot across the security MCP servers' own stores: findings summary (severity/status counts, the same aggregation `findings_server`'s `finding_stats` uses), active watchlist entries, recent scan drift across every scheduled task (`monitor_server`), the engagement list, and a host telemetry summary (process/listening-port/logged-in-user counts). Each section is read via direct import of its MCP server module rather than the MCP text-tool interface, and is independently best-effort — one source failing (e.g. OpenSearch unreachable) surfaces as an `error` field on just that section, never a 500 for the whole dashboard.
+Admin-only, opens from the sidebar/icon-rail "Security Dashboard" button (`static/js/securityDashboard.js`, routes under `routes/security_dashboard_routes.py`). Four tabs:
 
-Opens from the sidebar/icon-rail "Security Dashboard" button (`static/js/securityDashboard.js`). This is the minimal v1 page — a later redesign pass turns it into the full Security Hub anchor (engagement/watchlist/rule-management sub-panels, a proper design system), not a bigger version of this same page.
+- **Overview** (`GET /api/security/dashboard`) — a snapshot across the security MCP servers' own stores: findings summary (severity/status counts, the same aggregation `findings_server`'s `finding_stats` uses), active watchlist entries, recent scan drift across every scheduled task (`monitor_server`), the engagement list, and a host telemetry summary (process/listening-port/logged-in-user counts).
+- **Engagements** — browse, expand a row for scope + timeline detail, create, and close engagements.
+- **Watchlist** — browse, add, pause/resume, and remove IOC watchlist entries.
+- **Rules** — browse stored Sigma rules and YARA rule names (the latter via the toolchain sidecar), with a raw-content viewer for either.
+
+Every write goes through the same MCP server module's `call_tool()` the chat/MCP-tool path already uses — one validation path, not a second one reimplemented for the REST route. Each section/tab is read via direct import of its MCP server module rather than the MCP text-tool interface, and is independently best-effort — one source failing (e.g. OpenSearch or the toolchain sidecar unreachable) surfaces as an `error` field on just that section, never a 500 for the whole page.
 
 ---
 
@@ -445,13 +450,13 @@ OPENSEARCH_USER=admin
 OPENSEARCH_PASSWORD=admin
 ```
 
-All Odysseus platform options (model endpoints, auth, HTTPS, RAG, GPU) are documented in the upstream [setup guide](docs/setup.md). See `.env.example` for the complete annotated reference.
+All base-platform options (model endpoints, auth, HTTPS, RAG, GPU) are documented in the upstream [setup guide](docs/setup.md). See `.env.example` for the complete annotated reference.
 
 ### Hybrid / local-tools mode
 
 By default, `docker-compose.security.yml`'s `toolchain`, `spiderfoot`, `bentopdf`, and `opensearch` services are gated behind the shared `sidecars` Compose profile and started with `--profile sidecars`. Each service also carries its own profile name (`toolchain`, `spiderfoot`, `bentopdf`, `opensearch`), so you can start any subset directly — e.g. `--profile toolchain --profile bentopdf --profile opensearch` starts three of the four sidecars and skips SpiderFoot — without giving up the single-flag `--profile sidecars` shortcut for "start everything." If a tool or service is already installed on the machine running Chiron, you can skip its container and use the local install instead, per tool or per service:
 
-- **Toolchain binaries** (`nmap`, `masscan`, `theHarvester`, `sherlock`, `dig`, `whois`, `amass`, `nikto`, `gobuster`, `sqlmap`, `nuclei`, `ffuf`, `hashid`, `john`, `yara`, `searchsploit`): set `TOOLCHAIN_EXEC_MODE=local` in `.env` to run every one of them directly on the app's own host instead of the sidecar, or set a per-binary override like `TOOLCHAIN_EXEC_MODE_NMAP=local` to switch just that one — see the commented block in `.env.example`. This requires the binary to actually be on `PATH` for the odysseus process; missing binaries return a clear `[error:not_installed]` rather than failing silently. Local mode runs the tool **unsandboxed**, without the toolchain container's `cap_drop: [ALL]` / `no-new-privileges` isolation — only enable it for tools you trust to run with the app's own privileges. Omit `toolchain` from `--profile sidecars` (or use the per-service profile flags above) once nothing routes through it.
+- **Toolchain binaries** (`nmap`, `masscan`, `theHarvester`, `sherlock`, `dig`, `whois`, `amass`, `nikto`, `gobuster`, `sqlmap`, `nuclei`, `ffuf`, `hashid`, `john`, `yara`, `searchsploit`): set `TOOLCHAIN_EXEC_MODE=local` in `.env` to run every one of them directly on the app's own host instead of the sidecar, or set a per-binary override like `TOOLCHAIN_EXEC_MODE_NMAP=local` to switch just that one — see the commented block in `.env.example`. This requires the binary to actually be on `PATH` for the Chiron process; missing binaries return a clear `[error:not_installed]` rather than failing silently. Local mode runs the tool **unsandboxed**, without the toolchain container's `cap_drop: [ALL]` / `no-new-privileges` isolation — only enable it for tools you trust to run with the app's own privileges. Omit `toolchain` from `--profile sidecars` (or use the per-service profile flags above) once nothing routes through it.
 - **Services** (SpiderFoot, OpenSearch, BentoPDF, Ollama): each is already reached through a plain URL env var (`SPIDERFOOT_URL`, `OPENSEARCH_URL`, `BENTOPDF_URL`, `OLLAMA_BASE_URL`) with no hardcoded container dependency. Point the var at an already-running local/VM-native instance (e.g. `SPIDERFOOT_URL=http://localhost:5001`) and skip starting that container via its profile.
 - **Status check**: `GET /api/toolchain/exec-modes` reports, per toolchain binary, the resolved mode (`local`/`container`) and — for `local` — whether it was actually found on `PATH`.
 - **Automatic detection**: `setup.py` runs a host-capability scan (step 6) on every native install. It probes `PATH` for the toolchain binaries above and checks the well-known ports of the six sidecar services (verifying each by its response shape, not just "port is open," to avoid mistaking an unrelated service for the real one), then interactively offers to write the matching `TOOLCHAIN_EXEC_MODE_*` / service-URL lines into `.env` — printing the isolation trade-off and the Compose flags needed to skip that sidecar. It's a non-interactive no-op (never prompts, never writes) when stdin isn't a TTY or `ODYSSEUS_SKIP_HOST_SCAN` is set — including when `setup.py` runs automatically inside the container via `docker/entrypoint.sh`, where the binary scan is skipped outright (container isolation means it would only ever see the container's own `PATH`) but the service scan still runs, additionally checking `host.docker.internal`. Every accepted suggestion is logged to `logs/host_capability_scan.log`. See `src/host_capabilities.py`.
@@ -493,17 +498,17 @@ chiron/
 │   ├── threat_hunting/          # ioc_hunt, network_exposure_audit
 │   ├── malware_analysis/        # file_triage
 │   └── reporting/pentest_report.md
-├── modules/
-│   ├── engagement_manager/      # in development
-│   ├── finding_tracker/         # in development
-│   └── report_builder/          # in development
+├── modules/                      # reserved for future fork-specific Python modules;
+│                                 # engagement/finding/report needs are already covered
+│                                 # by engagement_server.py, findings_server.py, and
+│                                 # pdf_server.py's report tools above
 ├── docker/
 │   └── toolchain/
 │       ├── Dockerfile           # Kali Rolling sidecar image
 │       └── exec_api.py          # HTTP exec API (Bearer auth + structured logging)
 ├── docker-compose.security.yml  # Compose overlay: toolchain + SpiderFoot + OpenSearch + BentoPDF
 ├── docs/
-│   ├── adr/                     # Architecture decision records (ADR 001–006)
+│   ├── adr/                     # Architecture decision records (ADR 001–008)
 │   ├── develop-mcp-servers.md   # Guide for adding new MCP servers
 │   └── reverse-proxy.md         # HTTPS + Caddy/nginx/Traefik examples
 └── tests/
@@ -559,12 +564,12 @@ Active tools in this repo can cause significant impact on target systems. Before
 2. Understand the rules of engagement.
 3. Use `passive` SpiderFoot use case for external targets unless active probing is explicitly authorized.
 
-Keep Odysseus auth enabled. Do not expose the SpiderFoot port (5001) or toolchain container ports to the public internet — both are internal-network only by default. BentoPDF is bound to `127.0.0.1:3000` and processes all files client-side — no document content passes through the container.
+Keep Chiron's auth enabled. Do not expose the SpiderFoot port (5001) or toolchain container ports to the public internet — both are internal-network only by default. BentoPDF is bound to `127.0.0.1:3000` and processes all files client-side — no document content passes through the container.
 
 - Keep `AUTH_ENABLED=true` for any network-accessible deployment.
 - Keep `LOCALHOST_BYPASS=false` outside local development.
 
-For Odysseus platform security notes see the upstream [SECURITY.md](SECURITY.md) and [THREAT_MODEL.md](THREAT_MODEL.md), and the base platform's [deployment security notes](docs/setup.md#security-notes) (`AUTH_ENABLED`, `LOCALHOST_BYPASS`, and related settings).
+For base-platform security notes see the upstream [SECURITY.md](SECURITY.md) and [THREAT_MODEL.md](THREAT_MODEL.md), and the base platform's [deployment security notes](docs/setup.md#security-notes) (`AUTH_ENABLED`, `LOCALHOST_BYPASS`, and related settings).
 
 ---
 
