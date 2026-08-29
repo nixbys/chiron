@@ -13,7 +13,8 @@
   <a href="#skills">Skills</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#architecture">Architecture</a> ·
-  <a href="docs/adr/">Decision Records</a>
+  <a href="docs/adr/">Decision Records</a> ·
+  <a href="docs/roadmap-fork.md">Roadmap</a>
 </p>
 
 <p align="center">
