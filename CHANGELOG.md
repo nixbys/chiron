@@ -10,6 +10,20 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 
 ## [Unreleased]
 
+---
+
+## [0.6.0] — 2026-08-28
+
+Eight additions rebalancing the security toolset from red-team-coded
+toward genuinely red-*and*-blue, all wired hand-in-hand into the *same*
+pipeline v0.5.0 established rather than as parallel systems — see
+[ADR 007](docs/adr/007-security-detection-lifecycle.md) for the concrete
+data-plumbing rule this release was built against. Scheduled Sigma/YARA
+sweeps, defensive host telemetry, a remediation-verification loop,
+multi-target recon, a NIST 800-53 compliance mapping server, one-call
+engagement reporting, and a security dashboard aggregating all of it.
+2 new MCP servers (20 total), 3 modified, 74 new tests.
+
 ### Added
 - Security dashboard (`GET /api/security/dashboard`,
   `routes/security_dashboard_routes.py`, admin-gated) — an aggregated

@@ -43,7 +43,7 @@ Please report vulnerabilities privately via GitHub security advisories if availa
 
 ## Odysseus Red — Additional Security Guidance
 
-This fork adds a Kali Linux sidecar, OpenSearch, and 14 MCP servers that execute security tools. The following guidance applies in addition to everything above.
+This fork adds a Kali Linux sidecar, OpenSearch, and 20 MCP servers that execute security tools. The following guidance applies in addition to everything above.
 
 ### Toolchain Authorization
 
