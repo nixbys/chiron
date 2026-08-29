@@ -12,11 +12,11 @@ name: Release
 #      docs/adr/005-upstream-sync-strategy.md and the repo-hygiene-
 #      and-docs standing rule. A release is not "ready" on green CI
 #      alone if this is skipped.
-#   1. Bump ODYSSEUS_RED_VERSION in src/constants.py on dev.
+#   1. Bump CHIRON_VERSION in src/constants.py on dev.
 #   2. Move [Unreleased] → [X.Y.Z] in CHANGELOG.md on dev.
 #   3. Open a PR from dev → main; wait for CI (ci-security.yml) to pass.
 #   4. Merge the PR.
-#   5. On main: git tag -a vX.Y.Z -m "Odysseus Red vX.Y.Z"
+#   5. On main: git tag -a vX.Y.Z -m "Chiron vX.Y.Z"
 #   6. git push origin vX.Y.Z  ← triggers this workflow.
 #
 # Prereleases (alpha/beta/rc): see docs/adr/006-release-channel-strategy.md.
@@ -114,7 +114,7 @@ jobs:
           #    gets created with *something*, rather than failing the workflow.
           if notes is None:
               notes = (
-                  f"Release v{version} of Odysseus Red — the security overlay fork of Odysseus.\n\n"
+                  f"Release v{version} of Chiron — the security overlay fork of Odysseus.\n\n"
                   f"See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) "
                   f"for full details."
               )
@@ -152,7 +152,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag_name: tag,
-              name: `Odysseus Red ${tag}`,
+              name: `Chiron ${tag}`,
               body: [
                 notes,
                 '',

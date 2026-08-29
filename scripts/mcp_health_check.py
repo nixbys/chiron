@@ -3,7 +3,7 @@
 
 Upstream Odysseus has open reports of MCP servers intermittently failing to
 register or become callable in chat/agent sessions, with tools "disappearing"
-silently rather than raising a visible error. Since Odysseus Red's headline
+silently rather than raising a visible error. Since Chiron's headline
 differentiator is its cybersecurity MCP servers (plus 4 core-platform
 servers: email, memory, image_gen, rag), a registration failure in any one of
 them needs to be loud and specific, not discovered by a user mid-session.
@@ -33,7 +33,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # The cybersecurity-focused MCP servers unique to this fork, plus the 4
-# core-platform servers Odysseus Red also ships as built-ins. Kept as an
+# core-platform servers Chiron also ships as built-ins. Kept as an
 # explicit list (rather than globbing mcp_servers/*.py) so a newly added
 # server file that hasn't been wired up yet doesn't silently count as a
 # "failure" here, and so this list itself documents what's expected to exist.

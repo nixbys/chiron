@@ -1,6 +1,6 @@
 """host_capabilities.py — detect tools/services already present on the host.
 
-Odysseus Red is typically run inside a VM, and normally provisions its own
+Chiron is typically run inside a VM, and normally provisions its own
 copies of several tools and services: the Kali toolchain binaries (nmap,
 sqlmap, ...) and six sidecar services (Ollama, ChromaDB, SearXNG, SpiderFoot,
 OpenSearch, BentoPDF). If the host (or the VM) already has one of these —

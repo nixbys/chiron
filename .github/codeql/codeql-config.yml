@@ -1,9 +1,9 @@
-# CodeQL analysis configuration for odysseus-red.
+# CodeQL analysis configuration for Chiron.
 #
 # Focus analysis on this fork's additions only. Upstream Odysseus files
 # (routes/, src/, services/, static/) are not modified here — alerts in
 # those paths would need to be addressed upstream.
-name: "Odysseus Red CodeQL Config"
+name: "Chiron CodeQL Config"
 
 paths:
   - mcp_servers

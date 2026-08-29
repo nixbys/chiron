@@ -1,6 +1,6 @@
-# Developing MCP Servers for Odysseus-red
+# Developing MCP Servers for Chiron
 
-This guide explains how to add a new MCP server to the odysseus-red security toolchain.
+This guide explains how to add a new MCP server to the Chiron security toolchain.
 
 ## Architecture overview
 

@@ -51,7 +51,7 @@ just composed.
 | [ChromaDB](https://github.com/chroma-core/chroma) | `chromadb/chroma:latest` | Vector store for memory / RAG | Apache-2.0 |
 | [ntfy](https://github.com/binwiederhier/ntfy) | `binwiederhier/ntfy` | Push notifications (self-hosted reminders) | Apache-2.0 / GPL-2.0 |
 
-## Bundled via `docker-compose.security.yml` (Odysseus Red security overlay)
+## Bundled via `docker-compose.security.yml` (Chiron security overlay)
 
 This fork layers a second compose file on top of the base one
 (`podman-compose -f docker-compose.yml -f docker-compose.security.yml
@@ -172,7 +172,7 @@ credit:
 
 ### License-compatibility notes (for the repo's own LICENSE choice)
 
-Odysseus Red's own code is licensed **AGPL-3.0-or-later** (see [LICENSE](LICENSE)),
+Chiron's own code is licensed **AGPL-3.0-or-later** (see [LICENSE](LICENSE)),
 not MIT. That choice is driven by this fork specifically, not by upstream
 Odysseus's core Python dependencies, which remain permissive on their own:
 
@@ -202,7 +202,7 @@ Neither is modified, and running a separate container that talks over the
 network doesn't by itself force AGPL onto unrelated code. But given the
 fork's own mission — a self-hosted
 pentest/OSINT platform meant to stay self-hosted, not get wrapped into a
-closed-source hosted service by someone else — licensing Odysseus Red's own
+closed-source hosted service by someone else — licensing Chiron's own
 code as **AGPL-3.0-or-later** matches the strongest copyleft guarantee
 already present in its bundled stack (SearXNG, BentoPDF) and closes the
 network-service loophole that a permissive or non-network copyleft license

@@ -1,8 +1,8 @@
-# Release drafter configuration for Odysseus Red.
+# Release drafter configuration for Chiron.
 #
 # Auto-drafts the next release by categorising merged pull requests by their
 # labels. The draft is updated each time a PR merges to dev and on each push
-# to main. Cut a release by promoting the draft: bump ODYSSEUS_RED_VERSION in
+# to main. Cut a release by promoting the draft: bump CHIRON_VERSION in
 # src/constants.py, update CHANGELOG.md, merge dev → main, then push a vX.Y.Z
 # tag. See CONTRIBUTING.md § "Cutting a Release".
 

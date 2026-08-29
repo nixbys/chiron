@@ -8,7 +8,7 @@
 # agreed it replaces this file. Until then, required reviews and the security
 # CI gate (docs/security-ci.md) remain in force via branch protection.
 #
-# --- Odysseus Red additions ---
+# --- Chiron additions ---
 # These paths are owned by the fork maintainer; changes here trigger review.
 /mcp_servers/ @nixbys
 /docker/toolchain/ @nixbys

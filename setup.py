@@ -286,7 +286,7 @@ def host_capability_scan():
     reusable_binaries = result.reusable_binaries
     reusable_services = result.reusable_services
     if not reusable_binaries and not reusable_services:
-        print("  [ok] Nothing already on this host that Odysseus Red would")
+        print("  [ok] Nothing already on this host that Chiron would")
         print("       otherwise provision itself for — nothing to offer.")
         return
 
@@ -405,7 +405,7 @@ def main():
         host_capability_scan()
     except Exception as e:
         print(f"  [warn] Host capability scan failed: {e}")
-        print("         Not fatal — Odysseus Red will provision its own copies as usual.")
+        print("         Not fatal — Chiron will provision its own copies as usual.")
 
     print("\n=== Setup complete ===")
     # start-macos.sh launches the server itself (on its own port) right after

@@ -1,4 +1,4 @@
-name: CI (odysseus-red)
+name: CI (chiron)
 
 on:
   workflow_dispatch: {}
