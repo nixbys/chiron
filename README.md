@@ -186,8 +186,11 @@ SpiderFoot use cases: `passive` (no active probing), `investigate` (balanced), `
 | `pdf_extract_pages` | Carve specific pages from a large document |
 | `pdf_bentopdf_url` | Return the BentoPDF UI URL for interactive editing tasks |
 | `generate_report` | Render markdown/plain-text content (OSINT summaries, pentest findings) to a formatted PDF |
+| `generate_engagement_report` | One-call PDF summary for an engagement: scope, findings summary, and timeline |
 
 Uses `pypdf` (already in `requirements.txt`) — no additional dependencies. For interactive work (redaction, compression, format conversion, signing), the agent hands users the BentoPDF URL at `http://localhost:3000`.
+
+`generate_engagement_report` pulls an engagement's scope/description/tags and recent timeline (`engagement_server`'s SQLite store) plus a findings summary (severity/status counts and top findings, best-effort from `findings_server`'s OpenSearch index — the report still generates without that section if OpenSearch is unreachable), renders them through `generate_report`'s existing markdown pipeline, and saves one PDF. Pass `compliance_summary` (e.g. text pre-built from `compliance_server`'s `nist_map`) to include it as its own section. Like `sigma_server` duplicating `findings_server`'s OpenSearch connection rather than importing it, this reads the engagements/findings stores directly (MCP servers here never import each other) rather than going through `engagement_get`/`finding_search`'s own formatted-text tools.
 
 ### `yara_server` — YARA Malware Detection
 
