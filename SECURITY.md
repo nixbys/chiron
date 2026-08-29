@@ -41,7 +41,7 @@ Please report vulnerabilities privately via GitHub security advisories if availa
 
 ---
 
-## Odysseus Red — Additional Security Guidance
+## Chiron — Additional Security Guidance
 
 This fork adds a Kali Linux sidecar, OpenSearch, and 20 MCP servers that execute security tools. The following guidance applies in addition to everything above.
 
@@ -85,4 +85,4 @@ In addition to `.env`, protect:
 
 ### Reporting Issues in Fork Additions
 
-For vulnerabilities in MCP servers (`mcp_servers/`), the Dockerfile, or the exec API, open a GitHub security advisory on this repo (`nixbys/odysseus-red`). For vulnerabilities in upstream Odysseus code (`routes/`, `src/`, etc.), report to `pewdiepie-archdaemon/odysseus` upstream.
+For vulnerabilities in MCP servers (`mcp_servers/`), the Dockerfile, or the exec API, open a GitHub security advisory on this repo (`nixbys/chiron`). For vulnerabilities in upstream Odysseus code (`routes/`, `src/`, etc.), report to `pewdiepie-archdaemon/odysseus` upstream.

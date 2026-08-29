@@ -1,6 +1,6 @@
 # Reverse Proxy Setup
 
-Odysseus-red's HTTP services should never be exposed to the network without TLS and rate limiting. This guide covers three common options: Caddy (recommended for simplicity), nginx, and Traefik.
+Chiron's HTTP services should never be exposed to the network without TLS and rate limiting. This guide covers three common options: Caddy (recommended for simplicity), nginx, and Traefik.
 
 All examples assume:
 - Odysseus web UI runs at `http://localhost:8080` (internal)

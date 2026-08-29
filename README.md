@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="docs/odysseus-wordmark.png" alt="Odysseus Red" width="280">
+  <img src="docs/chiron-wordmark.png" alt="Chiron" width="280">
 </p>
 
 <p align="center">
-  <strong>Odysseus Red</strong> — a cybersecurity-focused fork of <a href="https://github.com/pewdiepie-archdaemon/odysseus">Odysseus</a>.<br>
+  <strong>Chiron</strong> — a cybersecurity-focused fork of <a href="https://github.com/pewdiepie-archdaemon/odysseus">Odysseus</a>.<br>
   Self-hosted AI workspace extended with penetration testing, OSINT, and threat intelligence tooling.
 </p>
 
@@ -18,7 +18,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License">
-  <img src="https://img.shields.io/github/actions/workflow/status/nixbys/odysseus-red/ci-security.yml?branch=dev&label=CI" alt="CI">
+  <img src="https://img.shields.io/github/actions/workflow/status/nixbys/chiron/ci-security.yml?branch=dev&label=CI" alt="CI">
   <img src="https://img.shields.io/badge/upstream-pewdiepie--archdaemon%2Fodysseus-purple" alt="Upstream">
 </p>
 
@@ -30,7 +30,7 @@
 
 ## What This Is
 
-Odysseus Red layers a complete cybersecurity toolchain on top of the [Odysseus](https://github.com/pewdiepie-archdaemon/odysseus) self-hosted AI workspace. The base platform provides chat, agents, memory, deep research, documents, and MCP — this fork adds:
+Chiron layers a complete cybersecurity toolchain on top of the [Odysseus](https://github.com/pewdiepie-archdaemon/odysseus) self-hosted AI workspace. The base platform provides chat, agents, memory, deep research, documents, and MCP — this fork adds:
 
 - **20 cybersecurity MCP servers** wired to a Kali-based sidecar, SpiderFoot OSINT platform, OpenSearch, and BentoPDF
 - **Pre-built agent skill workflows** for reconnaissance, OSINT, incident response, threat hunting, malware analysis, web assessment, continuous monitoring, and reporting
@@ -56,8 +56,8 @@ Everything runs locally. No telemetry. All tool execution stays on your own infr
 **Prerequisites:** Docker + docker compose (or Podman + podman-compose), git.
 
 ```bash
-git clone https://github.com/nixbys/odysseus-red.git
-cd odysseus-red
+git clone https://github.com/nixbys/chiron.git
+cd chiron
 cp .env.example .env
 # Edit .env — add your API keys (see Configuration below), and set
 # ODYSSEUS_CONTAINER_RUNTIME=docker (the fork's own default is podman — see below)
@@ -80,8 +80,8 @@ Native installs, GPU notes, Windows/macOS instructions, and HTTPS are covered in
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                    Odysseus Red (port 7000)                       │
-│           Chat · Agents · Research · Documents · MCP              │
+│                        Chiron (port 7000)                        │
+│            Chat · Agents · Research · Documents · MCP            │
 └──┬──────────────┬──────────────┬──────────────┬───────────────────┘
    │ MCP stdio    │ MCP stdio    │ MCP stdio    │ MCP stdio
    ▼              ▼              ▼              ▼
@@ -448,7 +448,7 @@ All Odysseus platform options (model endpoints, auth, HTTPS, RAG, GPU) are docum
 
 ### Hybrid / local-tools mode
 
-By default, `docker-compose.security.yml`'s `toolchain`, `spiderfoot`, `bentopdf`, and `opensearch` services are gated behind the shared `sidecars` Compose profile and started with `--profile sidecars`. Each service also carries its own profile name (`toolchain`, `spiderfoot`, `bentopdf`, `opensearch`), so you can start any subset directly — e.g. `--profile toolchain --profile bentopdf --profile opensearch` starts three of the four sidecars and skips SpiderFoot — without giving up the single-flag `--profile sidecars` shortcut for "start everything." If a tool or service is already installed on the machine running Odysseus Red, you can skip its container and use the local install instead, per tool or per service:
+By default, `docker-compose.security.yml`'s `toolchain`, `spiderfoot`, `bentopdf`, and `opensearch` services are gated behind the shared `sidecars` Compose profile and started with `--profile sidecars`. Each service also carries its own profile name (`toolchain`, `spiderfoot`, `bentopdf`, `opensearch`), so you can start any subset directly — e.g. `--profile toolchain --profile bentopdf --profile opensearch` starts three of the four sidecars and skips SpiderFoot — without giving up the single-flag `--profile sidecars` shortcut for "start everything." If a tool or service is already installed on the machine running Chiron, you can skip its container and use the local install instead, per tool or per service:
 
 - **Toolchain binaries** (`nmap`, `masscan`, `theHarvester`, `sherlock`, `dig`, `whois`, `amass`, `nikto`, `gobuster`, `sqlmap`, `nuclei`, `ffuf`, `hashid`, `john`, `yara`, `searchsploit`): set `TOOLCHAIN_EXEC_MODE=local` in `.env` to run every one of them directly on the app's own host instead of the sidecar, or set a per-binary override like `TOOLCHAIN_EXEC_MODE_NMAP=local` to switch just that one — see the commented block in `.env.example`. This requires the binary to actually be on `PATH` for the odysseus process; missing binaries return a clear `[error:not_installed]` rather than failing silently. Local mode runs the tool **unsandboxed**, without the toolchain container's `cap_drop: [ALL]` / `no-new-privileges` isolation — only enable it for tools you trust to run with the app's own privileges. Omit `toolchain` from `--profile sidecars` (or use the per-service profile flags above) once nothing routes through it.
 - **Services** (SpiderFoot, OpenSearch, BentoPDF, Ollama): each is already reached through a plain URL env var (`SPIDERFOOT_URL`, `OPENSEARCH_URL`, `BENTOPDF_URL`, `OLLAMA_BASE_URL`) with no hardcoded container dependency. Point the var at an already-running local/VM-native instance (e.g. `SPIDERFOOT_URL=http://localhost:5001`) and skip starting that container via its profile.
@@ -460,7 +460,7 @@ By default, `docker-compose.security.yml`'s `toolchain`, `spiderfoot`, `bentopdf
 ## Repository Layout
 
 ```
-odysseus-red/
+chiron/
 ├── mcp_servers/
 │   ├── common.py                # Shared: exec_in_toolchain, mcp_error, validators
 │   ├── recon_server.py          # nmap, masscan

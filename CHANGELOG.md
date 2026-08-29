@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to **Odysseus Red** (this fork) are documented here. Changes to the upstream Odysseus platform appear in the [upstream repository](https://github.com/pewdiepie-archdaemon/odysseus).
+All notable changes to **Chiron** (this fork, formerly named Odysseus Red) are documented here. Changes to the upstream Odysseus platform appear in the [upstream repository](https://github.com/pewdiepie-archdaemon/odysseus).
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
@@ -11,6 +11,25 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 ## [Unreleased]
 
 ### Changed
+- Renamed the fork from "Odysseus Red" to **Chiron** (Phase 3). New wordmark
+  (`docs/chiron-wordmark.png`, self-hosted Chakra Petch, replaces the deleted
+  `docs/odysseus-wordmark.png`) and a new single-path shield icon (favicon,
+  login logo, welcome screen) replacing the old three-path boat icon.
+  "Odysseus" → "Chiron" swept through the live UI (`static/index.html`,
+  `static/login.html`, `theme.js`, `manifest.json` — page titles, sidebar
+  header, welcome screen, chat placeholder, settings/help text) and through
+  the fork's own docs and config (`README.md`, `CONTRIBUTING.md`,
+  `SECURITY.md`, `ACKNOWLEDGMENTS.md`, `.env.example`, `.github/CODEOWNERS`,
+  CodeQL config, release-drafter, `ci-security.yml`, `release.yml`,
+  `setup.py`, `mcp_servers/common.py`, `exploit_server.py`,
+  `spiderfoot_server.py`, `scripts/mcp_health_check.py`). The fork-version
+  constant `ODYSSEUS_RED_VERSION` is now `CHIRON_VERSION`
+  (`src/constants.py`). Left deliberately untouched: the upstream "Odysseus"
+  platform itself (its own code, container/service names like
+  `odysseus-toolchain`, the `odysseus-*` env var prefixes, upstream-owned
+  files per [ADR 005](docs/adr/005-upstream-sync-strategy.md)) and every
+  historical ADR / dated changelog entry, which stay accurate to what was
+  true when written. See [ADR 008](docs/adr/008-project-rebrand.md).
 - Applied the Phase 2.2 design system's shape language app-wide (Phase 2.3):
   swept nearly all 1,098 hardcoded `border-radius` declarations in
   `style.css` onto the `--radius-sm/md/lg` scale (2/4/6px, capped well

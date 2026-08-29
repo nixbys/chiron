@@ -1,7 +1,7 @@
 """
 mcp_servers/common.py
 
-Shared utilities for odysseus-red MCP servers:
+Shared utilities for Chiron MCP servers:
   exec_in_toolchain() — run a command via the Kali sidecar exec API, or
                         locally on this host if TOOLCHAIN_EXEC_MODE(_<BIN>)
                         selects "local"

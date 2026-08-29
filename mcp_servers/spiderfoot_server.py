@@ -57,7 +57,7 @@ TOOLS = [
                 "scan_name": {
                     "type": "string",
                     "description": "Human-readable label for this scan",
-                    "default": "odysseus-red scan",
+                    "default": "chiron scan",
                 },
                 "usecase": {
                     "type": "string",
@@ -338,7 +338,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "sf_scan_start":
         result = _start_scan(
             target=arguments["target"],
-            scan_name=arguments.get("scan_name", "odysseus-red scan"),
+            scan_name=arguments.get("scan_name", "chiron scan"),
             usecase=arguments.get("usecase", "passive"),
         )
         if "error" in result:

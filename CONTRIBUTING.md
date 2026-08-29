@@ -133,17 +133,17 @@ For security reports, follow [SECURITY.md](SECURITY.md).
 
 ---
 
-## Contributing to Odysseus Red (Fork-specific)
+## Contributing to Chiron (Fork-specific)
 
-Odysseus Red is a security-focused fork of [`pewdiepie-archdaemon/odysseus`](https://github.com/pewdiepie-archdaemon/odysseus). The fork adds MCP servers, a Kali toolchain sidecar, incident response skills, and threat-intelligence integrations.
+Chiron is a security-focused fork of [`pewdiepie-archdaemon/odysseus`](https://github.com/pewdiepie-archdaemon/odysseus). The fork adds MCP servers, a Kali toolchain sidecar, incident response skills, and threat-intelligence integrations.
 
 If you are contributing to the base Odysseus platform (chat, agents, research, documents), follow the upstream guidelines above and consider whether your contribution belongs upstream instead.
 
 ### Setup for Fork Development
 
 ```bash
-git clone https://github.com/nixbys/odysseus-red.git
-cd odysseus-red
+git clone https://github.com/nixbys/chiron.git
+cd chiron
 cp .env.example .env
 # Fill in EXEC_API_TOKEN and any API keys you need for testing
 podman-compose -f docker-compose.yml -f docker-compose.security.yml up -d --build
@@ -183,7 +183,7 @@ PR descriptions must:
 
 ### Cutting a Release
 
-Releases follow [Semantic Versioning](https://semver.org/). The fork version (`ODYSSEUS_RED_VERSION`) tracks the security overlay independently of the upstream Odysseus `APP_VERSION`.
+Releases follow [Semantic Versioning](https://semver.org/). The fork version (`CHIRON_VERSION`) tracks the security overlay independently of the upstream Odysseus `APP_VERSION`.
 
 **When to bump:**
 - `PATCH` (0.3.x) — bug fixes, CI, docs, dependency updates, SDLC improvements
@@ -196,7 +196,7 @@ Releases follow [Semantic Versioning](https://semver.org/). The fork version (`O
 
    ```bash
    # 1. Bump version in src/constants.py
-   sed -i 's/ODYSSEUS_RED_VERSION = ".*"/ODYSSEUS_RED_VERSION = "X.Y.Z"/' src/constants.py
+   sed -i 's/CHIRON_VERSION = ".*"/CHIRON_VERSION = "X.Y.Z"/' src/constants.py
 
    # 2. Update CHANGELOG.md — move [Unreleased] → [X.Y.Z] with today's date
    #    Add a new empty [Unreleased] section at the top.
@@ -215,7 +215,7 @@ Releases follow [Semantic Versioning](https://semver.org/). The fork version (`O
 
    ```bash
    git checkout main && git pull origin main
-   git tag -a vX.Y.Z -m "Odysseus Red vX.Y.Z"
+   git tag -a vX.Y.Z -m "Chiron vX.Y.Z"
    git push origin vX.Y.Z
    ```
 
