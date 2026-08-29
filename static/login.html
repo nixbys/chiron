@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-visual">
 <title>Odysseus — Login</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 4L16 22L6 22Z' fill='%23e06c75'/%3E%3Cpath d='M16 8L16 22L24 22Z' fill='%23e06c75' opacity='0.6'/%3E%3Cpath d='M4 24Q10 20 16 24Q22 28 28 24' stroke='%23e06c75' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 4L16 22L6 22Z' fill='%23e5484d'/%3E%3Cpath d='M16 8L16 22L24 22Z' fill='%23e5484d' opacity='0.6'/%3E%3Cpath d='M4 24Q10 20 16 24Q22 28 28 24' stroke='%23e5484d' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="manifest" href="static/manifest.json">
 <link rel="apple-touch-icon" href="static/icons/icon-192.png">
 <script nonce="{{CSP_NONCE}}">
@@ -106,13 +106,18 @@
 <style>
   @font-face { font-family: 'Fira Code'; font-weight: 400; font-style: normal; font-display: swap; src: url('static/fonts/FiraCode-Regular.woff2') format('woff2'); }
   @font-face { font-family: 'Fira Code'; font-weight: 600; font-style: normal; font-display: swap; src: url('static/fonts/FiraCode-SemiBold.woff2') format('woff2'); }
+  /* IBM Plex Mono — base latin range only (this page's own text is plain
+     English); base latin covers plain-Latin punctuation/quotes/dashes too.
+     Mirrors static/style.css's own self-hosted @font-face split. */
+  @font-face { font-family: 'IBM Plex Mono'; font-weight: 400; font-style: normal; font-display: swap; src: url('static/fonts/IBMPlexMono-Regular.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+  @font-face { font-family: 'IBM Plex Mono'; font-weight: 600; font-style: normal; font-display: swap; src: url('static/fonts/IBMPlexMono-SemiBold.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
   /* Mirror the main app's :root defaults (static/style.css ~line 18) so an
      uncustomized theme — or a fresh browser with no `odysseus-theme` in
      localStorage — renders the login page in the same palette as the rest
      of the app instead of a different greys+offwhite scheme. */
   :root {
-    --bg: #282c34; --fg: #9cdef2; --panel: #111; --border: #355a66;
-    --red: #e06c75; --green: #50fa7b;
+    --bg: #0a0d12; --fg: #e4e9f0; --panel: #12161d; --border: #232a35;
+    --red: #e5484d; --green: #22c55e;
     --bg-effect-intensity: 1;
   }
   /* Background patterns — mirrors static/style.css "Background Patterns"
@@ -134,7 +139,7 @@
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: 'Fira Code', monospace;
+    font-family: 'IBM Plex Mono', 'Fira Code', monospace;
     background: var(--bg); color: var(--fg);
     display: flex; justify-content: center; align-items: flex-start;
     min-height: 100vh; min-height: 100dvh;
@@ -153,7 +158,7 @@
     text-align: center; margin-bottom: 1.5rem;
   }
   .logo span {
-    font-family: 'Fira Code', monospace;
+    font-family: 'IBM Plex Mono', 'Fira Code', monospace;
     font-size: 2rem; font-weight: 600;
     letter-spacing: 0.04em;
     /* Same gradient as the main app's welcome-screen "Odysseus" title
@@ -169,7 +174,7 @@
   input:not(.remember-check) {
     width: 100%; padding: 0.6rem 0.8rem; margin-bottom: 1rem;
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    color: var(--fg); font-size: 0.95rem; font-family: 'Fira Code', monospace;
+    color: var(--fg); font-size: 0.95rem; font-family: 'IBM Plex Mono', 'Fira Code', monospace;
   }
   input:focus { outline: none; border-color: var(--red); }
   /* On touch devices keep inputs at >=16px so iOS Safari doesn't zoom the whole
@@ -192,9 +197,9 @@
     padding: calc(0.7rem + 1px) 0.7rem calc(0.7rem - 1px);
     border: none; border-radius: 6px;
     /* Darken the brand red slightly so #fff label text clears the WCAG AA
-       4.5:1 contrast threshold (plain --red #e06c75 only reaches ~3.2:1). */
+       4.5:1 contrast threshold (plain --red #e5484d only reaches ~3.9:1). */
     background: color-mix(in srgb, var(--red) 78%, #000); color: #fff; font-size: 1rem; cursor: pointer;
-    font-weight: 600; font-family: 'Fira Code', monospace;
+    font-weight: 600; font-family: 'IBM Plex Mono', 'Fira Code', monospace;
   }
   button:hover { background: color-mix(in srgb, var(--red) 66%, black); }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -251,7 +256,7 @@
   .version-label {
     position: fixed; bottom: 12px; right: 16px;
     font-size: 0.7rem; opacity: 0.25;
-    font-family: 'Fira Code', monospace;
+    font-family: 'IBM Plex Mono', 'Fira Code', monospace;
     pointer-events: none; user-select: none;
   }
   /* Whirlpool-style spinner shown in the submit button while login /

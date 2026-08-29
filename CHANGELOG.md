@@ -10,6 +10,41 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 
 ## [Unreleased]
 
+### Added
+- New dark-first design system (Phase 2.2 of the rebrand/redesign):
+  self-hosted Chakra Petch (display), IBM Plex Sans (body/interface), and
+  IBM Plex Mono (code/data — replaces Fira Code as the default) via real
+  `@font-face` rules (latin + latin-ext subsets); `--bg`/`--panel`/
+  `--border`/`--fg` retinted to a near-black palette; `--red` retinted to
+  a crimson offense accent; `--accent` (blue, defense) and `--fg-muted`
+  *defined* in `:root` for the first time (previously silent phantom
+  tokens — see Fixed below); new `--radius-sm/md/lg` shape tokens and a
+  5-step `--sev-critical/high/medium/low/info` severity scale; new
+  `.sec-badge`/`.sec-stat-tile`/`.sec-timeline` component classes, now
+  used by the security dashboard instead of ad-hoc inline styles. Every
+  first-paint surface (favicon, `<meta name="theme-color">`, the boot
+  loader, `manifest.json`, the standalone login page) updated to match.
+  All contrast pairs verified WCAG AA.
+
+### Fixed
+- `--accent` was referenced ~850 times across `style.css`
+  (`var(--accent, var(--red))` fallback chains) but never once defined —
+  every call site silently fell through to `--red`. `--fg-muted` was
+  worse: 93 of its 101 call sites had no fallback at all, silently
+  inheriting/unstyled. Both now defined for real.
+- `static/fonts/Inter-{Regular,Medium,SemiBold}.woff2` sat on disk and 5
+  CSS rules referenced `font-family: 'Inter', ...`, but no `@font-face`
+  for Inter existed anywhere — it never actually loaded. Removed the
+  dead files; those call sites now use the new `--font-body` token.
+- `static/js/theme.js`'s `THEMES.dark`/`FONT_MAP.mono` set `--bg`/`--fg`/
+  `--panel`/`--border`/`--red`/`--font-family` as inline styles on
+  `:root`, which beat the stylesheet's own `:root` block entirely —
+  updated to match, and documented that the two must be kept in sync by
+  hand (no shared source of truth between them today).
+- `static/js/securityDashboard.js` referenced a nonexistent
+  `--border-color` token, always silently falling back to a hardcoded
+  `#3336`.
+
 ---
 
 ## [0.6.0] — 2026-08-28

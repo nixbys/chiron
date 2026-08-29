@@ -2,11 +2,12 @@
  * Security Dashboard Module — minimal v1 page for the security MCP
  * servers' aggregated state (routes/security_dashboard_routes.py).
  *
- * Deliberately minimal: no dashboard-grid/stat-card/severity-badge CSS
- * primitives exist in style.css yet, so this renders with inline styles
- * on top of the shared .modal/.list-item classes rather than inventing a
- * one-off design system for a page a later pass rebuilds anyway (Phase 2
- * turns this into the full Security Hub).
+ * Uses the shared `.sec-*` component primitives (stat tiles, severity
+ * badges, timeline rows — see style.css's "Security UI primitives"
+ * section, Phase 2.2) rather than one-off inline styles. Still a minimal
+ * page — 2.4 is where this becomes the full Security Hub with
+ * engagement/watchlist/rule-management sub-panels — but it's built on the
+ * real primitives from the start now that they exist, not a retrofit.
  */
 
 const API_BASE = window.location.origin;
@@ -47,25 +48,59 @@ function _escape(s) {
 
 function _sectionCard(title, bodyHtml) {
   return `
-    <div style="border:1px solid var(--border-color, #3336);border-radius:8px;padding:12px 14px;margin-bottom:12px;">
-      <div style="font-weight:600;font-size:13px;margin-bottom:8px;">${_escape(title)}</div>
+    <div style="border:1px solid var(--border);border-radius:var(--radius-md);padding:12px 14px;margin-bottom:12px;">
+      <div style="font-family:var(--font-family,'IBM Plex Mono',monospace);font-size:10.5px;text-transform:uppercase;letter-spacing:0.06em;color:var(--fg-muted);margin-bottom:10px;">${_escape(title)}</div>
       ${bodyHtml}
     </div>`;
 }
 
 function _errorLine(msg) {
-  return `<div style="opacity:0.7;font-size:12px;">Unavailable: ${_escape(msg)}</div>`;
+  return `<div style="color:var(--fg-muted);font-size:12px;">Unavailable: ${_escape(msg)}</div>`;
+}
+
+// Findings' severity/status keys aren't guaranteed to match the 5-step
+// sec-badge scale (OpenSearch just returns whatever string was indexed) --
+// map known keys to a badge class and fall back to a plain chip for
+// anything unrecognized rather than mislabeling it.
+const _SEV_BADGE_CLASS = {
+  critical: 'sec-badge-critical', high: 'sec-badge-high', medium: 'sec-badge-medium',
+  low: 'sec-badge-low', info: 'sec-badge-info',
+};
+
+function _sevBadge(key, count) {
+  const cls = _SEV_BADGE_CLASS[String(key).toLowerCase()];
+  if (!cls) return `<span class="sec-badge" style="border-color:var(--border);color:var(--fg-muted);">${_escape(key)} ${count}</span>`;
+  return `<span class="sec-badge ${cls}">${_escape(key)} ${count}</span>`;
+}
+
+function _statTile(label, value, deltaText, valueClass, deltaClass) {
+  return `
+    <div class="sec-stat-tile">
+      <div class="sec-stat-tile-label">${_escape(label)}</div>
+      <div class="sec-stat-tile-value${valueClass ? ' ' + valueClass : ''}">${_escape(value)}</div>
+      ${deltaText ? `<div class="sec-stat-tile-delta${deltaClass ? ' ' + deltaClass : ''}">${_escape(deltaText)}</div>` : ''}
+    </div>`;
+}
+
+function _renderStatRow(findings, watchlist, engagements) {
+  const critical = (findings.by_severity || []).find(b => String(b.key).toLowerCase() === 'critical');
+  return `
+    <div class="sec-stat-grid" style="margin-bottom:16px;">
+      ${_statTile('Open findings', findings.total ?? '—')}
+      ${_statTile('Critical', critical ? critical.doc_count : 0, null, 'sec-crimson')}
+      ${_statTile('Watchlist active', watchlist.count ?? '—', null, 'sec-blue')}
+      ${_statTile('Engagements', (engagements.list || []).length)}
+    </div>`;
 }
 
 function _renderFindings(section) {
   if (section.error) return _sectionCard('Findings', _errorLine(section.error));
-  const sevs = (section.by_severity || []).map(b => `${_escape(b.key)}: ${b.doc_count}`).join('  &nbsp; ') || '(none)';
+  const sevs = (section.by_severity || []).map(b => _sevBadge(b.key, b.doc_count)).join(' ') || '<span style="color:var(--fg-muted);font-size:12px;">none</span>';
   const statuses = (section.by_status || []).map(b => `${_escape(b.key)}: ${b.doc_count}`).join('  &nbsp; ') || '(none)';
   const body = `
     <div style="font-size:12px;line-height:1.7;">
-      <div>Total: <strong>${section.total ?? 0}</strong></div>
-      <div>By severity: ${sevs}</div>
-      <div>By status: ${statuses}</div>
+      <div style="margin-bottom:6px;">${sevs}</div>
+      <div style="color:var(--fg-muted);">By status: ${statuses}</div>
     </div>`;
   return _sectionCard('Findings', body);
 }
@@ -73,30 +108,39 @@ function _renderFindings(section) {
 function _renderWatchlist(section) {
   if (section.error) return _sectionCard('Watchlist', _errorLine(section.error));
   const rows = (section.entries || []).map(e =>
-    `<div style="font-size:12px;padding:2px 0;">${_escape(e.kind)} &nbsp; <code>${_escape(e.indicator)}</code>${e.engagement_id ? ` &nbsp; <span style="opacity:0.6;">(${_escape(e.engagement_id)})</span>` : ''}</div>`
-  ).join('') || '<div style="font-size:12px;opacity:0.7;">No active entries.</div>';
+    `<div style="font-size:12px;padding:2px 0;">${_escape(e.kind)} &nbsp; <code style="font-family:var(--font-family,'IBM Plex Mono',monospace);">${_escape(e.indicator)}</code>${e.engagement_id ? ` &nbsp; <span style="color:var(--fg-muted);">(${_escape(e.engagement_id)})</span>` : ''}</div>`
+  ).join('') || '<div style="font-size:12px;color:var(--fg-muted);">No active entries.</div>';
   return _sectionCard(`Watchlist (${section.count ?? 0} active)`, rows);
 }
 
 function _renderScanDrift(section) {
   if (section.error) return _sectionCard('Recent Scan Drift', _errorLine(section.error));
   const diffs = section.diffs || [];
+  if (!diffs.length) return _sectionCard('Recent Scan Drift', '<div style="font-size:12px;color:var(--fg-muted);">No drift recorded yet.</div>');
   const rows = diffs.map(d => {
     const when = d.ts ? new Date(d.ts * 1000).toLocaleString() : '';
-    return `<div style="font-size:12px;padding:2px 0;">
-      <span style="opacity:0.6;">${_escape(when)}</span> &nbsp;
-      [${_escape(d.check_type)}] ${_escape(d.target)} &nbsp;
-      +${(d.added || []).length} -${(d.removed || []).length}
-    </div>`;
-  }).join('') || '<div style="font-size:12px;opacity:0.7;">No drift recorded yet.</div>';
-  return _sectionCard('Recent Scan Drift', rows);
+    const addedN = (d.added || []).length, removedN = (d.removed || []).length;
+    // Dot color carries what kind of change this was: something newly
+    // present (blue, detection-relevant) vs. something that disappeared
+    // (crimson) -- if both, added takes priority since a new item is
+    // usually the more actionable half.
+    const dotClass = addedN > 0 ? 'sec-blue' : (removedN > 0 ? 'sec-crimson' : 'sec-muted');
+    return `
+      <div class="sec-tl-row">
+        <span class="sec-tl-time">${_escape(when)}</span>
+        <span class="sec-tl-dot ${dotClass}"></span>
+        <span class="sec-tl-text">[${_escape(d.check_type)}] <span class="sec-tl-target">${_escape(d.target)}</span> &nbsp; +${addedN} -${removedN}</span>
+        <span class="sec-tl-tag">${_escape(d.task_id || '')}</span>
+      </div>`;
+  }).join('');
+  return _sectionCard('Recent Scan Drift', `<div class="sec-timeline">${rows}</div>`);
 }
 
 function _renderEngagements(section) {
   if (section.error) return _sectionCard('Engagements', _errorLine(section.error));
   const rows = (section.list || []).map(e =>
-    `<div style="font-size:12px;padding:2px 0;">${_escape(e.name)} &nbsp; <span style="opacity:0.6;">${_escape(e.client || '')} &middot; ${_escape(e.status)}</span></div>`
-  ).join('') || '<div style="font-size:12px;opacity:0.7;">No engagements yet.</div>';
+    `<div style="font-size:12px;padding:2px 0;">${_escape(e.name)} &nbsp; <span style="color:var(--fg-muted);">${_escape(e.client || '')} &middot; ${_escape(e.status)}</span></div>`
+  ).join('') || '<div style="font-size:12px;color:var(--fg-muted);">No engagements yet.</div>';
   return _sectionCard('Engagements', rows);
 }
 
@@ -114,11 +158,15 @@ function _renderHostTelemetry(section) {
 function _render(data) {
   const el = document.getElementById('secdash-body');
   if (!el) return;
+  const findings = data.findings || {};
+  const watchlist = data.watchlist || {};
+  const engagements = data.engagements || {};
   el.innerHTML = [
-    _renderFindings(data.findings || {}),
-    _renderWatchlist(data.watchlist || {}),
+    !findings.error && !watchlist.error && !engagements.error ? _renderStatRow(findings, watchlist, engagements) : '',
+    _renderFindings(findings),
+    _renderWatchlist(watchlist),
     _renderScanDrift(data.scan_drift || {}),
-    _renderEngagements(data.engagements || {}),
+    _renderEngagements(engagements),
     _renderHostTelemetry(data.host_telemetry || {}),
   ].join('');
 }
