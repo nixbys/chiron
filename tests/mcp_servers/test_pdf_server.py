@@ -1,10 +1,13 @@
 """Unit tests for pdf_server.py — uses real pypdf with in-memory PDFs, no disk I/O."""
 
 import io
+import json
+import sqlite3
 import sys
 import tempfile
+import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -255,3 +258,149 @@ async def test_call_tool_pdf_metadata_with_author(tmp_data):
         writer.write(f)
     results = await pdf.call_tool("pdf_metadata", {"file_path": "auth.pdf"})
     assert "Alice Red" in results[0].text
+
+
+# ---------------------------------------------------------------------------
+# generate_engagement_report (Phase 1 checkpoint F)
+# ---------------------------------------------------------------------------
+
+def _seed_engagement_db(db_path: Path, engagement_id: str = "eng-1") -> None:
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript("""
+        CREATE TABLE engagements (
+            id TEXT PRIMARY KEY, name TEXT, description TEXT, client TEXT,
+            scope TEXT, out_of_scope TEXT, status TEXT, start_date REAL, end_date REAL,
+            tags TEXT, created_at REAL, updated_at REAL
+        );
+        CREATE TABLE engagement_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, engagement_id TEXT, event_type TEXT,
+            summary TEXT, detail TEXT, ts REAL
+        );
+    """)
+    now = time.time()
+    conn.execute(
+        "INSERT INTO engagements VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (engagement_id, "Acme Corp Pentest", "Annual external pentest", "Acme Corp",
+         json.dumps(["acme.com", "10.0.0.0/24"]), json.dumps(["10.0.1.0/24"]), "active",
+         now, None, json.dumps(["pentest", "external"]), now, now),
+    )
+    conn.execute(
+        "INSERT INTO engagement_events (engagement_id, event_type, summary, detail, ts) VALUES (?,?,?,?,?)",
+        (engagement_id, "scan_completed", "Initial recon complete", "", now),
+    )
+    conn.commit()
+    conn.close()
+
+
+@pytest.fixture()
+def engagement_db(tmp_data):
+    """Seeds a fake engagements.db and points pdf._ENGAGEMENTS_DB_PATH at it.
+    _ENGAGEMENTS_DB_PATH is computed once from _DATA_DIR at import time, so
+    patching _DATA_DIR alone (the tmp_data fixture) doesn't move it -- it
+    needs its own patch."""
+    db_path = tmp_data / "engagements.db"
+    _seed_engagement_db(db_path)
+    with patch.object(pdf, "_ENGAGEMENTS_DB_PATH", db_path):
+        yield db_path
+
+
+def test_get_engagement_for_report_missing_db_returns_none(tmp_data):
+    with patch.object(pdf, "_ENGAGEMENTS_DB_PATH", tmp_data / "does_not_exist.db"):
+        assert pdf._get_engagement_for_report("eng-1") is None
+
+
+def test_get_engagement_for_report_missing_id_returns_none(engagement_db):
+    assert pdf._get_engagement_for_report("no-such-id") is None
+
+
+def test_get_engagement_for_report_found(engagement_db):
+    data = pdf._get_engagement_for_report("eng-1")
+    assert data is not None
+    assert data["engagement"]["name"] == "Acme Corp Pentest"
+    assert len(data["events"]) == 1
+    assert data["events"][0]["event_type"] == "scan_completed"
+
+
+def test_fetch_engagement_findings_unreachable_returns_none():
+    with patch.object(pdf.requests, "post", side_effect=ConnectionError("refused")):
+        assert pdf._fetch_engagement_findings("eng-1", 50) is None
+
+
+def test_fetch_engagement_findings_success():
+    search_resp = MagicMock()
+    search_resp.json.return_value = {
+        "hits": {"total": {"value": 1}, "hits": [
+            {"_source": {"title": "Open port 22", "severity": "medium", "status": "open", "tool": "scheduled_recon"}},
+        ]},
+    }
+    agg_resp = MagicMock()
+    agg_resp.json.return_value = {"aggregations": {
+        "by_severity": {"buckets": [{"key": "medium", "doc_count": 1}]},
+        "by_status": {"buckets": [{"key": "open", "doc_count": 1}]},
+    }}
+    with patch.object(pdf.requests, "post", side_effect=[search_resp, agg_resp]):
+        result = pdf._fetch_engagement_findings("eng-1", 50)
+    assert result["total"] == 1
+    assert result["hits"][0]["_source"]["title"] == "Open port 22"
+    assert result["by_severity"] == [{"key": "medium", "doc_count": 1}]
+
+
+@pytest.mark.asyncio
+async def test_generate_engagement_report_not_found(engagement_db):
+    results = await pdf.call_tool("generate_engagement_report", {"engagement_id": "no-such-id"})
+    assert "[error]" in results[0].text
+    assert "no-such-id" in results[0].text
+
+
+@pytest.mark.asyncio
+async def test_generate_engagement_report_end_to_end(engagement_db, tmp_data):
+    with patch.object(pdf, "_fetch_engagement_findings", return_value=None):
+        results = await pdf.call_tool("generate_engagement_report", {
+            "engagement_id": "eng-1",
+            "compliance_summary": "AC, SC families flagged.",
+        })
+    text = results[0].text
+    assert "Report saved" in text
+    out_path = tmp_data / "reports" / "engagement_eng-1.pdf"
+    assert out_path.exists()
+    reader = PdfReader(str(out_path))
+    body = "\n".join(p.extract_text() for p in reader.pages)
+    assert "Acme Corp Pentest" in body
+    assert "acme.com" in body
+    assert "OpenSearch unreachable" in body
+    assert "AC, SC families flagged." in body
+
+
+@pytest.mark.asyncio
+async def test_generate_engagement_report_includes_findings_section(engagement_db, tmp_data):
+    fake_findings = {
+        "total": 1,
+        "hits": [{"_source": {"title": "Open port 22", "severity": "medium", "status": "open", "tool": "scheduled_recon"}}],
+        "by_severity": [{"key": "medium", "doc_count": 1}],
+        "by_status": [{"key": "open", "doc_count": 1}],
+    }
+    with patch.object(pdf, "_fetch_engagement_findings", return_value=fake_findings):
+        results = await pdf.call_tool("generate_engagement_report", {"engagement_id": "eng-1"})
+    out_path = tmp_data / "reports" / "engagement_eng-1.pdf"
+    reader = PdfReader(str(out_path))
+    body = "\n".join(p.extract_text() for p in reader.pages)
+    assert "Open port 22" in body
+    assert "Total findings: 1" in body
+
+
+@pytest.mark.asyncio
+async def test_generate_report_bullet_list_does_not_crash(tmp_data):
+    """Regression test: '•' isn't in Helvetica's latin-1 charset and used to
+    raise FPDFUnicodeEncodingException on any bulleted generate_report call."""
+    results = await pdf.call_tool("generate_report", {
+        "title": "Bullet Test",
+        "content": "# Heading\n- first item\n- second item\n",
+        "output_file": "bullets.pdf",
+    })
+    assert "[error]" not in results[0].text
+    out_path = tmp_data / "bullets.pdf"
+    assert out_path.exists()
+    reader = PdfReader(str(out_path))
+    body = reader.pages[0].extract_text()
+    assert "first item" in body
+    assert "second item" in body

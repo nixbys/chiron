@@ -23,9 +23,14 @@ via ODYSSEUS_DATA_DIR (default: ./data). Paths must stay within that directory.
 
 import asyncio
 import io
+import json
 import os
+import sqlite3
 import sys
 from pathlib import Path
+
+import requests
+from requests.auth import HTTPBasicAuth
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -187,6 +192,36 @@ TOOLS = [
                 },
             },
             "required": ["title", "content"],
+        },
+    ),
+    Tool(
+        name="generate_engagement_report",
+        description=(
+            "Generate a one-call PDF summary report for an engagement: scope, a "
+            "findings summary (severity/status counts plus top findings), and the "
+            "engagement timeline, all in one PDF. Findings are pulled from OpenSearch "
+            "(odysseus-findings) if reachable -- the report still generates without "
+            "that section if it isn't. Pass compliance_summary (e.g. pre-built from "
+            "compliance_server's nist_map) to include it as its own section."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "engagement_id": {"type": "string", "description": "Engagement id from engagement_server's engagement_create"},
+                "output_file": {
+                    "type": "string",
+                    "description": "Output filename under the data directory (default: reports/engagement_<id>.pdf)",
+                    "default": "",
+                },
+                "author": {"type": "string", "default": "Odysseus"},
+                "compliance_summary": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Optional pre-built compliance mapping text to include as its own section",
+                },
+                "max_findings": {"type": "integer", "default": 50},
+            },
+            "required": ["engagement_id"],
         },
     ),
     Tool(
@@ -433,21 +468,21 @@ def _generate_report(title: str, content: str, output_file: str, author: str) ->
         if line.startswith("### "):
             pdf.set_font("Helvetica", "B", 11)
             pdf.set_text_color(60, 60, 60)
-            pdf.multi_cell(0, 6, line[4:])
+            pdf.multi_cell(0, 6, line[4:], new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.set_text_color(0, 0, 0)
             return
         if line.startswith("## "):
             pdf.set_font("Helvetica", "B", 13)
             pdf.set_text_color(30, 30, 30)
             pdf.set_fill_color(240, 240, 240)
-            pdf.multi_cell(0, 7, line[3:], fill=True)
+            pdf.multi_cell(0, 7, line[3:], fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.set_text_color(0, 0, 0)
             pdf.ln(1)
             return
         if line.startswith("# "):
             pdf.set_font("Helvetica", "B", 15)
             pdf.set_text_color(20, 20, 20)
-            pdf.multi_cell(0, 8, line[2:])
+            pdf.multi_cell(0, 8, line[2:], new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.set_draw_color(200, 200, 200)
             pdf.line(pdf.get_x(), pdf.get_y(), 200, pdf.get_y())
             pdf.set_text_color(0, 0, 0)
@@ -467,13 +502,16 @@ def _generate_report(title: str, content: str, output_file: str, author: str) ->
             pdf.set_x(14)
             text = line[2:]
             text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
-            pdf.multi_cell(0, 5, f"•  {text}")
+            # "-" not "•" -- Helvetica is a core PDF font restricted to
+            # latin-1, which doesn't cover U+2022 BULLET and raises
+            # FPDFUnicodeEncodingException on any bulleted content.
+            pdf.multi_cell(0, 5, f"-  {text}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             return
 
         # Plain paragraph — strip inline bold markers
         pdf.set_font("Helvetica", "", 10)
         text = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
-        pdf.multi_cell(0, 5, text)
+        pdf.multi_cell(0, 5, text, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     for line in content.splitlines():
         _render_line(line)
@@ -485,6 +523,156 @@ def _generate_report(title: str, content: str, output_file: str, author: str) ->
         f"Full path: {out_path}\n"
         f"Open in browser: {_BENTOPDF_URL} (use 'Merge/View' to open the file)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Engagement report -- minimal SQLite/OpenSearch read helpers duplicated
+# from engagement_server.py/findings_server.py rather than imported. MCP
+# servers in this fork are standalone subprocesses and never import each
+# other -- same convention sigma_server.py uses for findings_server.py's
+# OpenSearch connection.
+# ---------------------------------------------------------------------------
+
+_ENGAGEMENTS_DB_PATH = _DATA_DIR / "engagements.db"
+_OS_URL = os.environ.get("OPENSEARCH_URL", "http://odysseus-opensearch:9200").rstrip("/")
+_OS_USER = os.environ.get("OPENSEARCH_USER", "admin")
+_OS_PASS = os.environ.get("OPENSEARCH_PASSWORD", "admin")
+_OS_AUTH = HTTPBasicAuth(_OS_USER, _OS_PASS)
+_FINDINGS_INDEX = "odysseus-findings"
+
+
+def _get_engagement_for_report(engagement_id: str) -> dict | None:
+    """Read-only engagement + recent-timeline lookup. Returns None if the
+    engagements DB or the engagement itself doesn't exist yet."""
+    if not _ENGAGEMENTS_DB_PATH.exists():
+        return None
+    conn = sqlite3.connect(str(_ENGAGEMENTS_DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT * FROM engagements WHERE id=?", (engagement_id,)).fetchone()
+        if not row:
+            return None
+        events = conn.execute(
+            "SELECT event_type, summary, ts FROM engagement_events WHERE engagement_id=? ORDER BY ts DESC LIMIT 30",
+            (engagement_id,),
+        ).fetchall()
+        return {"engagement": dict(row), "events": [dict(e) for e in events]}
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+
+
+def _fetch_engagement_findings(engagement_id: str, limit: int) -> dict | None:
+    """Best-effort OpenSearch read -- returns None (not an exception) on
+    any failure so the report still generates, just without this section."""
+    try:
+        query = {"term": {"engagement": engagement_id}}
+        search_body = {
+            "query": query,
+            "sort": [{"severity": {"order": "asc"}}, {"created_at": {"order": "desc"}}],
+            "size": limit,
+            "_source": ["title", "severity", "status", "cve_id", "tool"],
+        }
+        resp = requests.post(
+            f"{_OS_URL}/{_FINDINGS_INDEX}/_search", auth=_OS_AUTH, json=search_body, timeout=10,
+            verify=False,  # nosec B501 -- self-signed cert common in dev; same accepted risk as findings_server.py's _req()
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        hits = data.get("hits", {}).get("hits", [])
+        total = data.get("hits", {}).get("total", {})
+        total_count = total.get("value", total) if isinstance(total, dict) else total
+
+        agg_body = {"size": 0, "query": query, "aggs": {
+            "by_severity": {"terms": {"field": "severity", "size": 5}},
+            "by_status": {"terms": {"field": "status", "size": 5}},
+        }}
+        agg_resp = requests.post(
+            f"{_OS_URL}/{_FINDINGS_INDEX}/_search", auth=_OS_AUTH, json=agg_body, timeout=10,
+            verify=False,  # nosec B501 -- see above
+        )
+        agg_resp.raise_for_status()
+        aggs = agg_resp.json().get("aggregations", {})
+        return {
+            "total": total_count,
+            "hits": hits,
+            "by_severity": aggs.get("by_severity", {}).get("buckets", []),
+            "by_status": aggs.get("by_status", {}).get("buckets", []),
+        }
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _build_engagement_report_markdown(data: dict, findings: dict | None, compliance_summary: str) -> str:
+    """Build the report body as the same markdown vocabulary generate_report
+    already renders (#/##, bullets, bold) -- generate_engagement_report
+    delegates to _generate_report below, reusing its _render_line renderer
+    rather than adding a second templating path."""
+    import time as _time
+
+    eng = data["engagement"]
+    events = data["events"]
+    scope = json.loads(eng.get("scope") or "[]")
+    out_of_scope = json.loads(eng.get("out_of_scope") or "[]")
+    tags = json.loads(eng.get("tags") or "[]")
+
+    lines = [
+        f"**Status:** {eng['status']}    **Client:** {eng.get('client') or '(none)'}",
+        "",
+        "## Description",
+        eng.get("description") or "(none)",
+        "",
+        "## Scope",
+        ("- " + "\n- ".join(scope)) if scope else "(none)",
+    ]
+    if out_of_scope:
+        lines += ["", "## Out of Scope", "- " + "\n- ".join(out_of_scope)]
+    if tags:
+        lines += ["", f"**Tags:** {', '.join(tags)}"]
+
+    lines += ["", "## Findings Summary"]
+    if findings is None:
+        lines.append("(Findings data unavailable -- OpenSearch unreachable)")
+    else:
+        sev_line = "  ".join(f"{b['key']}:{b['doc_count']}" for b in findings["by_severity"]) or "n/a"
+        status_line = "  ".join(f"{b['key']}:{b['doc_count']}" for b in findings["by_status"]) or "n/a"
+        lines.append(f"Total findings: {findings['total']}")
+        lines.append(f"By severity: {sev_line}")
+        lines.append(f"By status: {status_line}")
+        lines += ["", "## Findings"]
+        if findings["hits"]:
+            for h in findings["hits"]:
+                s = h.get("_source", {})
+                lines.append(f"- **[{s.get('severity', '?')}]** {s.get('title', '?')} (tool: {s.get('tool', '?')}, status: {s.get('status', '?')})")
+        else:
+            lines.append("(no findings recorded for this engagement)")
+
+    lines += ["", "## Timeline"]
+    if events:
+        for e in events:
+            stamp = _time.strftime("%Y-%m-%d %H:%M", _time.localtime(e["ts"]))
+            lines.append(f"- {stamp} [{e['event_type']}] {e['summary']}")
+    else:
+        lines.append("(no events recorded)")
+
+    if compliance_summary:
+        lines += ["", "## Compliance Summary", compliance_summary]
+
+    return "\n".join(lines)
+
+
+def _generate_engagement_report(
+    engagement_id: str, output_file: str, author: str, compliance_summary: str, max_findings: int,
+) -> str:
+    data = _get_engagement_for_report(engagement_id)
+    if data is None:
+        return f"[error] No engagement found with id {engagement_id!r}"
+    findings = _fetch_engagement_findings(engagement_id, max_findings)
+    content = _build_engagement_report_markdown(data, findings, compliance_summary)
+    out_file = output_file or f"reports/engagement_{engagement_id}.pdf"
+    title = f"Engagement Report: {data['engagement']['name']}"
+    return _generate_report(title=title, content=content, output_file=out_file, author=author)
 
 
 # ---------------------------------------------------------------------------
@@ -536,6 +724,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             arguments["file_path"],
             arguments["pages"],
             arguments["output_file"],
+        )
+
+    elif name == "generate_engagement_report":
+        text = _generate_engagement_report(
+            engagement_id=arguments["engagement_id"],
+            output_file=arguments.get("output_file") or "",
+            author=arguments.get("author", "Odysseus"),
+            compliance_summary=arguments.get("compliance_summary", ""),
+            max_findings=int(arguments.get("max_findings", 50)),
         )
 
     elif name == "pdf_bentopdf_url":

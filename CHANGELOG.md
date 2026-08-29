@@ -11,6 +11,18 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 ## [Unreleased]
 
 ### Added
+- `generate_engagement_report` tool in `mcp_servers/pdf_server.py` — a
+  one-call PDF summary for an engagement: scope/description/tags,
+  a findings summary (severity/status counts plus top findings,
+  best-effort from OpenSearch — the report still generates without that
+  section if it's unreachable), and the recent timeline, in one PDF.
+  Accepts an optional `compliance_summary` passthrough string (e.g.
+  pre-built from `compliance_server`'s `nist_map`) instead of importing
+  `compliance_server`. Duplicates minimal SQLite/OpenSearch read helpers
+  from `engagement_server.py`/`findings_server.py` rather than importing
+  them (same convention `sigma_server.py` already used), and reuses
+  `generate_report`'s existing markdown-rendering pipeline rather than
+  adding a second templating path.
 - `mcp_servers/compliance_server.py` (20th MCP server) — NIST SP 800-53
   Rev 5 control lookup and mapping, same fetch-and-cache shape as
   `attck_server.py`: downloads and caches NIST's free OSCAL JSON catalog
@@ -71,6 +83,22 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
   `watchlist_check` was filing findings but never logging the
   corresponding engagement timeline event; it now does, like every other
   drift-detecting action.
+
+### Fixed
+- `pdf_server.py`'s `generate_report` (and everything built on it, now
+  including `generate_engagement_report`) could crash on any bulleted
+  content: the bullet character was a Unicode "•", which isn't in
+  Helvetica's latin-1 charset (`FPDFUnicodeEncodingException`) — replaced
+  with a plain "-". Separately, none of `_render_line`'s `multi_cell`
+  calls reset the cursor's x-position back to the left margin afterward
+  (fpdf2's own default leaves it wherever the last wrapped line of text
+  ended), so a bullet line immediately followed by a paragraph line could
+  strand the next `multi_cell` with almost no width left to render into
+  (`FPDFException: Not enough horizontal space to render a single
+  character`) — every `multi_cell` call now explicitly passes
+  `new_x=XPos.LMARGIN, new_y=YPos.NEXT`. Found while building
+  `generate_engagement_report` above; no prior test exercised bullets
+  followed by another line, so this had gone undetected.
 
 ---
 
