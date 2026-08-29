@@ -103,6 +103,24 @@ def _get_engagement(engagement_id: str) -> dict | None:
         conn.close()
 
 
+def _list_engagements(status: str | None = None, limit: int = 50) -> list[dict]:
+    """List engagements (id/name/client/status/dates), for direct import by
+    the security dashboard route (routes/security_dashboard_routes.py)."""
+    conn = _get_db()
+    try:
+        query = "SELECT id, name, client, status, start_date, end_date FROM engagements WHERE 1=1"
+        params: list = []
+        if status:
+            query += " AND status=?"
+            params.append(status)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def _log_event(engagement_id: str, event_type: str, summary: str, detail: str = "") -> None:
     """Append a timeline event. Silently no-ops if the engagement doesn't
     exist, since callers (scheduled scans, watchlist checks) treat

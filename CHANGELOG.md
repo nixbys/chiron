@@ -11,6 +11,18 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 ## [Unreleased]
 
 ### Added
+- Security dashboard (`GET /api/security/dashboard`,
+  `routes/security_dashboard_routes.py`, admin-gated) — an aggregated
+  snapshot across the security MCP servers' own stores: findings summary
+  (reuses `findings_server`'s `finding_stats` aggregation), active
+  watchlist entries, recent scan drift across every scheduled task (new
+  `monitor_server._list_recent_diffs`, an all-tasks variant of the
+  existing per-task `monitor_diff_history`), the engagement list (new
+  `engagement_server._list_engagements`), and a host telemetry summary.
+  Every source is independently best-effort — one section failing never
+  breaks the rest. Opens from a new "Security Dashboard" sidebar/rail
+  button (`static/js/securityDashboard.js`). This is the minimal v1 page;
+  a later redesign pass turns it into the full Security Hub.
 - `generate_engagement_report` tool in `mcp_servers/pdf_server.py` — a
   one-call PDF summary for an engagement: scope/description/tags,
   a findings summary (severity/status counts plus top findings,
