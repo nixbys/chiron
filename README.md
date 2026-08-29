@@ -32,7 +32,7 @@
 
 Odysseus Red layers a complete cybersecurity toolchain on top of the [Odysseus](https://github.com/pewdiepie-archdaemon/odysseus) self-hosted AI workspace. The base platform provides chat, agents, memory, deep research, documents, and MCP — this fork adds:
 
-- **19 cybersecurity MCP servers** wired to a Kali-based sidecar, SpiderFoot OSINT platform, OpenSearch, and BentoPDF
+- **20 cybersecurity MCP servers** wired to a Kali-based sidecar, SpiderFoot OSINT platform, OpenSearch, and BentoPDF
 - **Pre-built agent skill workflows** for reconnaissance, OSINT, incident response, threat hunting, malware analysis, web assessment, continuous monitoring, and reporting
 - **Continuous scanning** — schedule recon (ports/subdomains/TLS cert/CVEs) to re-run on a cron and only file a finding when something actually changed
 - **IOC watchlist** — persistent indicators re-checked against Shodan/VirusTotal/OTX/Censys, with a finding filed on any hit
@@ -257,6 +257,18 @@ Backed by a WAL-mode SQLite database at `$ODYSSEUS_DATA_DIR/assets.db`.
 
 STIX data sourced from `github.com/mitre/cti`, cached locally.
 
+### `compliance_server` — NIST 800-53 Compliance Mapping
+
+| Tool | Description |
+|------|-------------|
+| `nist_update` | Refresh the local NIST SP 800-53 Rev 5 OSCAL catalog (7-day TTL cache) |
+| `nist_control` | Look up a control by ID (e.g. `AC-2` or `AC-2.1` for an enhancement) — title, statement, guidance, related controls |
+| `nist_family` | List all controls under a control family (e.g. `AC`, `SC`, `IA`) |
+| `nist_search` | Search control titles by keyword |
+| `nist_map` | Map a list of ATT&CK tactic names and/or Odysseus finding tags to control families via a small hand-authored heuristic table |
+
+Same shape as `attck_server` above: fetches and caches NIST's free OSCAL JSON catalog (`usnistgov/oscal-content` on GitHub) rather than bundling it. CIS Controls v8 is deliberately out of scope — unlike NIST's OSCAL data, CIS's control text isn't freely redistributable. `nist_map`'s table is explicitly a rough grouping for a compliance summary, not authoritative NIST guidance — it keys on ATT&CK's own small tactic-name vocabulary and Odysseus's finding tags/check types, not a per-technique crosswalk.
+
 ### `risk_server` — CVSS Risk Scoring
 
 | Tool | Description |
@@ -452,6 +464,7 @@ odysseus-red/
 │   ├── transform_server.py      # encode/decode, hash, JWT, XOR (in-process)
 │   ├── asset_server.py          # SQLite asset + findings inventory
 │   ├── attck_server.py          # MITRE ATT&CK STIX lookup
+│   ├── compliance_server.py     # NIST 800-53 Rev 5 OSCAL lookup + tag mapping
 │   ├── risk_server.py           # CVSS scoring + remediation plans
 │   ├── findings_server.py       # OpenSearch findings persistence
 │   ├── engagement_server.py     # SQLite case/engagement grouping + timeline

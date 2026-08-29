@@ -42,7 +42,7 @@ FORK_SECURITY_SERVERS = [
     "hashcrack_server", "spiderfoot_server", "pdf_server", "yara_server",
     "exploit_server", "transform_server", "asset_server", "attck_server",
     "risk_server", "findings_server", "engagement_server", "monitor_server",
-    "watchlist_server", "sigma_server", "host_telemetry_server",
+    "watchlist_server", "sigma_server", "host_telemetry_server", "compliance_server",
 ]
 CORE_SERVERS = ["email_server", "memory_server", "image_gen_server", "rag_server"]
 
