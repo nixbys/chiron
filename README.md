@@ -363,6 +363,14 @@ Backs the `host_monitor` scheduled-task action (`src/builtin_actions.py`): on a 
 
 ---
 
+## Security Dashboard
+
+Admin-only (`GET /api/security/dashboard`, `routes/security_dashboard_routes.py`) snapshot across the security MCP servers' own stores: findings summary (severity/status counts, the same aggregation `findings_server`'s `finding_stats` uses), active watchlist entries, recent scan drift across every scheduled task (`monitor_server`), the engagement list, and a host telemetry summary (process/listening-port/logged-in-user counts). Each section is read via direct import of its MCP server module rather than the MCP text-tool interface, and is independently best-effort — one source failing (e.g. OpenSearch unreachable) surfaces as an `error` field on just that section, never a 500 for the whole dashboard.
+
+Opens from the sidebar/icon-rail "Security Dashboard" button (`static/js/securityDashboard.js`). This is the minimal v1 page — a later redesign pass turns it into the full Security Hub anchor (engagement/watchlist/rule-management sub-panels, a proper design system), not a bigger version of this same page.
+
+---
+
 ## Skills
 
 Pre-built agent workflows in [`skills/`](skills/):

@@ -147,6 +147,22 @@ def _record_diff(task_id: str, target: str, check_type: str, added: list, remove
         conn.close()
 
 
+def _list_recent_diffs(limit: int = 20) -> list[dict]:
+    """All-tasks variant of monitor_diff_history's per-task query -- for
+    direct import by the security dashboard route (routes/
+    security_dashboard_routes.py), which needs "what drifted recently"
+    across every scheduled scan, not just one task."""
+    conn = _get_db()
+    try:
+        rows = conn.execute(
+            "SELECT task_id, target, check_type, added, removed, ts FROM monitor_diffs ORDER BY ts DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 TOOLS = [
     Tool(
         name="monitor_list_tasks",

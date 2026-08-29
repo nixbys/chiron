@@ -835,6 +835,11 @@ set_mcp_manager(mcp_manager)
 app.include_router(setup_mcp_routes(mcp_manager))
 logger.info("MCP routes initialized")
 
+from routes.security_dashboard_routes import setup_security_dashboard_routes
+
+app.include_router(setup_security_dashboard_routes())
+logger.info("Security dashboard routes initialized")
+
 from routes.toolchain_routes import setup_toolchain_routes
 
 app.include_router(setup_toolchain_routes())
