@@ -1263,7 +1263,7 @@ function _wireManualHardwareControls(el) {
   syncManualButton();
 }
 
-export const _fitColors = { perfect: 'var(--green, #50fa7b)', good: 'var(--yellow, #f1fa8c)', marginal: 'var(--orange, #ffb86c)', too_tight: 'var(--red, #ff5555)' };
+export const _fitColors = { perfect: 'var(--green, #22c55e)', good: 'var(--yellow, #f1fa8c)', marginal: 'var(--orange, #ffb86c)', too_tight: 'var(--red, #ff5555)' };
 
 function _requiresAcceleratorBackend(model) {
   const q = String(model?.quant || model?.quantization || '').toUpperCase();
@@ -2361,17 +2361,17 @@ export function _hwfitInit() {
       if (data.exit_code === 0 && out.startsWith('ok')) {
         dot.className = 'cookbook-srv-status ok';
         dot.title = `Reachable · ${ms} ms · use Dependencies to check tmux/HF setup`;
-        setMsg(`Connected · ${ms} ms`, 'var(--green,#50fa7b)');
+        setMsg(`Connected · ${ms} ms`, 'var(--green,#22c55e)');
       } else {
         dot.className = 'cookbook-srv-status fail';
         const err = (data.stderr || data.stdout || (data.exit_code == null ? 'no exit code' : `exit ${data.exit_code}`)).toString().trim().slice(0, 240);
         dot.title = `SSH failed: ${err}`;
-        setMsg(`Failed · ${err}`, 'var(--red,#e06c75)');
+        setMsg(`Failed · ${err}`, 'var(--red,#e5484d)');
       }
     } catch (e) {
       dot.className = 'cookbook-srv-status fail';
       dot.title = `Test failed: ${e.message || e}`;
-      setMsg(`Failed · ${e.message || e}`, 'var(--red,#e06c75)');
+      setMsg(`Failed · ${e.message || e}`, 'var(--red,#e5484d)');
     }
   }
 
@@ -2608,7 +2608,7 @@ export function _hwfitInit() {
           }));
         } catch (_) {}
         saveBtn.classList.add('saved');
-        saveBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#50fa7b" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;flex-shrink:0;"><polyline points="20 6 9 17 4 12"/></svg>Saved';
+        saveBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;flex-shrink:0;"><polyline points="20 6 9 17 4 12"/></svg>Saved';
         uiModule.showToast('Server saved');
       });
     }
@@ -2656,7 +2656,7 @@ export function _hwfitInit() {
           const data = await res.json();
           if (data.ok) {
             setupBtn.textContent = '\u2713 Done';
-            setupBtn.style.color = '#50fa7b';
+            setupBtn.style.color = '#22c55e';
             uiModule.showToast(`Setup complete (${data.platform})`);
             // Store detected platform on the server entry
             if (data.platform) {
@@ -2667,7 +2667,7 @@ export function _hwfitInit() {
               if (existingBadge) existingBadge.remove();
               const badge = document.createElement('span');
               badge.className = 'cookbook-platform-badge';
-              badge.style.cssText = 'font-size:8px;padding:1px 5px;border-radius:3px;border:1px solid ' + (data.platform === 'windows' ? 'var(--cyan,#56b6c2)' : 'var(--green,#98c379)') + ';color:' + (data.platform === 'windows' ? 'var(--cyan,#56b6c2)' : 'var(--green,#98c379)') + ';opacity:0.7;white-space:nowrap;flex-shrink:0;';
+              badge.style.cssText = 'font-size:8px;padding:1px 5px;border-radius:3px;border:1px solid ' + (data.platform === 'windows' ? 'var(--cyan,#56b6c2)' : 'var(--green,#22c55e)') + ';color:' + (data.platform === 'windows' ? 'var(--cyan,#56b6c2)' : 'var(--green,#22c55e)') + ';opacity:0.7;white-space:nowrap;flex-shrink:0;';
               badge.textContent = data.platform;
               setupBtn.parentNode.insertBefore(badge, setupBtn);
             }

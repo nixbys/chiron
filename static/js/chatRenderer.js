@@ -2087,7 +2087,7 @@ export function displayMetrics(messageElement, metrics) {
     const costRows = costStr ? `<div><span class="ctx-label">Cost</span> ${costStr}</div>` : '';
     const speedStr = tps != null && tps !== 'undefined' ? `${tps} tok/s` : 'n/a';
     const totalTok = inputTokens + outputTokens;
-    const ctxColor = ctxPct >= 85 ? 'var(--red, #e06c75)' : ctxPct >= 70 ? '#ff9900' : 'var(--color-muted-alt, #6b7280)';
+    const ctxColor = ctxPct >= 85 ? 'var(--red, #e5484d)' : ctxPct >= 70 ? '#ff9900' : 'var(--color-muted-alt, #6b7280)';
     const prepTime = metrics.agent_prep_time;
     const modelWaitTime = metrics.agent_model_wait_time;
     const prepBreakdown = metrics.agent_prep_breakdown || null;
@@ -2158,7 +2158,7 @@ export function displayMetrics(messageElement, metrics) {
     const r = 6, stroke = 1.5;
     const circ = 2 * Math.PI * r;
     const fill = circ * (ctxPct / 100);
-    const ctxColor = ctxPct >= 85 ? 'var(--red, #e06c75)' : ctxPct >= 70 ? '#ff9900' : 'var(--green, #98c379)';
+    const ctxColor = ctxPct >= 85 ? 'var(--red, #e5484d)' : ctxPct >= 70 ? '#ff9900' : 'var(--green, #22c55e)';
     ctxRing = document.createElement('span');
     ctxRing.className = 'ctx-ring';
     ctxRing.title = `${ctxPct}% context used — click for details`;

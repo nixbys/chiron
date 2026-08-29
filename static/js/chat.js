@@ -105,9 +105,9 @@ import { loadPanel } from './panels.js';
 
   function _contextRingColor(pct) {
     const n = Number(pct || 0);
-    if (n >= 85) return 'var(--red, #e06c75)';
+    if (n >= 85) return 'var(--red, #e5484d)';
     if (n >= 70) return '#ff9900';
-    return 'var(--green, #98c379)';
+    return 'var(--green, #22c55e)';
   }
 
   function _contextRingMarkup(pct, { includeLabel = true, labelId = '' } = {}) {

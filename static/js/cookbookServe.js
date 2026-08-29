@@ -2113,7 +2113,7 @@ function _rerenderCachedModels() {
           const spillG = (g.gtt_used_mb || 0) / 1024;
           // Color: green < 85%, amber 85-97%, red > 97% or spilling.
           const spilling = spillG > 0.5 && !g.unified_memory;   // unified APUs always use GTT; not a spill
-          let color = 'var(--green, #50fa7b)';
+          let color = 'var(--green, #22c55e)';
           if (pct >= 97 || spilling) color = 'var(--red, #ff5555)';
           else if (pct >= 85) color = 'var(--orange, #ffb86c)';
           let txt = `${usedG.toFixed(1)} / ${totG.toFixed(1)} GB (${pct}%) · ${freeG.toFixed(1)} GB free`;
@@ -2563,7 +2563,7 @@ function _rerenderCachedModels() {
             const badge = document.createElement('span');
             badge.className = 'cookbook-saved-confirmed';
             badge.title = 'Confirmed working — this config launched and registered an endpoint';
-            badge.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#50fa7b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+            badge.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
             it.appendChild(badge);
           }
           it.appendChild(fav);

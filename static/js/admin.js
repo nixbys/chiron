@@ -2626,7 +2626,7 @@ async function loadTokens() {
           });
           const d = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error(d.detail || 'Failed');
-          if (msg) { msg.textContent = 'Saved'; msg.style.color = 'var(--green, #50fa7b)'; setTimeout(() => { msg.textContent = ''; }, 1200); }
+          if (msg) { msg.textContent = 'Saved'; msg.style.color = 'var(--green, #22c55e)'; setTimeout(() => { msg.textContent = ''; }, 1200); }
         } catch (err) {
           cb.checked = !cb.checked;
           if (msg) { msg.textContent = (err && err.message) || 'Failed'; msg.style.color = 'var(--red)'; }

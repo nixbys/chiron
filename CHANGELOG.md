@@ -10,7 +10,40 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 
 ## [Unreleased]
 
-### Added
+### Changed
+- Applied the Phase 2.2 design system's shape language app-wide (Phase 2.3):
+  swept nearly all 1,098 hardcoded `border-radius` declarations in
+  `style.css` onto the `--radius-sm/md/lg` scale (2/4/6px, capped well
+  below the old up-to-20px range), added a `--radius-pill` token for the
+  999px pill shapes. Circular (`50%`) and already-zero radii were left
+  alone — a different shape language than "how rounded is this card,"
+  not part of the sweep. Directional/asymmetric shadows (docked-panel
+  edges, chat-bubble tails) shrunk proportionally rather than tokenized
+  to a fixed scale, preserving direction/shape while flattening the
+  effect — 117 pure-black elevation-shadow layers reduced (offset/blur
+  ~35-40% of original, opacity ~80%); shadows using a themed color
+  (focus rings, active-state outlines, glow/pulse indicators) were left
+  untouched, they're functional state indicators, not decorative
+  elevation. Verified with real Playwright screenshots against a locally
+  booted instance (chat, calendar, notes, gallery, security dashboard,
+  theme picker, injected `.msg`/`.msg-user`/`.msg-ai` bubbles) — no
+  visual regressions, asymmetric bubble corners confirmed correct.
+- Cleaned up the ~380 remaining `var(--token, #oldhex)` defensive
+  fallback literals across `style.css` and 20 JS files (16 top-level +
+  4 in subdirectories missed by an earlier pass) that still referenced
+  pre-redesign hex values. These never actually triggered (the real
+  tokens are always defined), but left dead/misleading literals in the
+  source — fixed by looking up each fallback's *actual* current token
+  value rather than a blind find-replace (this caught and fixed a
+  pre-existing, unrelated bug: a `var(--hl-string, #98c379)` fallback
+  that didn't match `--hl-string`'s real value at all, `#e5c07b`).
+  Several bare (non-`var()`) literals also updated where they clearly
+  tracked the old accent/success colors (a note-color swatch, a memory
+  category tag, a search-icon SVG data-URI, an image-editor default
+  brush color and active-handle indicator). Left alone: a calendar
+  event-type color palette that coincidentally shared a hex with the
+  old accent but is explicitly a fixed, theme-independent palette; two
+  unlinked dev-prototype pages not in any route.
 - New dark-first design system (Phase 2.2 of the rebrand/redesign):
   self-hosted Chakra Petch (display), IBM Plex Sans (body/interface), and
   IBM Plex Mono (code/data — replaces Fira Code as the default) via real

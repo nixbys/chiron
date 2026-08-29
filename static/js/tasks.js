@@ -963,7 +963,7 @@ function _renderList() {
     }
     if (task.last_run_status) {
       const isErr = task.last_run_status === 'error' || task.last_run_status === 'failed';
-      const color = isErr ? 'var(--red,#e06c75)' : 'var(--green,#50fa7b)';
+      const color = isErr ? 'var(--red,#e5484d)' : 'var(--green,#22c55e)';
       const result = (task.last_run_result || '').trim();
       const prev = result.length > 200 ? result.slice(0, 200) + '…' : result;
       const lr = document.createElement('div');
