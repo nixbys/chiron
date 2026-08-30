@@ -10,7 +10,55 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 
 ## [Unreleased]
 
+### Fixed
+- Five Kali toolchain binaries (`nuclei`, `httpx`, `subfinder`, `amass`, `trivy`) were
+  silently failing to install on every fresh build — `docker/toolchain/Dockerfile`'s
+  fixed-filename `.../releases/latest/download/<name>_linux_amd64.zip` URLs 404'd
+  unconditionally because ProjectDiscovery's tools and trivy now embed the version number in
+  the release asset filename (e.g. `nuclei_3.11.1_linux_amd64.zip`, not
+  `nuclei_linux_amd64.zip`); amass's URL also had the wrong case (`Linux` vs `linux`) and the
+  wrong extension (`.zip` vs the real `.tar.gz`). Fixed by resolving each tool's actual latest
+  release tag via the GitHub API first, then building the exact filename that tag really
+  published. All five verified installing successfully in a real rebuild.
+- The bundled OpenSearch service couldn't start at all: `OPENSEARCH_INITIAL_ADMIN_PASSWORD`
+  defaults to the literal string `admin`, which OpenSearch 2.12+'s security plugin rejects
+  outright (needs 8+ chars with upper/lower/digit/special), so the container crash-looped
+  indefinitely on every start. `docker-compose.security.yml`'s own comment already said
+  "Disable security plugin for dev" but the default value did the opposite (`plugins.security.
+  disabled` defaulted to `false`, i.e. enabled) — flipped the default to match the stated
+  intent, and to match `findings_server.py`/`sigma_server.py`'s own plain-`http://` default
+  for `OPENSEARCH_URL` (the security plugin also forces HTTPS, which those callers were never
+  set up for either). A production deployment that wants OpenSearch's own auth on top of
+  Chiron's can still opt in via `OPENSEARCH_SECURITY_DISABLED=false` + `https://` + a real
+  `OPENSEARCH_PASSWORD`.
+- `findings_server.py`'s `_ensure_index()` crashed on every call after the very first one:
+  its `HEAD` existence-check response never carries a body (per HTTP spec), but `_req()`
+  unconditionally called `.json()` on every response, so once the index existed, the empty
+  body raised `json.JSONDecodeError` — an exception `_ensure_index`'s own `except requests.
+  HTTPError` clause doesn't catch, so it escaped uncaught into every findings-summary/search
+  call as `Expecting value: line 1 column 1 (char 0)`. This had presumably been broken since
+  the feature was written; it was only just discovered because OpenSearch itself had never
+  successfully stayed up long enough to exercise it (see above). Fixed `_req()` to skip
+  `.json()` on an empty response body. New `tests/mcp_servers/test_findings_server.py`
+  (the module had no dedicated tests before this) covers the regression directly.
+
 ### Added
+- Security Hub "Connected Services" tab plus real host access to the sidecars it lists:
+  SpiderFoot and OpenSearch are now published on `127.0.0.1` (matching BentoPDF's and
+  Ollama's existing loopback-only posture — `docker-compose.security.yml` already had a
+  comment anticipating this exact change for SpiderFoot). The toolchain's exec API is
+  deliberately still never published, not even to loopback — it accepts arbitrary command
+  execution. New `GET /api/security/services` reports live reachability (probed server-side
+  against each sidecar's internal container address, so the browser never needs a CORS
+  workaround) plus the loopback URL to open each one.
+- Security Hub is now a genuinely standalone page (`/security`, `static/security.html` +
+  `static/js/securityHub.js`) instead of a modal — every other sidebar tool (Notes, Calendar,
+  Gallery, ...) deep-links into the chat SPA's own modal system, but Security Hub gets its
+  own page shell (header, tab bar, back-to-chat link) the same way `/login` does, not a
+  floating dialog over the chat. Same five tabs, same REST endpoints, same `.sec-*`
+  component CSS — only the chrome changed. The old modal (`static/js/securityDashboard.js`)
+  is retired; the sidebar/icon-rail button now does a real navigation instead of toggling it,
+  and its label changed from "Security Dashboard" to "Security Hub" to match.
 - New PWA icons (`static/icons/icon-192.png`, `icon-512.png`, `icon-maskable-512.png`) — the
   new crimson shield mark on the Duality dark background, replacing icons generated before
   the rebrand (the old boat logo in the pre-redesign pink/rose palette). A new README hero

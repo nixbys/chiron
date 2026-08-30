@@ -46,6 +46,15 @@ def _req(method: str, path: str, body: dict | None = None) -> dict:
         verify=False,  # self-signed cert common in dev; set OPENSEARCH_URL with https and real cert in prod
     )
     resp.raise_for_status()
+    # HEAD responses (used by _ensure_index's existence check below) never
+    # carry a body per HTTP spec -- resp.json() on empty text always raises
+    # json.JSONDecodeError, which _ensure_index's `except requests.HTTPError`
+    # doesn't catch, so it used to escape uncaught on every call after the
+    # index's first creation (HEAD 404 → HTTPError → caught; HEAD 200 once it
+    # exists → empty-body decode crash → not caught). Any other empty-body
+    # response (some DELETE calls too) gets the same safe treatment.
+    if not resp.content:
+        return {}
     return resp.json()
 
 

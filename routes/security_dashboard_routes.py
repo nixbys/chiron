@@ -25,8 +25,10 @@ summary sections.
 import asyncio
 import json
 import logging
+import os
 import re
 
+import requests
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -126,6 +128,64 @@ def _fetch_host_telemetry_summary() -> dict:
     if not summary:
         return {"error": "host telemetry unavailable"}
     return summary
+
+
+# Connected sidecar services (Security Hub's own "Connected Services" tab).
+# `browser_url` is what a human clicks -- always loopback-only (never
+# 0.0.0.0, see docker-compose.security.yml) so this only ever works from the
+# machine Chiron itself runs on. `probe_url` is the *internal* Docker/Podman
+# network address this server container actually reaches each sidecar
+# through (matches docker-compose.security.yml's own env var defaults for
+# the `odysseus` service) -- checking reachability from here avoids a
+# browser-side CORS probe entirely and mirrors how the Overview tab's own
+# findings-summary section already treats OpenSearch as best-effort.
+# `browser_url: None` means intentionally never exposed to a browser (the
+# toolchain's exec API accepts arbitrary command execution -- see ADR 001,
+# SECURITY.md "Toolchain Container Hardening").
+_CONNECTED_SERVICES = [
+    {
+        "id": "bentopdf", "label": "BentoPDF",
+        "description": "Client-side PDF toolkit — metadata, redaction, report assembly.",
+        "browser_url": os.environ.get("BENTOPDF_URL", "http://localhost:3000"),
+        "probe_url": "http://odysseus-bentopdf:8080/", "has_ui": True,
+    },
+    {
+        "id": "spiderfoot", "label": "SpiderFoot",
+        "description": "Correlated OSINT scanning — 200+ modules.",
+        "browser_url": "http://localhost:5001",
+        "probe_url": os.environ.get("SPIDERFOOT_URL", "http://odysseus-spiderfoot:5001").rstrip("/") + "/",
+        "has_ui": True,
+    },
+    {
+        "id": "opensearch", "label": "OpenSearch",
+        "description": "Findings persistence index — REST API, no bundled Dashboards UI.",
+        "browser_url": "http://localhost:9200",
+        "probe_url": os.environ.get("OPENSEARCH_URL", "http://odysseus-opensearch:9200").rstrip("/") + "/",
+        "has_ui": False,
+    },
+    {
+        "id": "ollama", "label": "Ollama",
+        "description": "Local LLM runtime — REST API, no UI.",
+        "browser_url": "http://localhost:11434",
+        "probe_url": os.environ.get("OLLAMA_BASE_URL", "http://odysseus-ollama:11434/v1").rsplit("/v1", 1)[0].rstrip("/") + "/",
+        "has_ui": False,
+    },
+    {
+        "id": "toolchain", "label": "Kali Toolchain",
+        "description": "Exec API — internal-only by design, never exposed to the browser (arbitrary command execution surface).",
+        "browser_url": None,
+        "probe_url": os.environ.get("ODYSSEUS_TOOLCHAIN_API", "http://odysseus-toolchain:8088").rstrip("/") + "/health",
+        "has_ui": False,
+    },
+]
+
+
+def _probe_service(url: str) -> bool:
+    try:
+        resp = requests.get(url, timeout=2)
+        return resp.status_code < 500
+    except Exception:  # noqa: BLE001
+        return False
 
 
 async def _call_tool(mod, tool_name: str, arguments: dict) -> str:
@@ -314,5 +374,18 @@ def setup_security_dashboard_routes():
         if err:
             raise HTTPException(404, err)
         return {"name": name, "content": content}
+
+    # ---- Connected Services --------------------------------------------
+
+    @router.get("/services")
+    async def list_connected_services(request: Request):
+        require_admin(request)
+
+        async def _check(svc: dict) -> dict:
+            reachable = await asyncio.to_thread(_probe_service, svc["probe_url"])
+            return {k: v for k, v in svc.items() if k != "probe_url"} | {"reachable": reachable}
+
+        results = await asyncio.gather(*[_check(s) for s in _CONNECTED_SERVICES])
+        return {"services": results}
 
     return router

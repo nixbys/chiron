@@ -32,7 +32,6 @@ import { UI_VIS_DEFAULT_OFF, resolveVisibility } from './js/ui_visibility.js';
 import tasksModule from './js/tasks.js?v=20260723tasksbulkfeedback1';
 import calendarModule from './js/calendar.js';
 import notesModule from './js/notes.js';
-import securityDashboardModule from './js/securityDashboard.js';
 import adminModule from './js/admin.js?v=20260716openrouter3';
 import settingsModule from './js/settings.js?v=20260815approvalsave1';
 // Eagerly bind unified minimize/restore behavior across all tool modals.
@@ -1072,15 +1071,13 @@ function initializeEventListeners() {
     });
   }
 
-  // Security dashboard tool button
+  // Security Hub tool button — a genuinely standalone page (/security,
+  // served by static/security.html), not a modal like every other
+  // sidebar tool. Real navigation, not a SPA route.
   const toolSecurityBtn = el('tool-security-btn');
   if (toolSecurityBtn) {
     toolSecurityBtn.addEventListener('click', () => {
-      if (securityDashboardModule) {
-        securityDashboardModule.isSecurityDashboardOpen()
-          ? securityDashboardModule.closeSecurityDashboard()
-          : securityDashboardModule.openSecurityDashboard();
-      }
+      window.location.href = '/security';
     });
   }
 
@@ -1234,7 +1231,6 @@ function initializeEventListeners() {
       setTimeout(_goFullscreen, 200);
     },
     '/memory':   () => document.getElementById('tool-memory-btn')?.click(),
-    '/security': () => document.getElementById('tool-security-btn')?.click(),
     '/gallery':  () => document.getElementById('tool-gallery-btn')?.click(),
     '/tasks':    () => document.getElementById('tool-tasks-btn')?.click(),
     '/library':  () => sessionModule && sessionModule.openLibrary && sessionModule.openLibrary(),

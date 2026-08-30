@@ -41486,10 +41486,12 @@ body.settings-sidebar-resize-active {
 
    New component vocabulary — didn't exist before this pass. `.sec-`
    prefixed so nothing collides with an existing or future upstream class
-   name (see ADR 005 on sync-conflict avoidance). Consumed by the security
-   dashboard (static/js/securityDashboard.js) and available to any other
-   panel that needs a severity badge, a stat tile, or a timeline row —
-   these are shared primitives, not dashboard-only styling.
+   name (see ADR 005 on sync-conflict avoidance). Consumed by the Security
+   Hub (static/security.html, static/js/securityHub.js — a standalone
+   page, not a chat-SPA modal, since Phase 2.4's follow-up) and available
+   to any other panel that needs a severity badge, a stat tile, or a
+   timeline row — these are shared primitives, not Security-Hub-only
+   styling.
    ══════════════════════════════════════════════════════════════════════ */
 
 /* Severity badges — 5-step scale, deliberately distinct from the generic

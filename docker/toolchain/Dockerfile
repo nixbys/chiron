@@ -53,7 +53,20 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 # Each tool is installed independently with retries. A single download failure
 # does not abort the image build — the tool is simply skipped. Verify presence
 # with `docker run odysseus-toolchain which nuclei` before production use.
-RUN _install_zip() { \
+#
+# ProjectDiscovery's tools (nuclei/httpx/subfinder) and trivy embed the
+# version number in their release asset filenames (e.g.
+# `nuclei_3.11.1_linux_amd64.zip`, not `nuclei_linux_amd64.zip`), so the old
+# fixed-filename `.../releases/latest/download/<name>_linux_amd64.zip` URLs
+# 404 unconditionally once a version ships under that convention — GitHub's
+# "latest/download" alias only rewrites the *release*, not the asset name.
+# `_gh_latest_tag` resolves the actual tag first so the filename it builds
+# always matches what that release really published.
+RUN _gh_latest_tag() { \
+        curl --retry 3 --retry-delay 5 -fsSL "https://api.github.com/repos/$1/releases/latest" \
+            | jq -r '.tag_name'; \
+    } && \
+    _install_zip() { \
         name="$1"; url="$2"; bin="$3"; \
         curl --retry 3 --retry-delay 5 -fsSL "$url" -o "/tmp/${name}.zip" 2>/dev/null \
         && unzip -q "/tmp/${name}.zip" "$bin" -d /usr/local/bin/ \
@@ -62,30 +75,40 @@ RUN _install_zip() { \
         && echo "Installed $bin" \
         || { echo "WARNING: failed to install $bin — skipping"; rm -f "/tmp/${name}.zip"; }; \
     } && \
+    nuclei_tag="$(_gh_latest_tag projectdiscovery/nuclei)" && \
     _install_zip nuclei \
-        "https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_linux_amd64.zip" \
+        "https://github.com/projectdiscovery/nuclei/releases/download/${nuclei_tag}/nuclei_${nuclei_tag#v}_linux_amd64.zip" \
         nuclei && \
     (which nuclei && nuclei -update-templates -silent 2>/dev/null || true) && \
+    httpx_tag="$(_gh_latest_tag projectdiscovery/httpx)" && \
     _install_zip httpx \
-        "https://github.com/projectdiscovery/httpx/releases/latest/download/httpx_linux_amd64.zip" \
+        "https://github.com/projectdiscovery/httpx/releases/download/${httpx_tag}/httpx_${httpx_tag#v}_linux_amd64.zip" \
         httpx && \
+    subfinder_tag="$(_gh_latest_tag projectdiscovery/subfinder)" && \
     _install_zip subfinder \
-        "https://github.com/projectdiscovery/subfinder/releases/latest/download/subfinder_linux_amd64.zip" \
+        "https://github.com/projectdiscovery/subfinder/releases/download/${subfinder_tag}/subfinder_${subfinder_tag#v}_linux_amd64.zip" \
         subfinder && \
-    # amass ships its binary inside a versioned sub-directory in the zip
+    # amass's asset filename carries no version (unlike the three above) --
+    # only its case (lowercase "linux", not "Linux") and extension (.tar.gz,
+    # not .zip) were wrong. Binary sits inside a versioned subdirectory in
+    # the tarball, so extract-and-find rather than a flat unzip.
     ( curl --retry 3 --retry-delay 5 -fsSL \
-        "https://github.com/owasp-amass/amass/releases/latest/download/amass_Linux_amd64.zip" \
-        -o /tmp/amass.zip 2>/dev/null \
-      && unzip -q /tmp/amass.zip -d /tmp/amass_out/ \
+        "https://github.com/owasp-amass/amass/releases/latest/download/amass_linux_amd64.tar.gz" \
+        -o /tmp/amass.tar.gz 2>/dev/null \
+      && mkdir -p /tmp/amass_out && tar -xzf /tmp/amass.tar.gz -C /tmp/amass_out/ \
       && find /tmp/amass_out/ -name amass -type f -exec mv {} /usr/local/bin/amass \; \
       && chmod +x /usr/local/bin/amass \
+      && echo "Installed amass" \
       || echo "WARNING: failed to install amass — skipping" \
-    ) && rm -rf /tmp/amass.zip /tmp/amass_out/ && \
-    # trivy — container/filesystem vulnerability scanner
+    ) && rm -rf /tmp/amass.tar.gz /tmp/amass_out/ && \
+    # trivy — container/filesystem vulnerability scanner (also versioned,
+    # and "Linux-64bit" rather than "linux_amd64")
+    trivy_tag="$(_gh_latest_tag aquasecurity/trivy)" && \
     ( curl --retry 3 --retry-delay 5 -fsSL \
-        "https://github.com/aquasecurity/trivy/releases/latest/download/trivy_linux_amd64.tar.gz" \
+        "https://github.com/aquasecurity/trivy/releases/download/${trivy_tag}/trivy_${trivy_tag#v}_Linux-64bit.tar.gz" \
         | tar -xz -C /usr/local/bin/ trivy \
       && chmod +x /usr/local/bin/trivy \
+      && echo "Installed trivy" \
       || echo "WARNING: failed to install trivy — skipping" \
     )
 

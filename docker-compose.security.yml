@@ -2,11 +2,17 @@
 #   podman-compose -f docker-compose.yml -f docker-compose.security.yml --profile sidecars up -d --build
 #
 # Services added:
-#   ollama      — local LLM runtime (AMD ROCm / RX 6950 XT); API at :11434
-#   toolchain   — Kali sidecar exposing an internal exec API on :8088
-#   spiderfoot  — SpiderFoot OSINT server; MCP server talks to its REST API on port 5001
+#   ollama      — local LLM runtime (AMD ROCm / RX 6950 XT); API at http://localhost:11434
+#   toolchain   — Kali sidecar exposing an internal exec API on :8088 (never published
+#                 to the host — arbitrary command execution surface, internal-network only)
+#   spiderfoot  — SpiderFoot OSINT server; web UI + REST API at http://localhost:5001
 #   bentopdf    — BentoPDF client-side PDF toolkit; web UI at http://localhost:3000
-#   opensearch  — findings persistence index
+#   opensearch  — findings persistence index; REST API (no bundled Dashboards UI) at
+#                 http://localhost:9200
+#
+# spiderfoot/bentopdf/opensearch/ollama are all published on 127.0.0.1 only (never
+# 0.0.0.0 -- keep it that way for any network-exposed deployment) so the Security
+# Hub's Connected Services panel (static/security.html) can link straight to them.
 #
 # toolchain, spiderfoot, bentopdf, and opensearch are each gated behind
 # TWO Compose profiles: the shared "sidecars" group (for
@@ -110,9 +116,12 @@ services:
     image: docker.io/fopina/spiderfoot:latest
     container_name: odysseus-spiderfoot
     hostname: odysseus-spiderfoot
-    # Port 5001 is intentionally NOT published to the host — only MCP servers
-    # on the internal network need to reach it. To access the SpiderFoot web UI
-    # directly, temporarily add: ports: ["127.0.0.1:5001:5001"]
+    # Published on loopback only (matches bentopdf's own posture below) so the
+    # Security Hub's Connected Services panel can link directly to the
+    # SpiderFoot web UI. Still internal-network-only from anywhere but this
+    # host -- never bind 0.0.0.0 here for a network-exposed deployment.
+    ports:
+      - "127.0.0.1:5001:5001"
     volumes:
       - spiderfoot-data:/var/spiderfoot
     restart: unless-stopped
@@ -141,13 +150,30 @@ services:
     image: docker.io/opensearchproject/opensearch:2.17.0
     container_name: odysseus-opensearch
     hostname: odysseus-opensearch
-    # Port is intentionally NOT published to the host — only MCP servers on the
-    # internal network need to reach it. Temporarily add ports for Dashboards.
+    # Published on loopback only, same rationale as spiderfoot above -- this
+    # is a REST API (no OpenSearch Dashboards service is bundled here), so
+    # the Connected Services panel links to it for raw index/query access
+    # rather than a browsable UI.
+    ports:
+      - "127.0.0.1:9200:9200"
     environment:
       discovery.type: single-node
       OPENSEARCH_INITIAL_ADMIN_PASSWORD: "${OPENSEARCH_PASSWORD:-admin}"
-      # Disable security plugin for dev; set OPENSEARCH_PASSWORD in .env for prod
-      plugins.security.disabled: "${OPENSEARCH_SECURITY_DISABLED:-false}"
+      # Security plugin DISABLED by default -- matches findings_server.py's/
+      # sigma_server.py's own OPENSEARCH_URL default (http://, no TLS). The
+      # inverted default here used to say "false" (security ENABLED) while
+      # this comment already said "disable for dev" -- with the plugin
+      # actually enabled, OpenSearch 2.12+ demands port 9200 speak HTTPS with
+      # a self-signed cert, which silently broke every plain-http:// caller
+      # (findings_server, sigma_server, the Security Hub's Connected
+      # Services probe) with no default value ever making it past OpenSearch's
+      # own startup password validation to surface the mismatch. Set
+      # OPENSEARCH_SECURITY_DISABLED=false (and switch OPENSEARCH_URL to
+      # https://, and set a real OPENSEARCH_PASSWORD -- 8+ chars, upper+
+      # lower+digit+special char, OpenSearch itself refuses to start
+      # otherwise) for a production deployment that needs OpenSearch's own
+      # auth on top of Chiron's.
+      plugins.security.disabled: "${OPENSEARCH_SECURITY_DISABLED:-true}"
     volumes:
       - opensearch-data:/usr/share/opensearch/data
     restart: unless-stopped

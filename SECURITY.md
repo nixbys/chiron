@@ -64,8 +64,8 @@ Before any active scan:
 
 ### OpenSearch
 
-- The bundled OpenSearch instance uses default credentials (`admin`/`admin`) — change `OPENSEARCH_USER`/`OPENSEARCH_PASSWORD` before any shared deployment.
-- Do not expose port 9200 outside the internal network.
+- The bundled OpenSearch instance runs with its security plugin **disabled by default** (no auth, plain HTTP) — appropriate only because it's also loopback-only (below). For any shared/network-adjacent deployment, set `OPENSEARCH_SECURITY_DISABLED=false`, switch `OPENSEARCH_URL` to `https://`, and set a real `OPENSEARCH_PASSWORD` (8+ chars, upper+lower+digit+special — OpenSearch's own security plugin refuses to start on anything weaker, including the literal string `admin`).
+- Published on `127.0.0.1:9200` (loopback only, so the Security Hub's Connected Services panel can reach it) — do not change this to `0.0.0.0` for any network-exposed deployment.
 
 ### OSINT / Threat-Intel API Keys
 
