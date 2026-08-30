@@ -9,10 +9,11 @@
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> ·
+  <a href="#architecture">Architecture</a> ·
   <a href="#mcp-tools">MCP Tools</a> ·
+  <a href="#security-hub">Security Hub</a> ·
   <a href="#skills">Skills</a> ·
   <a href="#configuration">Configuration</a> ·
-  <a href="#architecture">Architecture</a> ·
   <a href="docs/adr/">Decision Records</a> ·
   <a href="docs/roadmap-fork.md">Roadmap</a>
 </p>
@@ -80,43 +81,90 @@ Native installs, GPU notes, Windows/macOS instructions, and HTTPS are covered in
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                        Chiron (port 7000)                        │
-│            Chat · Agents · Research · Documents · MCP            │
-└──┬──────────────┬──────────────┬──────────────┬───────────────────┘
-   │ MCP stdio    │ MCP stdio    │ MCP stdio    │ MCP stdio
-   ▼              ▼              ▼              ▼
-┌──────────────┐ ┌────────────┐ ┌────────────┐ ┌──────────────────┐
-│ mcp_servers/ │ │mcp_servers/│ │mcp_servers/│ │ mcp_servers/     │
-│ recon        │ │ spiderfoot │ │ asset      │ │ pdf_server       │
-│ osint        │ │(REST client│ │ attck      │ │ (pypdf)          │
-│ web_vuln     │ └─────┬──────┘ │ risk       │ └──────────────────┘
-│ intel        │       │:5001   │ findings   │
-│ hashcrack    │ ┌─────▼──────┐ └─────┬──────┘
-│ yara         │ │odysseus-   │       │ HTTP
-│ exploit      │ │spiderfoot  │ ┌─────▼──────────┐
-│ transform    │ │200+ modules│ │ OpenSearch     │
-└──────┬───────┘ └────────────┘ │ :9200          │
-       │ HTTP :8088             │ findings index │
-       ▼                        └────────────────┘
-┌──────────────────────┐   ┌───────────────────────┐
-│ odysseus-toolchain   │   │ odysseus-bentopdf     │
-│ (Kali Rolling)       │   │ localhost:3000        │
-│ nmap  masscan  ffuf  │   │ client-side WASM/JS   │
-│ nikto gobuster sqlmap│   │ edit · redact · sign  │
-│ nuclei  subfinder    │   └───────────────────────┘
-│ john  hydra  yara    │
-│ theHarvester recon-ng│
-│ exploitdb  trivy     │
-└──────────────────────┘
+Chiron is the upstream Odysseus core — chat, agents, memory, research, documents — **unmodified**, with 21 security MCP servers layered on top and wired to a handful of sidecar services. Everything below the core is additive: it lives in `mcp_servers/`, `docker/toolchain/`, and `docker-compose.security.yml`, and attaches to the same container network without touching a single upstream file.
+
+The 21 servers split along the offense/defense line from [ADR 007](docs/adr/007-security-detection-lifecycle.md) — **Red** (runs tools against a target), **Blue** (persists, correlates, and watches for drift), and one **Utility** server that's neither:
+
+```mermaid
+graph TD
+    Core(["<b>Chiron</b> — port 7000<br/>Chat · Agents · Memory · Research · Documents"])
+
+    Core -->|MCP stdio| RedGroup
+    Core -->|MCP stdio| BlueGroup
+    Core -->|MCP stdio| UtilGroup
+
+    subgraph RedGroup["🔴 Red — offense"]
+        direction TB
+        recon[recon_server]
+        osint[osint_server]
+        webvuln[web_vuln_server]
+        hashcrack[hashcrack_server]
+        exploit[exploit_server]
+        intel[intel_server]
+        sfserver[spiderfoot_server]
+        pdf[pdf_server]
+    end
+
+    subgraph BlueGroup["🔵 Blue — defense"]
+        direction TB
+        yara[yara_server]
+        sigma[sigma_server]
+        findings[findings_server]
+        asset[asset_server]
+        engagement[engagement_server]
+        monitor[monitor_server]
+        watchlist[watchlist_server]
+        audit[audit_server]
+        attck[attck_server]
+        compliance[compliance_server]
+        risk[risk_server]
+        host[host_telemetry_server]
+    end
+
+    subgraph UtilGroup["⚪ Utility"]
+        transform[transform_server]
+    end
+
+    recon --> Toolchain
+    osint --> Toolchain
+    webvuln --> Toolchain
+    hashcrack --> Toolchain
+    exploit --> Toolchain
+    yara --> Toolchain
+
+    intel --> ThreatAPIs[("Shodan · VirusTotal<br/>OTX · Censys · NVD")]
+    watchlist --> ThreatAPIs
+    sfserver --> SpiderFoot[("odysseus-spiderfoot<br/>200+ modules · REST :5001")]
+    pdf -.->|hands off URL| BentoPDF[("odysseus-bentopdf<br/>:3000")]
+
+    findings --> OpenSearch[("odysseus-opensearch<br/>findings + sigma index · :9200")]
+    sigma --> OpenSearch
+
+    asset --> SQLite[("SQLite, WAL mode<br/>assets · engagements · monitor<br/>watchlist · audit")]
+    engagement --> SQLite
+    monitor --> SQLite
+    watchlist --> SQLite
+    audit --> SQLite
+
+    Core -.->|Connected Services link only| CyberChef[("odysseus-cyberchef<br/>manual encode/decode · :8000")]
+
+    Toolchain[["odysseus-toolchain — Kali Rolling<br/>nmap · masscan · ffuf · nikto · gobuster<br/>sqlmap · nuclei · subfinder · john · hydra<br/>yara · theHarvester · recon-ng · exploitdb · trivy"]]
 ```
 
-The upstream core image is **not modified**. All sidecars are managed via `docker-compose.security.yml` and attach to the same internal network.
+A few things the diagram compresses that are worth spelling out:
+
+- **Not every Blue server touches shared infrastructure.** `attck_server` and `compliance_server` cache free public datasets (MITRE STIX, NIST OSCAL) locally with a 7-day TTL; `risk_server`, `host_telemetry_server`, and `transform_server` run entirely in-process (pure computation or `psutil`) with no sidecar, network call, or database at all.
+- **`audit_server` is read-only.** The audit trail it exposes is written by `mcp_servers/common.py` itself, at the one chokepoint (`exec_in_toolchain()`) every toolchain-backed call above already passes through — no server-side code needed to change to get audit logging or rate limiting.
+- **CyberChef is a dead end by design.** It's the one sidecar no MCP server calls — a pure link target surfaced in the Security Hub's Connected Services tab for manual encode/decode/crypto work.
+- **Nothing here is a foreign key.** MCP servers never import each other or share a database connection; where they need to agree on something (an `engagement_id`, a finding's fields), it's a documented convention, not a schema constraint.
+
+See [MCP Tools](#mcp-tools) below for what each server actually does, and the [repository layout](#repository-layout) for where it lives on disk.
 
 ---
 
 ## MCP Tools
+
+Every tool below is exposed to the chat/agent layer over stdio MCP — nothing here requires a separate integration step beyond registering the server (see [`docs/develop-mcp-servers.md`](docs/develop-mcp-servers.md), or run [`scripts/register_fork_mcp_servers.py`](scripts/register_fork_mcp_servers.py) to register all 21 at once). Servers are listed roughly in offense → defense → utility order, matching the [Architecture](#architecture) diagram above.
 
 ### `recon_server` — Network Reconnaissance
 
