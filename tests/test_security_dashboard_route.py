@@ -341,3 +341,51 @@ def test_get_yara_rule_route(monkeypatch):
     r = client.get("/api/security/rules/yara/my_rule")
     assert r.status_code == 200
     assert "rule Test" in r.json()["content"]
+
+
+# ---- Connected Services (Security Hub page follow-up) ---------------------
+
+
+def test_list_connected_services_route_requires_admin(monkeypatch):
+    monkeypatch.setattr(secdash, "require_admin", _deny)
+    app = FastAPI()
+    app.include_router(secdash.setup_security_dashboard_routes())
+    client = TestClient(app, raise_server_exceptions=False)
+    r = client.get("/api/security/services")
+    assert r.status_code == 403
+
+
+def test_list_connected_services_route_reports_reachability(monkeypatch):
+    def fake_probe(url):
+        # bentopdf's probe_url is the only one that "succeeds" in this test.
+        return "odysseus-bentopdf" in url
+
+    monkeypatch.setattr(secdash, "_probe_service", fake_probe)
+    client = _hub_client(monkeypatch)
+    r = client.get("/api/security/services")
+    assert r.status_code == 200
+    services = {s["id"]: s for s in r.json()["services"]}
+
+    assert set(services) == {"bentopdf", "spiderfoot", "opensearch", "ollama", "toolchain"}
+    assert services["bentopdf"]["reachable"] is True
+    assert services["spiderfoot"]["reachable"] is False
+    # probe_url is an internal implementation detail -- never leaked to the client.
+    assert "probe_url" not in services["bentopdf"]
+
+
+def test_connected_services_toolchain_has_no_browser_url(monkeypatch):
+    """The toolchain's exec API accepts arbitrary command execution and must
+    never be offered as a clickable browser link, reachable or not."""
+    monkeypatch.setattr(secdash, "_probe_service", lambda url: True)
+    client = _hub_client(monkeypatch)
+    r = client.get("/api/security/services")
+    services = {s["id"]: s for s in r.json()["services"]}
+    assert services["toolchain"]["browser_url"] is None
+    for svc_id in ("bentopdf", "spiderfoot", "opensearch", "ollama"):
+        assert services[svc_id]["browser_url"], f"{svc_id} should expose a browser_url"
+
+
+def test_probe_service_handles_connection_failure():
+    # No mocking -- a real request to a closed local port must return False,
+    # not raise, so one unreachable sidecar can't break the whole panel.
+    assert secdash._probe_service("http://127.0.0.1:1") is False

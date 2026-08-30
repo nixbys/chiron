@@ -366,12 +366,13 @@ Backs the `host_monitor` scheduled-task action (`src/builtin_actions.py`): on a 
 
 ## Security Hub
 
-Admin-only, opens from the sidebar/icon-rail "Security Dashboard" button (`static/js/securityDashboard.js`, routes under `routes/security_dashboard_routes.py`). Four tabs:
+Admin-only. A standalone page at `/security` (`static/security.html`, `static/js/securityHub.js`, routes under `routes/security_dashboard_routes.py`) — not a modal, opens from the sidebar/icon-rail "Security Hub" button like every other tool, but as a real page navigation rather than an overlay. Five tabs:
 
 - **Overview** (`GET /api/security/dashboard`) — a snapshot across the security MCP servers' own stores: findings summary (severity/status counts, the same aggregation `findings_server`'s `finding_stats` uses), active watchlist entries, recent scan drift across every scheduled task (`monitor_server`), the engagement list, and a host telemetry summary (process/listening-port/logged-in-user counts).
 - **Engagements** — browse, expand a row for scope + timeline detail, create, and close engagements.
 - **Watchlist** — browse, add, pause/resume, and remove IOC watchlist entries.
 - **Rules** — browse stored Sigma rules and YARA rule names (the latter via the toolchain sidecar), with a raw-content viewer for either.
+- **Connected Services** (`GET /api/security/services`) — live reachability + a direct link for every sidecar: BentoPDF, SpiderFoot, OpenSearch, and Ollama (each published on `127.0.0.1` — see Quick Start's Hybrid mode section), plus the Kali toolchain's exec API shown as internal-only (it accepts arbitrary command execution and is never exposed to a browser, not even on loopback). Reachability is checked server-side against each service's internal container address, so this never needs a browser-side CORS probe.
 
 Every write goes through the same MCP server module's `call_tool()` the chat/MCP-tool path already uses — one validation path, not a second one reimplemented for the REST route. Each section/tab is read via direct import of its MCP server module rather than the MCP text-tool interface, and is independently best-effort — one source failing (e.g. OpenSearch or the toolchain sidecar unreachable) surfaces as an `error` field on just that section, never a 500 for the whole page.
 
@@ -564,7 +565,7 @@ Active tools in this repo can cause significant impact on target systems. Before
 2. Understand the rules of engagement.
 3. Use `passive` SpiderFoot use case for external targets unless active probing is explicitly authorized.
 
-Keep Chiron's auth enabled. Do not expose the SpiderFoot port (5001) or toolchain container ports to the public internet — both are internal-network only by default. BentoPDF is bound to `127.0.0.1:3000` and processes all files client-side — no document content passes through the container.
+Keep Chiron's auth enabled. SpiderFoot (`127.0.0.1:5001`), OpenSearch (`127.0.0.1:9200`), and BentoPDF (`127.0.0.1:3000`) are all bound to loopback only — reachable from the Security Hub's Connected Services panel on this machine, never from the network. The toolchain container's exec API is never published at all (not even to loopback) — it accepts arbitrary command execution and is reachable only from other containers on the internal network. Do not change any of these to `0.0.0.0` for a network-exposed deployment. BentoPDF also processes all files client-side — no document content passes through the container regardless.
 
 - Keep `AUTH_ENABLED=true` for any network-accessible deployment.
 - Keep `LOCALHOST_BYPASS=false` outside local development.

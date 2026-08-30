@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chiron — Security Hub</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath%20d='M16%203%20L27%208%20V16%20C27%2023%2022%2027.5%2016%2029%20C10%2027.5%205%2023%205%2016%20V8%20Z'%20fill='%23e5484d'/%3E%3C/svg%3E">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+<meta name="theme-color" content="#0a0d12">
+<script nonce="{{CSP_NONCE}}">
+// First-paint theme sync -- mirrors index.html's early bootstrap so this
+// page doesn't flash the default palette before theme.js loads. Only the
+// tokens this page's own CSS actually reads (favicon color aside, which it
+// shares with every other page).
+(function(){
+  try {
+    var t = JSON.parse(localStorage.getItem('odysseus-theme'));
+    if (t && t.colors) {
+      var s = document.documentElement.style;
+      var c = t.colors;
+      s.setProperty('--bg', c.bg);
+      s.setProperty('--fg', c.fg);
+      s.setProperty('--panel', c.panel);
+      s.setProperty('--border', c.border);
+      if (c.red) s.setProperty('--red', c.red);
+      var mtc = document.querySelector('meta[name="theme-color"]');
+      if (mtc && c.bg) mtc.setAttribute('content', c.bg);
+    }
+  } catch (e) {}
+})();
+</script>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  /* Page-level chrome only -- every component below this (.sec-*, .admin-tab,
+     .sec-hub-*) comes from style.css so this page stays visually identical
+     to the rest of the app instead of drifting its own copy of the design
+     system, the way login.html has to (login.html runs pre-auth and
+     deliberately avoids loading the full stylesheet). */
+  body {
+    margin: 0;
+    min-height: 100vh;
+    min-height: 100dvh;
+    background: var(--bg);
+    color: var(--fg);
+    display: flex;
+    flex-direction: column;
+  }
+  .hub-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .hub-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-display, 'Chakra Petch', sans-serif);
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--red);
+  }
+  .hub-brand svg { flex-shrink: 0; }
+  .hub-brand .hub-title-sep {
+    color: var(--fg-muted);
+    font-weight: 400;
+    margin: 0 2px;
+  }
+  .hub-brand .hub-title-rest {
+    color: var(--fg);
+  }
+  .hub-header-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 12.5px;
+    color: var(--fg-muted);
+  }
+  .hub-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--fg-muted);
+    text-decoration: none;
+    font-family: var(--font-family, 'IBM Plex Mono', monospace);
+    font-size: 12.5px;
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    transition: color 0.1s, border-color 0.1s;
+  }
+  .hub-back:hover { color: var(--fg); border-color: var(--fg-muted); }
+  .hub-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    overflow-x: auto;
+  }
+  .hub-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 20px;
+    max-width: 1100px;
+    width: 100%;
+    margin: 0 auto;
+    box-sizing: border-box;
+  }
+  @media (max-width: 640px) {
+    .hub-header-right span.hub-username { display: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="hub-header">
+    <div class="hub-brand">
+      <svg width="20" height="20" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><path d="M16 3 L27 8 V16 C27 23 22 27.5 16 29 C10 27.5 5 23 5 16 V8 Z" fill="currentColor"/></svg>
+      <span>Chiron<span class="hub-title-sep">·</span><span class="hub-title-rest">Security Hub</span></span>
+    </div>
+    <div class="hub-header-right">
+      <span class="hub-username" id="hub-username"></span>
+      <a class="hub-back" href="/">&larr; Back to Chat</a>
+    </div>
+  </div>
+  <div class="hub-tabs" id="hub-tabs">
+    <button class="admin-tab active" data-sec-tab="overview">Overview</button>
+    <button class="admin-tab" data-sec-tab="engagements">Engagements</button>
+    <button class="admin-tab" data-sec-tab="watchlist">Watchlist</button>
+    <button class="admin-tab" data-sec-tab="rules">Rules</button>
+    <button class="admin-tab" data-sec-tab="services">Connected Services</button>
+  </div>
+  <div class="hub-body" id="hub-body"></div>
+
+  <script type="module" nonce="{{CSP_NONCE}}">
+    import { initSecurityHub } from '/static/js/securityHub.js';
+    initSecurityHub();
+
+    // Best-effort username display -- this page is already admin-gated
+    // server-side (AuthMiddleware), so a failure here just leaves the
+    // header blank rather than blocking anything.
+    fetch('/api/auth/status', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        const el = document.getElementById('hub-username');
+        if (el && d && d.username) el.textContent = d.username;
+      })
+      .catch(() => {});
+  </script>
+</body>
+</html>

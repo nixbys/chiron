@@ -1,27 +1,21 @@
 /**
- * Security Hub Module — the security MCP servers' aggregated state
- * (Overview tab, routes/security_dashboard_routes.py's /dashboard) plus
- * management sub-panels for engagements, the watchlist, and Sigma/YARA
- * rules (Phase 2.4) -- a way to browse/manage these from the web UI
- * instead of only via chat/MCP tools.
+ * Security Hub — standalone page (static/security.html), not a modal.
  *
- * Uses the shared `.sec-*` component primitives (stat tiles, severity
- * badges, timeline rows -- see style.css's "Security UI primitives"
- * section, Phase 2.2) and the site's existing `.admin-tab` tab-bar
- * component (same one the theme picker's Themes/Customize tabs use)
- * rather than inventing a new tab style for this one modal.
+ * This is the full-page evolution of the old securityDashboard.js modal:
+ * same tabs (Overview/Engagements/Watchlist/Rules), same `.sec-*`/
+ * `.sec-hub-*` component primitives, same REST endpoints under
+ * /api/security/ -- only the chrome changed (a real page instead of a
+ * floating dialog), plus a new Connected Services tab linking out to the
+ * sidecar services (BentoPDF, SpiderFoot, OpenSearch, Ollama, the Kali
+ * toolchain) that previously had no path into the UI at all.
  *
- * Every write (create/close an engagement, add/remove/pause a watchlist
- * entry) goes through the same admin-gated REST endpoints that call
- * straight into the MCP server modules' own call_tool() -- there is no
- * separate write path here, just a UI on top of the one that already
- * existed for chat/MCP.
+ * Every write still goes through the same admin-gated REST endpoints that
+ * call straight into the MCP server modules' own call_tool() -- see
+ * routes/security_dashboard_routes.py's module docstring.
  */
 
 const API_BASE = window.location.origin;
 
-let _open = false;
-let _modal = null;
 let _activeTab = 'overview';
 
 // Per-tab cached state, so switching tabs doesn't lose an in-progress
@@ -30,51 +24,8 @@ const _state = {
   engagements: { list: null, expandedId: null, detail: null, formOpen: false },
   watchlist: { list: null, formOpen: false },
   rules: { sigma: null, yara: null, viewing: null, content: null },
+  services: { list: null },
 };
-
-// ── Modal (same lazy-singleton pattern as calendar.js's _getModal) ──
-
-function _getModal() {
-  if (_modal) return _modal;
-  _modal = document.createElement('div');
-  _modal.id = 'security-dashboard-modal';
-  _modal.className = 'modal';
-  _modal.style.display = 'none';
-  _modal.innerHTML = `
-    <div class="modal-content" style="max-width:960px;width:92vw;max-height:85vh;display:flex;flex-direction:column;">
-      <div class="modal-header">
-        <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg>Security Hub</h4>
-        <button class="close-btn" id="secdash-close">&#x2715;</button>
-      </div>
-      <div style="display:flex;gap:2px;padding:0 16px;border-bottom:1px solid var(--border);flex-shrink:0;">
-        <button class="admin-tab active" data-sec-tab="overview">Overview</button>
-        <button class="admin-tab" data-sec-tab="engagements">Engagements</button>
-        <button class="admin-tab" data-sec-tab="watchlist">Watchlist</button>
-        <button class="admin-tab" data-sec-tab="rules">Rules</button>
-      </div>
-      <div class="modal-body" id="secdash-body" style="overflow-y:auto;padding:16px;"></div>
-    </div>`;
-  document.body.appendChild(_modal);
-  _modal.querySelector('#secdash-close').addEventListener('click', closeSecurityDashboard);
-  _modal.addEventListener('click', (e) => { if (e.target === _modal) closeSecurityDashboard(); });
-  _modal.querySelectorAll('[data-sec-tab]').forEach((btn) => {
-    btn.addEventListener('click', () => _switchTab(btn.dataset.secTab));
-  });
-  // One delegated listener for every interactive control rendered inside
-  // the body -- panels are fully re-rendered (innerHTML replaced) on every
-  // state change, so per-element listeners would need re-binding each time.
-  _modal.querySelector('#secdash-body').addEventListener('click', _onBodyClick);
-  _modal.querySelector('#secdash-body').addEventListener('submit', _onBodySubmit);
-  return _modal;
-}
-
-function _switchTab(tab) {
-  _activeTab = tab;
-  _modal.querySelectorAll('[data-sec-tab]').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.secTab === tab);
-  });
-  _loadActiveTab();
-}
 
 // ── Shared render helpers ──
 
@@ -103,7 +54,11 @@ function _smallBtn(label, action, id, extraAttrs) {
   return `<button type="button" class="sec-hub-btn" data-action="${_escape(action)}" data-id="${_escape(id)}" ${extraAttrs || ''}>${_escape(label)}</button>`;
 }
 
-// ── Overview tab (unchanged from the v1 dashboard) ──
+function _body() {
+  return document.getElementById('hub-body');
+}
+
+// ── Overview tab ──
 
 const _SEV_BADGE_CLASS = {
   critical: 'sec-badge-critical', high: 'sec-badge-high', medium: 'sec-badge-medium',
@@ -163,10 +118,6 @@ function _renderScanDrift(section) {
   const rows = diffs.map(d => {
     const when = d.ts ? new Date(d.ts * 1000).toLocaleString() : '';
     const addedN = (d.added || []).length, removedN = (d.removed || []).length;
-    // Dot color carries what kind of change this was: something newly
-    // present (blue, detection-relevant) vs. something that disappeared
-    // (crimson) -- if both, added takes priority since a new item is
-    // usually the more actionable half.
     const dotClass = addedN > 0 ? 'sec-blue' : (removedN > 0 ? 'sec-crimson' : 'sec-muted');
     return `
       <div class="sec-tl-row">
@@ -199,7 +150,7 @@ function _renderHostTelemetry(section) {
 }
 
 function _renderOverview(data) {
-  const el = document.getElementById('secdash-body');
+  const el = _body();
   if (!el) return;
   const findings = data.findings || {};
   const watchlist = data.watchlist || {};
@@ -215,7 +166,7 @@ function _renderOverview(data) {
 }
 
 async function _loadOverview() {
-  const el = document.getElementById('secdash-body');
+  const el = _body();
   if (!el) return;
   el.innerHTML = '<div style="font-size:12px;opacity:0.7;padding:8px 0;">Loading…</div>';
   try {
@@ -281,7 +232,7 @@ function _renderEngagementForm() {
 }
 
 function _renderEngagements() {
-  const el = document.getElementById('secdash-body');
+  const el = _body();
   if (!el) return;
   const list = _state.engagements.list;
   if (list == null) {
@@ -303,7 +254,7 @@ async function _loadEngagements() {
     _state.engagements.list = data.list || [];
   } catch (err) {
     _state.engagements.list = [];
-    const el = document.getElementById('secdash-body');
+    const el = _body();
     if (el) el.innerHTML = _errorLine(err.message || String(err));
     return;
   }
@@ -359,7 +310,7 @@ function _renderWatchlistForm() {
 }
 
 function _renderWatchlistTab() {
-  const el = document.getElementById('secdash-body');
+  const el = _body();
   if (!el) return;
   const list = _state.watchlist.list;
   if (list == null) {
@@ -381,7 +332,7 @@ async function _loadWatchlistTab() {
     _state.watchlist.list = data.list || [];
   } catch (err) {
     _state.watchlist.list = [];
-    const el = document.getElementById('secdash-body');
+    const el = _body();
     if (el) el.innerHTML = _errorLine(err.message || String(err));
     return;
   }
@@ -403,7 +354,7 @@ function _ruleListColumn(title, kind, names, error) {
 }
 
 function _renderRulesTab() {
-  const el = document.getElementById('secdash-body');
+  const el = _body();
   if (!el) return;
   const { sigma, yara, viewing, content } = _state.rules;
   if (sigma == null || yara == null) {
@@ -413,7 +364,7 @@ function _renderRulesTab() {
   const viewerHtml = viewing
     ? `<div style="margin-top:14px;">
          <div style="font-family:var(--font-family,'IBM Plex Mono',monospace);font-size:10.5px;text-transform:uppercase;letter-spacing:0.06em;color:var(--fg-muted);margin-bottom:6px;">${_escape(viewing.kind)} / ${_escape(viewing.name)}</div>
-         <pre style="background:var(--panel-alt);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;font-size:11.5px;overflow-x:auto;max-height:260px;white-space:pre-wrap;word-break:break-word;">${_escape(content == null ? 'Loading…' : content)}</pre>
+         <pre style="background:var(--panel-alt);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;font-size:11.5px;overflow-x:auto;max-height:400px;white-space:pre-wrap;word-break:break-word;">${_escape(content == null ? 'Loading…' : content)}</pre>
        </div>`
     : '';
   el.innerHTML = `
@@ -461,6 +412,58 @@ async function _loadRuleContent(kind, name) {
   _renderRulesTab();
 }
 
+// ── Connected Services tab ──
+
+function _serviceCard(svc) {
+  const dotClass = svc.reachable ? 'sec-blue' : 'sec-crimson';
+  const statusText = svc.reachable ? 'Reachable' : 'Unreachable';
+  const openBtn = svc.browser_url
+    ? `<a class="sec-hub-btn sec-hub-btn-primary" href="${_escape(svc.browser_url)}" target="_blank" rel="noopener noreferrer">Open &nearr;</a>`
+    : `<span class="sec-badge" style="border-color:var(--border);color:var(--fg-muted);">internal only</span>`;
+  return `
+    <div style="border:1px solid var(--border);border-radius:var(--radius-md);padding:14px;display:flex;flex-direction:column;gap:8px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div style="font-family:var(--font-display,'Chakra Petch',sans-serif);font-size:15px;font-weight:600;">${_escape(svc.label)}</div>
+        <span class="sec-tl-dot ${dotClass}" title="${_escape(statusText)}" style="justify-self:auto;"></span>
+      </div>
+      <div style="font-size:12px;color:var(--fg-muted);line-height:1.5;flex:1;">${_escape(svc.description)}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <span style="font-size:11px;color:var(--fg-muted);font-family:var(--font-family,'IBM Plex Mono',monospace);">${_escape(statusText)}</span>
+        ${openBtn}
+      </div>
+    </div>`;
+}
+
+function _renderServicesTab() {
+  const el = _body();
+  if (!el) return;
+  const list = _state.services.list;
+  if (list == null) {
+    el.innerHTML = '<div style="font-size:12px;opacity:0.7;padding:8px 0;">Loading…</div>';
+    return;
+  }
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;">
+      ${list.map(_serviceCard).join('')}
+    </div>`;
+}
+
+async function _loadServicesTab() {
+  _renderServicesTab();
+  try {
+    const res = await fetch(`${API_BASE}/api/security/services`, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    _state.services.list = data.services || [];
+  } catch (err) {
+    _state.services.list = [];
+    const el = _body();
+    if (el) el.innerHTML = _errorLine(err.message || String(err));
+    return;
+  }
+  _renderServicesTab();
+}
+
 // ── Tab dispatch ──
 
 function _loadActiveTab() {
@@ -468,9 +471,18 @@ function _loadActiveTab() {
   if (_activeTab === 'engagements') return _loadEngagements();
   if (_activeTab === 'watchlist') return _loadWatchlistTab();
   if (_activeTab === 'rules') return _loadRulesTab();
+  if (_activeTab === 'services') return _loadServicesTab();
 }
 
-// ── Event delegation for actions inside #secdash-body ──
+function _switchTab(tab) {
+  _activeTab = tab;
+  document.querySelectorAll('#hub-tabs [data-sec-tab]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.secTab === tab);
+  });
+  _loadActiveTab();
+}
+
+// ── Event delegation for actions inside #hub-body ──
 
 async function _onBodyClick(e) {
   const target = e.target.closest('[data-action]');
@@ -551,20 +563,16 @@ async function _onBodySubmit(e) {
 
 // ── Public API ──
 
-export function isSecurityDashboardOpen() {
-  return _open;
-}
-
-export function openSecurityDashboard() {
-  const modal = _getModal();
-  modal.style.display = 'flex';
-  _open = true;
+export function initSecurityHub() {
+  document.querySelectorAll('#hub-tabs [data-sec-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => _switchTab(btn.dataset.secTab));
+  });
+  const body = _body();
+  if (body) {
+    body.addEventListener('click', _onBodyClick);
+    body.addEventListener('submit', _onBodySubmit);
+  }
   _loadActiveTab();
 }
 
-export function closeSecurityDashboard() {
-  if (_modal) _modal.style.display = 'none';
-  _open = false;
-}
-
-export default { openSecurityDashboard, closeSecurityDashboard, isSecurityDashboardOpen };
+export default { initSecurityHub };

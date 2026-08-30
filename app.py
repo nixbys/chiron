@@ -950,6 +950,14 @@ async def serve_tasks(request: Request):
 async def serve_library(request: Request):
     return await serve_index(request)
 
+@app.get("/security")
+async def serve_security_hub(request: Request):
+    """Security Hub -- a genuinely standalone page (like /login), not a
+    deep link into the chat SPA's modal system the way /notes, /calendar,
+    etc. above are. Admin-gated automatically by AuthMiddleware, same as
+    every other non-exempt path -- no extra check needed here."""
+    return serve_html_with_nonce(request, abs_join(BASE_DIR, "static/security.html"))
+
 @app.get("/backgrounds")
 async def serve_backgrounds(request: Request):
     """Sandbox page for prototyping background effects. No auth required."""
