@@ -48,9 +48,11 @@ ALLOWED_BINARIES = frozenset({
     # Misc utilities the sidecar exposes
     "trivy", "jq", "git", "unzip", "7z",
     # Base coreutils/grep the MCP servers shell out to directly (yara_server's
-    # rule-file writes, exploit_server's local Metasploit module grep) —
-    # always present on the base image, not separately apt-installed.
-    "ls", "mkdir", "tee", "grep",
+    # rule-file writes/reads/listing, exploit_server's local Metasploit
+    # module grep) — always present on the base image, not separately
+    # apt-installed. No general-purpose shell (sh/bash) is ever allowed here
+    # — MCP servers must call one of these directly, not chain commands.
+    "ls", "mkdir", "tee", "grep", "cat",
 })
 
 _log_path = Path(os.environ.get("EXEC_LOG_FILE", "/var/log/exec_api.jsonl"))
