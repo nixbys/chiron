@@ -57,11 +57,26 @@ Update this file at the end of every phase/checkpoint, same discipline as `CHANG
       `swift/odysseus-mlx-image-bridge` path references, the `X-Odysseus-Run-Id` wire header).
 - [x] **Phase 2.4 — Security Hub UI.** The security dashboard is now a tabbed Security Hub —
       Overview (unchanged) plus Engagements (browse/expand/create/close), Watchlist
-      (browse/add/pause/resume/remove), and Rules (browse + view raw content for stored
-      Sigma rules and YARA rule names). Every write goes through the same MCP server
-      module's `call_tool()` the chat/MCP-tool path already used, not a second write path.
-      See `CHANGELOG.md`'s Unreleased section for the full list of new structured-read
-      helpers each `mcp_servers/*.py` module gained.
+      (browse/add/pause/resume/remove), Rules (browse + view raw content for stored Sigma
+      rules and YARA rule names), and Connected Services (below). Every write goes through
+      the same MCP server module's `call_tool()` the chat/MCP-tool path already used, not a
+      second write path. See `CHANGELOG.md`'s Unreleased section for the full list of new
+      structured-read helpers each `mcp_servers/*.py` module gained.
+- [x] **Phase 2.4 follow-up — Security Hub is a standalone page, plus real sidecar access.**
+      Converted from a modal to a real page at `/security` (`static/security.html` +
+      `static/js/securityHub.js`) — every other sidebar tool deep-links into the chat SPA's
+      modal system, but this gets its own page shell instead, matching how `/login` is a
+      standalone page rather than another modal. New Connected Services tab
+      (`GET /api/security/services`) links directly to BentoPDF and SpiderFoot (now
+      published on `127.0.0.1`, alongside the already-loopback-bound OpenSearch/Ollama) with
+      live server-side-probed reachability; the toolchain's exec API is shown status-only,
+      never a clickable link (arbitrary command execution surface). Bringing the full
+      containerized stack up for real (not the native-Python shortcut used for most UI work)
+      surfaced and fixed 5 real bugs that had never been exercised before — toolchain
+      tool-install URLs, OpenSearch's startup password validation, a `findings_server.py`
+      crash on its own steady-state `HEAD` check, and two `yara_server.py` calls that used
+      binaries the toolchain's own exec-API allowlist didn't permit. Full details in
+      `CHANGELOG.md`'s Unreleased section.
 
 ## Near-Term
 
