@@ -1,0 +1,200 @@
+"""
+audit_server.py
+
+Read-only MCP server over the toolchain invocation audit trail that
+mcp_servers/common.py's exec_in_toolchain() writes to on every single call
+(see that module's "_log_invocation"/"_check_rate_limit" for the write
+side and the rate-limit check that shares the same table). Findings
+persistence (findings_server.py) already covers *results* -- this covers
+*actions*: what actually ran, against what, when, and how it turned out.
+
+Duplicates common.py's own audit.db connection logic rather than importing
+it -- MCP servers in this fork are standalone subprocesses and never
+import each other (common.py is a shared *utility* module, not an MCP
+server, so it's the one thing every server already imports directly; this
+server just happens to read the same SQLite file that utility writes to).
+"""
+
+import asyncio
+import json
+import os
+import sqlite3
+import sys
+import time
+from pathlib import Path
+
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import TextContent, Tool
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from mcp_servers.common import mcp_error
+
+server = Server("audit")
+
+_DATA_DIR = Path(os.environ.get("ODYSSEUS_DATA_DIR", "./data"))
+_DB_PATH = _DATA_DIR / "audit.db"
+
+_OUTCOMES = ("ok", "error", "timeout", "rate_limited")
+
+_db_initialized = False
+
+
+def _get_db() -> sqlite3.Connection:
+    global _db_initialized
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(_DB_PATH), timeout=10)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    if not _db_initialized:
+        # Same table common.py's _get_audit_db() creates -- CREATE TABLE IF
+        # NOT EXISTS here too so this server works standalone (e.g. before
+        # any tool has ever run yet) rather than assuming common.py's
+        # process created the file first.
+        with conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tool_invocations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts REAL NOT NULL,
+                    binary TEXT NOT NULL,
+                    args TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    duration_ms INTEGER,
+                    outcome TEXT NOT NULL,
+                    detail TEXT DEFAULT ''
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_binary_ts ON tool_invocations(binary, ts);")
+        _db_initialized = True
+    return conn
+
+
+def _list_invocations(binary: str | None = None, outcome: str | None = None, limit: int = 50) -> list[dict]:
+    """Structured (not text-table) invocation list, for direct import by
+    the security dashboard's Audit Log tab."""
+    conn = _get_db()
+    try:
+        query = "SELECT id, ts, binary, args, mode, duration_ms, outcome, detail FROM tool_invocations WHERE 1=1"
+        params: list = []
+        if binary:
+            query += " AND binary=?"
+            params.append(binary)
+        if outcome:
+            query += " AND outcome=?"
+            params.append(outcome)
+        query += " ORDER BY ts DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["args"] = json.loads(d["args"])
+            except (json.JSONDecodeError, TypeError):
+                pass  # truncated by _MAX_LOGGED_ARG_LEN -- leave as the raw (partial) string
+            out.append(d)
+        return out
+    finally:
+        conn.close()
+
+
+def _stats(window_s: int = 86400) -> dict:
+    """Counts by binary and by outcome over the trailing window, for direct
+    import by the security dashboard's Audit Log tab summary row."""
+    conn = _get_db()
+    try:
+        since = time.time() - window_s
+        by_binary = conn.execute(
+            "SELECT binary, COUNT(*) AS n FROM tool_invocations WHERE ts>? GROUP BY binary ORDER BY n DESC",
+            (since,),
+        ).fetchall()
+        by_outcome = conn.execute(
+            "SELECT outcome, COUNT(*) AS n FROM tool_invocations WHERE ts>? GROUP BY outcome",
+            (since,),
+        ).fetchall()
+        total = conn.execute("SELECT COUNT(*) AS n FROM tool_invocations WHERE ts>?", (since,)).fetchone()["n"]
+        return {
+            "total": total,
+            "by_binary": [dict(r) for r in by_binary],
+            "by_outcome": [dict(r) for r in by_outcome],
+        }
+    finally:
+        conn.close()
+
+
+TOOLS = [
+    Tool(
+        name="audit_list",
+        description="List recent toolchain invocations (what ran, against what, when, how it turned out), optionally filtered by binary or outcome.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "binary": {"type": "string", "description": "e.g. 'nmap', 'sqlmap' -- omit for all"},
+                "outcome": {"type": "string", "enum": list(_OUTCOMES)},
+                "limit": {"type": "integer", "default": 50},
+            },
+        },
+    ),
+    Tool(
+        name="audit_stats",
+        description="Summarize toolchain invocation counts by binary and by outcome over a trailing time window (default 24h).",
+        inputSchema={
+            "type": "object",
+            "properties": {"window_hours": {"type": "number", "default": 24}},
+        },
+    ),
+]
+
+
+@server.list_tools()
+async def list_tools() -> list[Tool]:
+    return TOOLS
+
+
+@server.call_tool()
+async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    try:
+        if name == "audit_list":
+            rows = _list_invocations(
+                binary=arguments.get("binary"),
+                outcome=arguments.get("outcome"),
+                limit=arguments.get("limit", 50),
+            )
+            if not rows:
+                result = "No invocations recorded yet."
+            else:
+                lines = [f"{'Time':<17} {'Binary':<14} {'Mode':<10} {'Outcome':<13} {'ms':<7} Args"]
+                lines.append("-" * 100)
+                for r in rows:
+                    stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["ts"]))
+                    args = r["args"] if isinstance(r["args"], str) else " ".join(str(a) for a in r["args"])
+                    dur = str(r["duration_ms"]) if r["duration_ms"] is not None else "-"
+                    lines.append(f"{stamp:<17} {r['binary']:<14} {r['mode']:<10} {r['outcome']:<13} {dur:<7} {args}")
+                result = "\n".join(lines)
+
+        elif name == "audit_stats":
+            window_s = int(float(arguments.get("window_hours", 24)) * 3600)
+            stats = _stats(window_s)
+            if stats["total"] == 0:
+                result = "No invocations recorded in this window."
+            else:
+                by_binary = ", ".join(f"{r['binary']}={r['n']}" for r in stats["by_binary"])
+                by_outcome = ", ".join(f"{r['outcome']}={r['n']}" for r in stats["by_outcome"])
+                result = f"Total: {stats['total']}\nBy binary: {by_binary}\nBy outcome: {by_outcome}"
+
+        else:
+            result = mcp_error("unknown_tool", name)
+
+    except Exception as exc:  # noqa: BLE001
+        result = mcp_error("db_error", str(exc))
+
+    return [TextContent(type="text", text=result)]
+
+
+async def main() -> None:
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(read_stream, write_stream, server.create_initialization_options())
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

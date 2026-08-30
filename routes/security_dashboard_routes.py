@@ -150,6 +150,12 @@ _CONNECTED_SERVICES = [
         "probe_url": "http://odysseus-bentopdf:8080/", "has_ui": True,
     },
     {
+        "id": "cyberchef", "label": "CyberChef",
+        "description": "Manual data-transformation workbench — decode/encode/hash/beautify by hand.",
+        "browser_url": "http://localhost:8000",
+        "probe_url": "http://odysseus-cyberchef:8000/", "has_ui": True,
+    },
+    {
         "id": "spiderfoot", "label": "SpiderFoot",
         "description": "Correlated OSINT scanning — 200+ modules.",
         "browser_url": "http://localhost:5001",
@@ -387,5 +393,23 @@ def setup_security_dashboard_routes():
 
         results = await asyncio.gather(*[_check(s) for s in _CONNECTED_SERVICES])
         return {"services": results}
+
+    # ---- Audit Log ----------------------------------------------------
+
+    @router.get("/audit")
+    async def list_audit_log(request: Request, binary: str | None = None, outcome: str | None = None, limit: int = 100):
+        require_admin(request)
+        import mcp_servers.audit_server as mod
+        limit = max(1, min(limit, 500))
+        # Sequential, not asyncio.gather -- both hit audit_server.py's own
+        # lazily-initialized SQLite file (_get_db()'s CREATE TABLE IF NOT
+        # EXISTS runs once, guarded by a plain bool flag, same pattern
+        # every other mcp_servers/*.py store uses). Running them
+        # concurrently on the very first request (nothing has written to
+        # audit.db yet) raced two threads through that one-time schema
+        # setup and hit a real "database is locked" 500 in practice.
+        invocations = await asyncio.to_thread(mod._list_invocations, binary, outcome, limit)
+        stats = await asyncio.to_thread(mod._stats, 86400)
+        return {"invocations": invocations, "stats": stats}
 
     return router
