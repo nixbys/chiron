@@ -1,5 +1,7 @@
-"""Unit tests for mcp_servers/common.py's local/container exec-mode branching."""
+"""Unit tests for mcp_servers/common.py's local/container exec-mode branching,
+audit trail, and rate limiting."""
 
+import importlib
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +12,20 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from mcp_servers import common
+
+
+@pytest.fixture
+def audit_env(tmp_path, monkeypatch):
+    """Isolated ODYSSEUS_DATA_DIR + a reload so common.py's module-level
+    _DATA_DIR/_AUDIT_DB_PATH constants (and the _audit_db_initialized flag)
+    pick up the fresh path -- same pattern engagement_server.py's/
+    watchlist_server.py's own tests already use."""
+    monkeypatch.setenv("ODYSSEUS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TOOLCHAIN_RATE_LIMIT_WINDOW", "60")
+    monkeypatch.setenv("TOOLCHAIN_RATE_LIMIT", "20")
+    monkeypatch.delenv("TOOLCHAIN_RATE_LIMIT_NMAP", raising=False)
+    importlib.reload(common)
+    yield common
 
 
 def test_resolve_exec_mode_defaults_to_container(monkeypatch):
@@ -87,3 +103,113 @@ def test_exec_in_toolchain_dispatches_to_local_when_selected(mock_container, moc
     assert result == "local output"
     mock_local.assert_called_once()
     mock_container.assert_not_called()
+
+
+# ---- Audit trail ------------------------------------------------------------
+
+
+def test_exec_in_toolchain_logs_successful_invocation(audit_env):
+    with patch.object(audit_env, "_exec_container", return_value="22/tcp open ssh"):
+        audit_env.exec_in_toolchain(["nmap", "-sV", "10.0.0.5"])
+    conn = audit_env._get_audit_db()
+    row = conn.execute("SELECT * FROM tool_invocations WHERE binary='nmap'").fetchone()
+    conn.close()
+    assert row is not None
+    assert row["outcome"] == "ok"
+    assert row["mode"] == "container"
+    assert "10.0.0.5" in row["args"]
+    assert row["duration_ms"] is not None
+
+
+def test_exec_in_toolchain_logs_error_outcome(audit_env):
+    with patch.object(audit_env, "_exec_container", return_value="[error:network] connection refused"):
+        audit_env.exec_in_toolchain(["nikto", "-h", "10.0.0.5"])
+    conn = audit_env._get_audit_db()
+    row = conn.execute("SELECT * FROM tool_invocations WHERE binary='nikto'").fetchone()
+    conn.close()
+    assert row["outcome"] == "error"
+    assert "connection refused" in row["detail"]
+
+
+def test_exec_in_toolchain_logs_timeout_outcome(audit_env):
+    with patch.object(audit_env, "_exec_container", return_value="[error:timeout] Command exceeded 30s"):
+        audit_env.exec_in_toolchain(["sqlmap", "-u", "http://x"], timeout=30)
+    conn = audit_env._get_audit_db()
+    row = conn.execute("SELECT * FROM tool_invocations WHERE binary='sqlmap'").fetchone()
+    conn.close()
+    assert row["outcome"] == "timeout"
+
+
+def test_audit_log_write_failure_does_not_break_the_call(audit_env, monkeypatch):
+    """A logging bug must never break an actual scan."""
+    monkeypatch.setattr(audit_env, "_get_audit_db", MagicMock(side_effect=RuntimeError("disk full")))
+    with patch.object(audit_env, "_exec_container", return_value="real scan output"):
+        result = audit_env.exec_in_toolchain(["nmap", "10.0.0.5"])
+    assert result == "real scan output"
+
+
+# ---- Rate limiting -----------------------------------------------------------
+#
+# TOOLCHAIN_RATE_LIMIT/_WINDOW are read once into module-level constants at
+# import time (same as the pre-existing TOOLCHAIN_EXEC_MODE/_EXEC_MODE_DEFAULT
+# above) -- a long-running MCP server process doesn't need to notice an env
+# var changing mid-run. So these tests monkeypatch the frozen attributes
+# directly instead of the env var + reload, same as
+# test_resolve_exec_mode_defaults_to_container et al. already do for
+# _EXEC_MODE_DEFAULT. Only the per-binary override
+# (TOOLCHAIN_RATE_LIMIT_<BINARY>) is read fresh on every call, since that's
+# meant as a targeted, no-restart-needed dial -- see _rate_limit_for.
+
+
+def test_rate_limit_blocks_after_threshold(audit_env, monkeypatch):
+    monkeypatch.setattr(audit_env, "_RATE_LIMIT_DEFAULT", 2)
+    with patch.object(audit_env, "_exec_container", return_value="ok") as mock_exec:
+        assert "[error:" not in audit_env.exec_in_toolchain(["nmap", "10.0.0.5"])
+        assert "[error:" not in audit_env.exec_in_toolchain(["nmap", "10.0.0.6"])
+        third = audit_env.exec_in_toolchain(["nmap", "10.0.0.7"])
+    assert "[error:rate_limited]" in third
+    assert mock_exec.call_count == 2  # the third call never reached the real exec
+
+
+def test_rate_limit_is_per_binary(audit_env, monkeypatch):
+    monkeypatch.setattr(audit_env, "_RATE_LIMIT_DEFAULT", 1)
+    with patch.object(audit_env, "_exec_container", return_value="ok"):
+        assert "[error:" not in audit_env.exec_in_toolchain(["nmap", "10.0.0.5"])
+        # A different binary has its own independent budget.
+        assert "[error:" not in audit_env.exec_in_toolchain(["whois", "example.com"])
+        assert "[error:rate_limited]" in audit_env.exec_in_toolchain(["nmap", "10.0.0.6"])
+
+
+def test_rate_limit_per_binary_override(audit_env, monkeypatch):
+    monkeypatch.setattr(audit_env, "_RATE_LIMIT_DEFAULT", 20)
+    monkeypatch.setenv("TOOLCHAIN_RATE_LIMIT_NMAP", "1")
+    with patch.object(audit_env, "_exec_container", return_value="ok"):
+        assert "[error:" not in audit_env.exec_in_toolchain(["nmap", "10.0.0.5"])
+        assert "[error:rate_limited]" in audit_env.exec_in_toolchain(["nmap", "10.0.0.6"])
+
+
+def test_rate_limit_disabled_when_window_zero(audit_env, monkeypatch):
+    monkeypatch.setattr(audit_env, "_RATE_LIMIT_WINDOW_S", 0)
+    monkeypatch.setattr(audit_env, "_RATE_LIMIT_DEFAULT", 1)
+    with patch.object(audit_env, "_exec_container", return_value="ok"):
+        for _ in range(5):
+            assert "[error:" not in audit_env.exec_in_toolchain(["nmap", "10.0.0.5"])
+
+
+def test_rate_limited_call_is_itself_logged(audit_env, monkeypatch):
+    monkeypatch.setattr(audit_env, "_RATE_LIMIT_DEFAULT", 1)
+    with patch.object(audit_env, "_exec_container", return_value="ok"):
+        audit_env.exec_in_toolchain(["nmap", "10.0.0.5"])
+        audit_env.exec_in_toolchain(["nmap", "10.0.0.6"])
+    conn = audit_env._get_audit_db()
+    rows = conn.execute("SELECT outcome FROM tool_invocations WHERE binary='nmap' ORDER BY id").fetchall()
+    conn.close()
+    assert [r["outcome"] for r in rows] == ["ok", "rate_limited"]
+
+
+def test_rate_limit_check_fails_open_on_db_error(audit_env, monkeypatch):
+    monkeypatch.setattr(audit_env, "_RATE_LIMIT_DEFAULT", 1)
+    monkeypatch.setattr(audit_env, "_get_audit_db", MagicMock(side_effect=RuntimeError("disk full")))
+    with patch.object(audit_env, "_exec_container", return_value="ok"):
+        result = audit_env.exec_in_toolchain(["nmap", "10.0.0.5"])
+    assert result == "ok"

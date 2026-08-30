@@ -366,7 +366,7 @@ def test_list_connected_services_route_reports_reachability(monkeypatch):
     assert r.status_code == 200
     services = {s["id"]: s for s in r.json()["services"]}
 
-    assert set(services) == {"bentopdf", "spiderfoot", "opensearch", "ollama", "toolchain"}
+    assert set(services) == {"bentopdf", "cyberchef", "spiderfoot", "opensearch", "ollama", "toolchain"}
     assert services["bentopdf"]["reachable"] is True
     assert services["spiderfoot"]["reachable"] is False
     # probe_url is an internal implementation detail -- never leaked to the client.
@@ -381,7 +381,7 @@ def test_connected_services_toolchain_has_no_browser_url(monkeypatch):
     r = client.get("/api/security/services")
     services = {s["id"]: s for s in r.json()["services"]}
     assert services["toolchain"]["browser_url"] is None
-    for svc_id in ("bentopdf", "spiderfoot", "opensearch", "ollama"):
+    for svc_id in ("bentopdf", "cyberchef", "spiderfoot", "opensearch", "ollama"):
         assert services[svc_id]["browser_url"], f"{svc_id} should expose a browser_url"
 
 
@@ -389,3 +389,61 @@ def test_probe_service_handles_connection_failure():
     # No mocking -- a real request to a closed local port must return False,
     # not raise, so one unreachable sidecar can't break the whole panel.
     assert secdash._probe_service("http://127.0.0.1:1") is False
+
+
+# ---- Audit Log ---------------------------------------------------------------
+
+
+def test_list_audit_log_route_requires_admin(monkeypatch):
+    monkeypatch.setattr(secdash, "require_admin", _deny)
+    app = FastAPI()
+    app.include_router(secdash.setup_security_dashboard_routes())
+    client = TestClient(app, raise_server_exceptions=False)
+    r = client.get("/api/security/audit")
+    assert r.status_code == 403
+
+
+def test_list_audit_log_route_returns_invocations_and_stats(monkeypatch):
+    import mcp_servers.audit_server as audit_mod
+    rows = [{"id": 1, "binary": "nmap", "args": ["nmap", "10.0.0.5"], "outcome": "ok"}]
+    stats = {"total": 1, "by_binary": [{"binary": "nmap", "n": 1}], "by_outcome": [{"outcome": "ok", "n": 1}]}
+    monkeypatch.setattr(audit_mod, "_list_invocations", lambda binary, outcome, limit: rows)
+    monkeypatch.setattr(audit_mod, "_stats", lambda window_s: stats)
+    client = _hub_client(monkeypatch)
+    r = client.get("/api/security/audit")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["invocations"] == rows
+    assert body["stats"]["total"] == 1
+
+
+def test_list_audit_log_route_passes_filters_through(monkeypatch):
+    import mcp_servers.audit_server as audit_mod
+    seen = {}
+
+    def fake_list(binary, outcome, limit):
+        seen["args"] = (binary, outcome, limit)
+        return []
+
+    monkeypatch.setattr(audit_mod, "_list_invocations", fake_list)
+    monkeypatch.setattr(audit_mod, "_stats", lambda window_s: {"total": 0, "by_binary": [], "by_outcome": []})
+    client = _hub_client(monkeypatch)
+    r = client.get("/api/security/audit?binary=nmap&outcome=error&limit=10")
+    assert r.status_code == 200
+    assert seen["args"] == ("nmap", "error", 10)
+
+
+def test_list_audit_log_route_clamps_limit(monkeypatch):
+    import mcp_servers.audit_server as audit_mod
+    seen = {}
+
+    def fake_list(binary, outcome, limit):
+        seen["limit"] = limit
+        return []
+
+    monkeypatch.setattr(audit_mod, "_list_invocations", fake_list)
+    monkeypatch.setattr(audit_mod, "_stats", lambda window_s: {"total": 0, "by_binary": [], "by_outcome": []})
+    client = _hub_client(monkeypatch)
+    r = client.get("/api/security/audit?limit=5000")
+    assert r.status_code == 200
+    assert seen["limit"] == 500

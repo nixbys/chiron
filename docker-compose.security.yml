@@ -7,18 +7,20 @@
 #                 to the host — arbitrary command execution surface, internal-network only)
 #   spiderfoot  — SpiderFoot OSINT server; web UI + REST API at http://localhost:5001
 #   bentopdf    — BentoPDF client-side PDF toolkit; web UI at http://localhost:3000
+#   cyberchef   — manual data-transformation workbench; web UI at http://localhost:8000
 #   opensearch  — findings persistence index; REST API (no bundled Dashboards UI) at
 #                 http://localhost:9200
 #
-# spiderfoot/bentopdf/opensearch/ollama are all published on 127.0.0.1 only (never
-# 0.0.0.0 -- keep it that way for any network-exposed deployment) so the Security
-# Hub's Connected Services panel (static/security.html) can link straight to them.
+# spiderfoot/bentopdf/cyberchef/opensearch/ollama are all published on 127.0.0.1 only
+# (never 0.0.0.0 -- keep it that way for any network-exposed deployment) so the
+# Security Hub's Connected Services panel (static/security.html) can link straight
+# to them.
 #
-# toolchain, spiderfoot, bentopdf, and opensearch are each gated behind
+# toolchain, spiderfoot, bentopdf, cyberchef, and opensearch are each gated behind
 # TWO Compose profiles: the shared "sidecars" group (for
-# `--profile sidecars`, unchanged — starts all four, same as always) AND
+# `--profile sidecars`, unchanged — starts all five, same as always) AND
 # their own individual profile name ("toolchain", "spiderfoot",
-# "bentopdf", "opensearch"). This lets you skip just ONE of the four
+# "bentopdf", "cyberchef", "opensearch"). This lets you skip just ONE
 # instead of all-or-nothing: if you already have the underlying tool/
 # service installed on this machine (e.g. nmap on PATH, a native
 # SpiderFoot/OpenSearch install), pass only the profiles you still want,
@@ -140,6 +142,24 @@ services:
     hostname: odysseus-bentopdf
     ports:
       - "127.0.0.1:3000:8080"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  # ── CyberChef — manual data-transformation workbench ────────────────────
+  # A visual complement to transform_server's programmatic encode/decode/
+  # hash/regex tools -- the standard "decode this blob"/"beautify this JWT"
+  # workbench next to a Kali toolchain, for manual work an agent isn't
+  # driving. Pure static site (nginx serving a prebuilt SPA) -- no backend,
+  # no API keys, no state, so it carries none of the risk considerations
+  # the other sidecars do.
+  cyberchef:
+    profiles: ["sidecars", "cyberchef"]
+    image: docker.io/mpepping/cyberchef:latest
+    container_name: odysseus-cyberchef
+    hostname: odysseus-cyberchef
+    ports:
+      - "127.0.0.1:8000:8000"
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

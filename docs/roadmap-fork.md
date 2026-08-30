@@ -9,13 +9,15 @@ Update this file at the end of every phase/checkpoint, same discipline as `CHANG
 
 ## Current State
 
-- **20 security MCP servers** (recon, osint, intel, web_vuln, hashcrack, spiderfoot, pdf,
+- **21 security MCP servers** (recon, osint, intel, web_vuln, hashcrack, spiderfoot, pdf,
   yara, sigma, exploit, transform, asset, attck, risk, findings, engagement, watchlist,
-  monitor, host_telemetry, compliance), a Kali-based toolchain sidecar, SpiderFoot,
+  monitor, host_telemetry, compliance, audit), a Kali-based toolchain sidecar, SpiderFoot,
   OpenSearch-backed findings persistence, and BentoPDF — all wired through one detection
   pipeline (`docs/adr/007-security-detection-lifecycle.md`): every finding lands in
   `findings_server`/`asset_server`, every engagement gets one timeline, one event
-  (`security_finding_added`), one notification path (`dispatch_reminder`).
+  (`security_finding_added`), one notification path (`dispatch_reminder`). Every toolchain
+  invocation (not just findings) is also audited and rate-limited — see "Ideas, Not
+  Commitments" below, now shipped.
 - A from-scratch dark-first design system (Chakra Petch / IBM Plex Sans / IBM Plex Mono,
   the "Duality" blue/crimson palette, a sharper/flatter shape language) applied app-wide,
   not just the security surfaces.
@@ -77,26 +79,34 @@ Update this file at the end of every phase/checkpoint, same discipline as `CHANG
       crash on its own steady-state `HEAD` check, and two `yara_server.py` calls that used
       binaries the toolchain's own exec-API allowlist didn't permit. Full details in
       `CHANGELOG.md`'s Unreleased section.
+- [x] **Audit trail + rate limiting for toolchain invocations, plus a CyberChef sidecar.**
+      Both had been sitting in "Ideas, Not Commitments" below since Phase 2.4 — closed the
+      gap directly in `mcp_servers/common.py`'s `exec_in_toolchain()` (the one chokepoint
+      every red-team MCP server's calls pass through), so no changes were needed in any of
+      the other 20 server modules. New `audit_server.py` (21st security MCP server) is the
+      read side: `audit_list`/`audit_stats` tools, plus a new Audit Log tab in the Security
+      Hub (`GET /api/security/audit`). Rate limiting reuses the same audit table as its own
+      source of truth for a *global* per-binary limit across every MCP server process
+      (`TOOLCHAIN_RATE_LIMIT`/`_WINDOW`/`_<BINARY>` env vars). New
+      `scripts/register_fork_mcp_servers.py` registers all 21 fork servers against a running
+      instance in one shot (idempotent) — added after finding that a real, long-running
+      instance had only ever had the original 7 servers registered via Settings; Odysseus
+      has no static MCP config file by design, so this doesn't change that, it just closes
+      the "click through Settings 21 times" gap for a fresh install or a fork update.
+      CyberChef (`docker.io/mcoutinho/cyberchef` on `127.0.0.1:8000`, per the standing
+      "Connected Services" pattern) rounds out the manual-analyst-workflow story next to a
+      Kali toolchain. Full details in `CHANGELOG.md`'s Unreleased section.
 
 ## Near-Term
 
-Nothing currently queued — the 4-phase rebrand/redesign plan this doc was created to track
-is now fully shipped. See "Ideas, Not Commitments" below for what's next if this fork keeps
-growing.
+Nothing currently queued. See "Ideas, Not Commitments" below for what's next if this fork
+keeps growing.
 
 ## Ideas, Not Commitments
 
 Pulled from a standing gap audit and re-checked against the current codebase before being
 listed here, so this section doesn't rot into a wishlist of things already shipped:
 
-- **Structured audit logging for tool invocations.** Only one MCP server module currently
-  uses Python's `logging` module in any real way — there's no consistent "what ran, against
-  what target, when, by which engagement" trail across all 20 security servers. Findings
-  persistence covers *results*; this would cover *actions*, which matters more once this is
-  ever run somewhere with more than one operator.
-- **Rate limiting on MCP tool calls.** Nothing currently stops an agent loop from firing
-  `nmap`/`nuclei`/`sqlmap` back-to-back with no backoff. Low risk solo-operator, real risk if
-  this is ever pointed at infrastructure that isn't fully owned by the operator.
 - **STIX/TAXII threat-intel feed ingestion** into `intel_server`, beyond the existing
   on-demand Shodan/VirusTotal/OTX/Censys/CVE lookups — a standing feed instead of
   query-on-demand.

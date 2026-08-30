@@ -33,7 +33,8 @@
 
 Chiron layers a complete cybersecurity toolchain on top of a self-hosted AI workspace (see credit above). The base platform provides chat, agents, memory, deep research, documents, and MCP — this fork adds:
 
-- **20 cybersecurity MCP servers** wired to a Kali-based sidecar, SpiderFoot OSINT platform, OpenSearch, and BentoPDF
+- **21 cybersecurity MCP servers** wired to a Kali-based sidecar, SpiderFoot OSINT platform, OpenSearch, BentoPDF, and CyberChef
+- **Toolchain audit trail + rate limiting** — every scan/exploit/recon call is logged (what ran, against what, when, how it turned out) and throttled per-binary, both enforced at the one chokepoint every red-team MCP server's calls pass through
 - **Pre-built agent skill workflows** for reconnaissance, OSINT, incident response, threat hunting, malware analysis, web assessment, continuous monitoring, and reporting
 - **Continuous scanning** — schedule recon (ports/subdomains/TLS cert/CVEs) to re-run on a cron and only file a finding when something actually changed
 - **IOC watchlist** — persistent indicators re-checked against Shodan/VirusTotal/OTX/Censys, with a finding filed on any hit
@@ -362,17 +363,29 @@ The blue-team complement to `recon_server`'s offensive scanning — read-only in
 
 Backs the `host_monitor` scheduled-task action (`src/builtin_actions.py`): on a cron schedule, re-runs a configured subset of these checks and diffs each against the last stored snapshot (`monitor_server`), filing a finding + reminder only when something changed since the last run. Process-name churn from kernel worker threads (`kworker/N:M`, which the kernel renumbers constantly) is filtered out before diffing. Configure via the task's prompt as JSON, e.g. `{"checks": ["processes", "listening_ports", "users"], "engagement_id": "..."}` — defaults to `["processes", "listening_ports", "users"]`; `cron`/`packages` are opt-in and Linux-only.
 
+### `audit_server` — Toolchain Invocation Audit Trail
+
+| Tool | Description |
+|------|-------------|
+| `audit_list` | List recent toolchain invocations (what ran, against what, when, how it turned out), filterable by binary or outcome |
+| `audit_stats` | Summarize invocation counts by binary and by outcome over a trailing window (default 24h) |
+
+Findings persistence (`findings_server`) covers *results*; this covers *actions*. Every single `exec_in_toolchain()` call — the one chokepoint every red-team MCP server's tool calls pass through — is logged automatically by `mcp_servers/common.py` itself: binary, arguments, exec mode, duration, and outcome (`ok`/`error`/`timeout`/`rate_limited`). This server is the read side; nothing needs to call it to make logging happen. Same shared WAL-mode SQLite file (`$ODYSSEUS_DATA_DIR/audit.db`) also backs rate limiting — see below.
+
+**Rate limiting**: also enforced inside `exec_in_toolchain()`, using this same audit table as its own source of truth (a true cross-process limit, since every MCP server is a separate subprocess — an in-memory counter would only ever throttle one server's own calls). `TOOLCHAIN_RATE_LIMIT` caps invocations of any one binary per `TOOLCHAIN_RATE_LIMIT_WINDOW` seconds (defaults: 20 per 60s); `TOOLCHAIN_RATE_LIMIT_<BINARY>` overrides the cap for one binary specifically, same override shape as `TOOLCHAIN_EXEC_MODE_<BINARY>`. Set `TOOLCHAIN_RATE_LIMIT_WINDOW=0` to disable entirely. A rejected call returns `[error:rate_limited]` immediately (never reaches the toolchain) and is itself logged with that outcome, so it shows up in the Audit Log tab too.
+
 ---
 
 ## Security Hub
 
-Admin-only. A standalone page at `/security` (`static/security.html`, `static/js/securityHub.js`, routes under `routes/security_dashboard_routes.py`) — not a modal, opens from the sidebar/icon-rail "Security Hub" button like every other tool, but as a real page navigation rather than an overlay. Five tabs:
+Admin-only. A standalone page at `/security` (`static/security.html`, `static/js/securityHub.js`, routes under `routes/security_dashboard_routes.py`) — not a modal, opens from the sidebar/icon-rail "Security Hub" button like every other tool, but as a real page navigation rather than an overlay. Six tabs:
 
 - **Overview** (`GET /api/security/dashboard`) — a snapshot across the security MCP servers' own stores: findings summary (severity/status counts, the same aggregation `findings_server`'s `finding_stats` uses), active watchlist entries, recent scan drift across every scheduled task (`monitor_server`), the engagement list, and a host telemetry summary (process/listening-port/logged-in-user counts).
 - **Engagements** — browse, expand a row for scope + timeline detail, create, and close engagements.
 - **Watchlist** — browse, add, pause/resume, and remove IOC watchlist entries.
 - **Rules** — browse stored Sigma rules and YARA rule names (the latter via the toolchain sidecar), with a raw-content viewer for either.
-- **Connected Services** (`GET /api/security/services`) — live reachability + a direct link for every sidecar: BentoPDF, SpiderFoot, OpenSearch, and Ollama (each published on `127.0.0.1` — see Quick Start's Hybrid mode section), plus the Kali toolchain's exec API shown as internal-only (it accepts arbitrary command execution and is never exposed to a browser, not even on loopback). Reachability is checked server-side against each service's internal container address, so this never needs a browser-side CORS probe.
+- **Connected Services** (`GET /api/security/services`) — live reachability + a direct link for every sidecar: BentoPDF, CyberChef, SpiderFoot, OpenSearch, and Ollama (each published on `127.0.0.1` — see Quick Start's Hybrid mode section), plus the Kali toolchain's exec API shown as internal-only (it accepts arbitrary command execution and is never exposed to a browser, not even on loopback). Reachability is checked server-side against each service's internal container address, so this never needs a browser-side CORS probe.
+- **Audit Log** (`GET /api/security/audit`) — every toolchain invocation (`audit_server`, see above), filterable by binary/outcome, with a 24h summary row.
 
 Every write goes through the same MCP server module's `call_tool()` the chat/MCP-tool path already uses — one validation path, not a second one reimplemented for the REST route. Each section/tab is read via direct import of its MCP server module rather than the MCP text-tool interface, and is independently best-effort — one source failing (e.g. OpenSearch or the toolchain sidecar unreachable) surfaces as an `error` field on just that section, never a 500 for the whole page.
 
@@ -449,16 +462,22 @@ CENSYS_API_SECRET=
 OPENSEARCH_URL=http://opensearch:9200
 OPENSEARCH_USER=admin
 OPENSEARCH_PASSWORD=admin
+
+# Toolchain rate limiting (mcp_servers/common.py) — see audit_server above
+TOOLCHAIN_RATE_LIMIT=20            # max invocations of one binary per window
+TOOLCHAIN_RATE_LIMIT_WINDOW=60     # window in seconds; 0 disables rate limiting
+# TOOLCHAIN_RATE_LIMIT_NMAP=5      # optional per-binary override
 ```
 
 All base-platform options (model endpoints, auth, HTTPS, RAG, GPU) are documented in the upstream [setup guide](docs/setup.md). See `.env.example` for the complete annotated reference.
 
 ### Hybrid / local-tools mode
 
-By default, `docker-compose.security.yml`'s `toolchain`, `spiderfoot`, `bentopdf`, and `opensearch` services are gated behind the shared `sidecars` Compose profile and started with `--profile sidecars`. Each service also carries its own profile name (`toolchain`, `spiderfoot`, `bentopdf`, `opensearch`), so you can start any subset directly — e.g. `--profile toolchain --profile bentopdf --profile opensearch` starts three of the four sidecars and skips SpiderFoot — without giving up the single-flag `--profile sidecars` shortcut for "start everything." If a tool or service is already installed on the machine running Chiron, you can skip its container and use the local install instead, per tool or per service:
+By default, `docker-compose.security.yml`'s `toolchain`, `spiderfoot`, `bentopdf`, `cyberchef`, and `opensearch` services are gated behind the shared `sidecars` Compose profile and started with `--profile sidecars`. Each service also carries its own profile name (`toolchain`, `spiderfoot`, `bentopdf`, `cyberchef`, `opensearch`), so you can start any subset directly — e.g. `--profile toolchain --profile bentopdf --profile opensearch` starts three of the five sidecars and skips SpiderFoot and CyberChef — without giving up the single-flag `--profile sidecars` shortcut for "start everything." If a tool or service is already installed on the machine running Chiron, you can skip its container and use the local install instead, per tool or per service:
 
 - **Toolchain binaries** (`nmap`, `masscan`, `theHarvester`, `sherlock`, `dig`, `whois`, `amass`, `nikto`, `gobuster`, `sqlmap`, `nuclei`, `ffuf`, `hashid`, `john`, `yara`, `searchsploit`): set `TOOLCHAIN_EXEC_MODE=local` in `.env` to run every one of them directly on the app's own host instead of the sidecar, or set a per-binary override like `TOOLCHAIN_EXEC_MODE_NMAP=local` to switch just that one — see the commented block in `.env.example`. This requires the binary to actually be on `PATH` for the Chiron process; missing binaries return a clear `[error:not_installed]` rather than failing silently. Local mode runs the tool **unsandboxed**, without the toolchain container's `cap_drop: [ALL]` / `no-new-privileges` isolation — only enable it for tools you trust to run with the app's own privileges. Omit `toolchain` from `--profile sidecars` (or use the per-service profile flags above) once nothing routes through it.
 - **Services** (SpiderFoot, OpenSearch, BentoPDF, Ollama): each is already reached through a plain URL env var (`SPIDERFOOT_URL`, `OPENSEARCH_URL`, `BENTOPDF_URL`, `OLLAMA_BASE_URL`) with no hardcoded container dependency. Point the var at an already-running local/VM-native instance (e.g. `SPIDERFOOT_URL=http://localhost:5001`) and skip starting that container via its profile.
+- **CyberChef** is the one sidecar nothing calls programmatically (no MCP server talks to it, so there's no `CYBERCHEF_URL` to redirect) — it's a pure link target for manual use. Omit `cyberchef` from `--profile sidecars` if you'd rather use the public `https://gchq.github.io/CyberChef/` or a native install; the Connected Services tab just won't show it as reachable.
 - **Status check**: `GET /api/toolchain/exec-modes` reports, per toolchain binary, the resolved mode (`local`/`container`) and — for `local` — whether it was actually found on `PATH`.
 - **Automatic detection**: `setup.py` runs a host-capability scan (step 6) on every native install. It probes `PATH` for the toolchain binaries above and checks the well-known ports of the six sidecar services (verifying each by its response shape, not just "port is open," to avoid mistaking an unrelated service for the real one), then interactively offers to write the matching `TOOLCHAIN_EXEC_MODE_*` / service-URL lines into `.env` — printing the isolation trade-off and the Compose flags needed to skip that sidecar. It's a non-interactive no-op (never prompts, never writes) when stdin isn't a TTY or `ODYSSEUS_SKIP_HOST_SCAN` is set — including when `setup.py` runs automatically inside the container via `docker/entrypoint.sh`, where the binary scan is skipped outright (container isolation means it would only ever see the container's own `PATH`) but the service scan still runs, additionally checking `host.docker.internal`. Every accepted suggestion is logged to `logs/host_capability_scan.log`. See `src/host_capabilities.py`.
 
@@ -489,7 +508,8 @@ chiron/
 │   ├── monitor_server.py        # SQLite scan-drift snapshots for scheduled_recon/sigma_sweep/yara_sweep/host_monitor
 │   ├── watchlist_server.py      # SQLite IOC watchlist for watchlist_check
 │   ├── sigma_server.py          # Sigma detection rules (pysigma, in-process)
-│   └── host_telemetry_server.py # Host processes/ports/users/cron/packages (psutil, in-process)
+│   ├── host_telemetry_server.py # Host processes/ports/users/cron/packages (psutil, in-process)
+│   └── audit_server.py          # Toolchain invocation audit trail (read side; common.py writes)
 ├── skills/
 │   ├── recon/full_recon.yaml
 │   ├── osint/                   # target_profile, spiderfoot_deep_scan, pdf_intel
@@ -507,7 +527,7 @@ chiron/
 │   └── toolchain/
 │       ├── Dockerfile           # Kali Rolling sidecar image
 │       └── exec_api.py          # HTTP exec API (Bearer auth + structured logging)
-├── docker-compose.security.yml  # Compose overlay: toolchain + SpiderFoot + OpenSearch + BentoPDF
+├── docker-compose.security.yml  # Compose overlay: toolchain + SpiderFoot + OpenSearch + BentoPDF + CyberChef
 ├── docs/
 │   ├── adr/                     # Architecture decision records (ADR 001–008)
 │   ├── develop-mcp-servers.md   # Guide for adding new MCP servers
@@ -565,7 +585,7 @@ Active tools in this repo can cause significant impact on target systems. Before
 2. Understand the rules of engagement.
 3. Use `passive` SpiderFoot use case for external targets unless active probing is explicitly authorized.
 
-Keep Chiron's auth enabled. SpiderFoot (`127.0.0.1:5001`), OpenSearch (`127.0.0.1:9200`), and BentoPDF (`127.0.0.1:3000`) are all bound to loopback only — reachable from the Security Hub's Connected Services panel on this machine, never from the network. The toolchain container's exec API is never published at all (not even to loopback) — it accepts arbitrary command execution and is reachable only from other containers on the internal network. Do not change any of these to `0.0.0.0` for a network-exposed deployment. BentoPDF also processes all files client-side — no document content passes through the container regardless.
+Keep Chiron's auth enabled. SpiderFoot (`127.0.0.1:5001`), OpenSearch (`127.0.0.1:9200`), BentoPDF (`127.0.0.1:3000`), and CyberChef (`127.0.0.1:8000`) are all bound to loopback only — reachable from the Security Hub's Connected Services panel on this machine, never from the network. The toolchain container's exec API is never published at all (not even to loopback) — it accepts arbitrary command execution and is reachable only from other containers on the internal network. Do not change any of these to `0.0.0.0` for a network-exposed deployment. BentoPDF also processes all files client-side — no document content passes through the container regardless.
 
 - Keep `AUTH_ENABLED=true` for any network-accessible deployment.
 - Keep `LOCALHOST_BYPASS=false` outside local development.
@@ -581,3 +601,5 @@ AGPL-3.0-or-later — see [LICENSE](LICENSE) and [ACKNOWLEDGMENTS.md](ACKNOWLEDG
 SpiderFoot ([`smicallef/spiderfoot`](https://github.com/smicallef/spiderfoot)) is MIT licensed.
 
 BentoPDF ([`alam00000/bentopdf`](https://github.com/alam00000/bentopdf)) is AGPL-3.0 licensed.
+
+CyberChef ([`gchq/CyberChef`](https://github.com/gchq/CyberChef)) is Apache-2.0 licensed.

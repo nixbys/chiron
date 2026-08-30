@@ -64,6 +64,7 @@ just composed:
 |---|---|---|---|
 | [SpiderFoot](https://github.com/smicallef/spiderfoot) (via the [`fopina/spiderfoot`](https://hub.docker.com/r/fopina/spiderfoot) image) | `docker.io/fopina/spiderfoot:latest` | 200+ correlated OSINT modules | MIT |
 | [BentoPDF](https://github.com/alam00000/bentopdf) | `ghcr.io/alam00000/bentopdf-simple:latest` | Client-side PDF toolkit (redact, sign, convert) | AGPL-3.0 |
+| [CyberChef](https://github.com/gchq/CyberChef) (via the [`mpepping/cyberchef`](https://hub.docker.com/r/mpepping/cyberchef) image) | `docker.io/mpepping/cyberchef:latest` | Manual data-transformation workbench | Apache-2.0 |
 | [OpenSearch](https://github.com/opensearch-project/OpenSearch) | `docker.io/opensearchproject/opensearch:2.17.0` | Findings persistence index | Apache-2.0 |
 
 The `toolchain` sidecar (`odysseus-toolchain`) isn't in this table because
@@ -192,8 +193,8 @@ Odysseus's core Python dependencies, which remain permissive on their own:
   it. The cloud `az-doc-intel` extra is deliberately **not** installed, keeping extraction fully local.
 
 If those permissive core dependencies were the whole picture, MIT would be a
-viable license for this repo too. It isn't the whole picture: **Odysseus
-Red** (this fork) bundles two AGPL-3.0 services as sidecars —
+viable license for this repo too. It isn't the whole picture: **Chiron**
+(this fork) bundles two AGPL-3.0 services as sidecars —
 **[SearXNG](https://github.com/searxng/searxng)** and
 **[BentoPDF](https://github.com/alam00000/bentopdf)** — both listed in the
 tables above (`docker-compose.yml` and `docker-compose.security.yml`

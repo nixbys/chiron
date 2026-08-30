@@ -25,6 +25,7 @@ const _state = {
   watchlist: { list: null, formOpen: false },
   rules: { sigma: null, yara: null, viewing: null, content: null },
   services: { list: null },
+  audit: { invocations: null, stats: null, binary: '', outcome: '' },
 };
 
 // ── Shared render helpers ──
@@ -464,6 +465,91 @@ async function _loadServicesTab() {
   _renderServicesTab();
 }
 
+// ── Audit Log tab ──
+
+const _OUTCOME_BADGE_CLASS = { ok: 'sec-badge-low', error: 'sec-badge-high', timeout: 'sec-badge-medium', rate_limited: 'sec-badge-critical' };
+
+function _outcomeBadge(outcome) {
+  const cls = _OUTCOME_BADGE_CLASS[outcome];
+  if (!cls) return `<span class="sec-badge" style="border-color:var(--border);color:var(--fg-muted);">${_escape(outcome)}</span>`;
+  return `<span class="sec-badge ${cls}">${_escape(outcome)}</span>`;
+}
+
+function _auditFilterForm() {
+  const { binary, outcome } = _state.audit;
+  const outcomes = ['', 'ok', 'error', 'timeout', 'rate_limited'];
+  return `
+    <form data-action="filter-audit" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;align-items:center;">
+      <input class="sec-hub-input" name="binary" placeholder="binary, e.g. nmap" value="${_escape(binary)}" style="flex:1;min-width:140px;">
+      <select class="sec-hub-input" name="outcome" style="flex:0 0 auto;">
+        ${outcomes.map(o => `<option value="${o}" ${o === outcome ? 'selected' : ''}>${o || 'any outcome'}</option>`).join('')}
+      </select>
+      <button type="submit" class="sec-hub-btn sec-hub-btn-primary">Filter</button>
+    </form>`;
+}
+
+function _auditStatsRow(stats) {
+  if (!stats || stats.total === 0) return '';
+  const byOutcome = (stats.by_outcome || []).map(r => `${_outcomeBadge(r.outcome)} ${r.n}`).join(' &nbsp; ');
+  const topBinaries = (stats.by_binary || []).slice(0, 5).map(r => `${_escape(r.binary)} (${r.n})`).join(', ') || '(none)';
+  return `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;font-size:12px;color:var(--fg-muted);">
+      <div><strong style="color:var(--fg);">${stats.total}</strong> invocations in the last 24h</div>
+      <div>${byOutcome}</div>
+      <div>Top binaries: ${topBinaries}</div>
+    </div>`;
+}
+
+function _auditRow(inv) {
+  const when = inv.ts ? new Date(inv.ts * 1000).toLocaleString() : '';
+  const args = Array.isArray(inv.args) ? inv.args.join(' ') : String(inv.args ?? '');
+  const dur = inv.duration_ms != null ? `${inv.duration_ms}ms` : '—';
+  return `
+    <div class="sec-tl-row" style="grid-template-columns:140px 90px 70px 110px 60px 1fr;">
+      <span class="sec-tl-time">${_escape(when)}</span>
+      <span class="sec-tl-target">${_escape(inv.binary)}</span>
+      <span style="color:var(--fg-muted);font-size:11px;">${_escape(inv.mode)}</span>
+      <span>${_outcomeBadge(inv.outcome)}</span>
+      <span style="color:var(--fg-muted);font-size:11px;font-variant-numeric:tabular-nums;">${dur}</span>
+      <code style="font-family:var(--font-family,'IBM Plex Mono',monospace);font-size:11.5px;color:var(--fg-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_escape(args)}</code>
+    </div>`;
+}
+
+function _renderAuditTab() {
+  const el = _body();
+  if (!el) return;
+  const { invocations, stats } = _state.audit;
+  if (invocations == null) {
+    el.innerHTML = _auditFilterForm() + '<div style="font-size:12px;opacity:0.7;padding:8px 0;">Loading…</div>';
+    return;
+  }
+  const rows = invocations.length
+    ? `<div class="sec-timeline">${invocations.map(_auditRow).join('')}</div>`
+    : '<div style="font-size:12px;color:var(--fg-muted);padding:8px 0;">No invocations recorded yet -- this fills in as MCP tools run scans through the toolchain sidecar.</div>';
+  el.innerHTML = _auditFilterForm() + _auditStatsRow(stats) + rows;
+}
+
+async function _loadAuditTab() {
+  _renderAuditTab();
+  const { binary, outcome } = _state.audit;
+  const params = new URLSearchParams({ limit: '100' });
+  if (binary) params.set('binary', binary);
+  if (outcome) params.set('outcome', outcome);
+  try {
+    const res = await fetch(`${API_BASE}/api/security/audit?${params}`, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    _state.audit.invocations = data.invocations || [];
+    _state.audit.stats = data.stats || null;
+  } catch (err) {
+    _state.audit.invocations = [];
+    const el = _body();
+    if (el) el.innerHTML = _errorLine(err.message || String(err));
+    return;
+  }
+  _renderAuditTab();
+}
+
 // ── Tab dispatch ──
 
 function _loadActiveTab() {
@@ -472,6 +558,7 @@ function _loadActiveTab() {
   if (_activeTab === 'watchlist') return _loadWatchlistTab();
   if (_activeTab === 'rules') return _loadRulesTab();
   if (_activeTab === 'services') return _loadServicesTab();
+  if (_activeTab === 'audit') return _loadAuditTab();
 }
 
 function _switchTab(tab) {
@@ -558,6 +645,10 @@ async function _onBodySubmit(e) {
     });
     if (res.ok) _state.watchlist.formOpen = false;
     await _loadWatchlistTab();
+  } else if (action === 'filter-audit') {
+    _state.audit.binary = String(fd.get('binary') || '').trim();
+    _state.audit.outcome = String(fd.get('outcome') || '');
+    await _loadAuditTab();
   }
 }
 

@@ -51,8 +51,48 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
   successfully stayed up long enough to exercise it (see above). Fixed `_req()` to skip
   `.json()` on an empty response body. New `tests/mcp_servers/test_findings_server.py`
   (the module had no dedicated tests before this) covers the regression directly.
+- The new Security Hub Audit Log tab (see Added below) 500'd on a brand-new instance's very
+  first request: `routes/security_dashboard_routes.py` ran `audit_server._list_invocations()`
+  and `_stats()` concurrently via `asyncio.gather`, and on a fresh `audit.db` both threads
+  raced through `_get_db()`'s one-time `CREATE TABLE`/`CREATE INDEX` setup, one of them losing
+  the race with `sqlite3.OperationalError: database is locked` even with a 10s connect
+  timeout. Fixed by making the two calls sequential in the route handler. Verified with 5
+  repeated cold-start requests all returning 200, then a real `exec_in_toolchain()` call
+  showing up correctly in the tab afterward. New `test_concurrent_first_access_does_not_deadlock`
+  in `tests/mcp_servers/test_audit_server.py` guards `_get_db()` itself against the same race.
+- `ACKNOWLEDGMENTS.md` had one genuine leftover "Odysseus Red" reference the Phase 3 rebrand's
+  line-based sweep missed because it was wrapped across two source lines
+  (`**Odysseus\nRed** (this fork)`) — fixed to `**Chiron** (this fork)`.
 
 ### Added
+- **Toolchain invocation audit trail + rate limiting**, both enforced at `mcp_servers/
+  common.py`'s `exec_in_toolchain()` — the one chokepoint every red-team MCP server's tool
+  calls pass through, so no changes were needed in any of the other 20 server modules. Every
+  call is now logged (binary, arguments, exec mode, duration, outcome) to a new WAL-mode
+  SQLite table (`$ODYSSEUS_DATA_DIR/audit.db`), and the same table backs a hard per-binary
+  rate limit (`TOOLCHAIN_RATE_LIMIT` invocations per `TOOLCHAIN_RATE_LIMIT_WINDOW` seconds,
+  with `TOOLCHAIN_RATE_LIMIT_<BINARY>` overrides — same override shape as the existing
+  `TOOLCHAIN_EXEC_MODE_<BINARY>`) checked against the table directly rather than an
+  in-memory counter, since every MCP server is its own subprocess and an in-memory counter
+  would only ever throttle one server's own calls. A rejected call returns
+  `[error:rate_limited]` immediately without reaching the toolchain, and is itself logged
+  with that outcome. New `audit_server` MCP server (the 21st) is the read side —
+  `audit_list` and `audit_stats` tools — since `common.py` itself only ever writes.
+- Security Hub gained a sixth tab, **Audit Log** (`GET /api/security/audit`): every toolchain
+  invocation, filterable by binary/outcome, with a trailing-24h summary row.
+- New **CyberChef** sidecar (`docker.io/mpepping/cyberchef:latest`, Apache-2.0), listed in
+  Connected Services alongside BentoPDF/SpiderFoot/OpenSearch/Ollama — a pure link target for
+  manual encode/decode/crypto work; no MCP server calls it programmatically, so unlike the
+  other sidecars there's no `CYBERCHEF_URL` to redirect if you'd rather use the public
+  instance or a native install.
+- New `scripts/register_fork_mcp_servers.py`: idempotent bulk-registration script for all 21
+  fork security MCP servers against a running instance's own `POST /api/mcp/servers` API —
+  reads current registrations back first and only adds what's missing, so it's always safe to
+  re-run after a fork update. Closes a real practical gap found by inspecting a live,
+  long-running instance directly: Odysseus's MCP servers are rows in the app's own database by
+  design (no static config file — see `docs/develop-mcp-servers.md`), so a fresh install or a
+  fork update that adds a server otherwise means clicking through Settings once per server
+  with no way to check what's still missing.
 - Security Hub "Connected Services" tab plus real host access to the sidecars it lists:
   SpiderFoot and OpenSearch are now published on `127.0.0.1` (matching BentoPDF's and
   Ollama's existing loopback-only posture — `docker-compose.security.yml` already had a
