@@ -11,6 +11,16 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 ## [Unreleased]
 
 ### Fixed
+- Phase 2.4's own `yara_server.py` additions were broken against the real toolchain sidecar
+  (only ever exercised through mocked tests until this session actually got the container
+  stack running): `_list_rule_names()` used `sh -c "ls ... 2>/dev/null"`, but the exec API's
+  `ALLOWED_BINARIES` allowlist (`docker/toolchain/exec_api.py`) deliberately has no
+  general-purpose shell — every call 400'd with `binary_not_allowed`. `_read_rule()` used
+  `cat`, which was never in that allowlist either. Fixed `_list_rule_names()` to call `ls`
+  directly (treating "No such file or directory" — a nonexistent rules dir — as "no rules
+  yet" instead of an error) and added `cat` to `ALLOWED_BINARIES` (a plain read-only utility,
+  no more capable than `grep`, already on the list). Verified against the real toolchain
+  container: `Rules` tab now lists and displays a real YARA rule end-to-end.
 - Five Kali toolchain binaries (`nuclei`, `httpx`, `subfinder`, `amass`, `trivy`) were
   silently failing to install on every fresh build — `docker/toolchain/Dockerfile`'s
   fixed-filename `.../releases/latest/download/<name>_linux_amd64.zip` URLs 404'd

@@ -67,6 +67,15 @@ def test_list_rule_names_helper_empty_dir():
         assert ys._list_rule_names() == []
 
 
+def test_list_rule_names_helper_rules_dir_not_yet_created():
+    """`ls` (no shell -- ALLOWED_BINARIES has no sh/bash) on a rules dir that
+    doesn't exist yet returns a nonzero exit + stderr, combined into the
+    same string exec_in_toolchain always returns. Must read as "no rules",
+    not bubble up as an error."""
+    with _mock_exec("[stderr]\nls: cannot access '/workspaces/yara_rules': No such file or directory"):
+        assert ys._list_rule_names() == []
+
+
 def test_list_rule_names_helper_sidecar_unreachable():
     with patch("mcp_servers.yara_server.exec_in_toolchain", return_value="[error:network] connection refused"):
         assert ys._list_rule_names() is None

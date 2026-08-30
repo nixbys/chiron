@@ -22,16 +22,24 @@ server = Server("yara")
 _RULES_DIR = "/workspaces/yara_rules"
 _SCAN_DIR = "/workspaces"
 
+
 def _list_rule_names() -> list[str] | None:
     """Structured rule-name list (no extension), for direct import by the
     security dashboard's rule-management route. Returns None if the
     toolchain sidecar is unreachable/misconfigured rather than raising --
     the route treats this as a best-effort panel, same as the dashboard's
-    other sections."""
-    raw = exec_in_toolchain(["sh", "-c", f"ls -1 {_RULES_DIR} 2>/dev/null"], timeout=10)
+    other sections.
+
+    Calls `ls` directly (no `sh -c` wrapper) -- the exec API's
+    ALLOWED_BINARIES allowlist (docker/toolchain/exec_api.py) deliberately
+    has no general-purpose shell, so a nonexistent rules directory surfaces
+    as a nonzero exit + stderr rather than being silently redirected away;
+    treated the same as "no rules yet" here, same as `_read_rule`'s
+    existing not_found handling below."""
+    raw = exec_in_toolchain(["ls", "-1", _RULES_DIR], timeout=10)
     if raw.startswith("[error:"):
         return None
-    if raw == "(no output)":
+    if raw == "(no output)" or "No such file or directory" in raw:
         return []
     return sorted(name[:-4] for name in raw.splitlines() if name.endswith(".yar"))
 
