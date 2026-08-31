@@ -108,6 +108,9 @@ class Session:
     owner: Optional[str] = None
     is_important: bool = False
     message_count: int = 0
+    # Engagement ("Project") this chat is scoped to, if any -- see
+    # mcp_servers/common.py's check_scope(). None = unscoped, no enforcement.
+    engagement_id: Optional[str] = None
 
     def __post_init__(self):
         if self.headers is None:

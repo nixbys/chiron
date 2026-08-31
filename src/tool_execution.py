@@ -354,6 +354,42 @@ _MCP_TOOL_MAP = {
 }
 _EMAIL_MCP_OWNER_ARG = "_odysseus_owner"
 
+# Tool names (the bare part after mcp__{server_id}__ -- server_id is a
+# random per-registration id for these fork-added servers, never a fixed
+# slug, so matching has to be by tool name, not by a "mcp__recon__" prefix)
+# that call mcp_servers/common.py's check_scope() and so accept an
+# engagement_id arg. Kept as an explicit set (mirroring FORK_SECURITY_
+# SERVERS in scripts/mcp_health_check.py) rather than injecting into every
+# mcp__ call, since most tools have no scope concept at all.
+_ENGAGEMENT_SCOPED_MCP_TOOLS = {
+    "nmap_scan", "masscan_scan", "tls_cert_info",
+    "nikto_scan", "gobuster_dir", "sqlmap_scan", "nuclei_scan", "ffuf_fuzz",
+    "harvester", "dns_enum", "subdomain_enum", "whois_lookup",
+    "shodan_host", "censys_host",
+    "watchlist_add",
+    "yara_scan",
+}
+
+
+def _session_engagement_id(session_id: Optional[str]) -> Optional[str]:
+    """Look up the Engagement ("Project") a chat session is attached to, if
+    any -- a cheap point lookup rather than threading a new parameter down
+    through every layer above execute_tool_block (session_id is already a
+    live parameter at every tool-call site)."""
+    if not session_id:
+        return None
+    try:
+        from core.database import Session as DbSession, SessionLocal
+        db = SessionLocal()
+        try:
+            row = db.query(DbSession.engagement_id).filter(DbSession.id == session_id).first()
+            return row.engagement_id if row else None
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not resolve engagement_id for session %r", session_id, exc_info=True)
+        return None
+
 
 def _parse_qualified_mcp_args(tool: str, content: str) -> tuple[Dict, Optional[str]]:
     raw = (content or "").strip()
@@ -1163,6 +1199,11 @@ async def _execute_tool_block_impl(
                 if tool.startswith("mcp__email__") and owner:
                     args = dict(args)
                     args[_EMAIL_MCP_OWNER_ARG] = owner
+                _mcp_tool_name = tool.split("__", 2)[-1] if tool.count("__") >= 2 else ""
+                if _mcp_tool_name in _ENGAGEMENT_SCOPED_MCP_TOOLS and "engagement_id" not in args:
+                    if _eng_id := _session_engagement_id(session_id):
+                        args = dict(args)
+                        args["engagement_id"] = _eng_id
                 result = await mcp.call_tool(tool, args)
         else:
             desc = f"mcp: {tool}"
