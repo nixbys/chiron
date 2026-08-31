@@ -16,6 +16,7 @@ import httpcore
 import httpx
 
 from src.database import SessionLocal, Webhook
+from src.secret_storage import decrypt as _decrypt_stored_secret
 
 logger = logging.getLogger(__name__)
 
@@ -321,14 +322,13 @@ def sanitize_error(error: str, max_len: int = 200) -> str:
 
 
 class WebhookManager:
-    def __init__(self, api_key_manager=None):
+    def __init__(self):
         # No shared client: each delivery builds a short-lived client whose
         # transport is pinned to the SSRF-approved IP (see _deliver /
         # _send_request), so a single reusable client can't be pointed at
         # different pinned hosts. Redirects stay disabled on every delivery
         # client to prevent SSRF via redirect chains.
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._api_key_manager = api_key_manager
         # Strong references to in-flight fire-and-forget tasks. asyncio only
         # keeps weak references to tasks, so without this the GC can collect a
         # delivery task mid-flight and the webhook is silently never sent.
@@ -346,16 +346,17 @@ class WebhookManager:
         self._loop = loop
 
     def _decrypt_secret(self, encrypted: Optional[str]) -> Optional[str]:
-        """Decrypt a webhook signing secret from DB storage."""
+        """Decrypt a webhook signing secret from DB storage. secret_storage's
+        own decrypt() already handles every case that used to need a
+        try/except here: an `enc:`-prefixed value decrypts normally, a
+        plain (legacy/never-encrypted) value passes through unchanged, and
+        a corrupt/wrong-key token degrades to "" rather than raising --
+        the DB-level migration (core/database.py's
+        _migrate_encrypt_webhook_secrets) is what actually moves rows off
+        the old, now-retired api_key_manager key onto this one."""
         if not encrypted:
             return None
-        if self._api_key_manager:
-            try:
-                return self._api_key_manager.decrypt_api_key(encrypted)
-            except Exception:
-                # If decryption fails, assume it's stored in plaintext (legacy)
-                return encrypted
-        return encrypted
+        return _decrypt_stored_secret(encrypted)
 
     def fire_and_forget(self, event: str, payload: dict):
         """Schedule webhook fire from any context (sync or async). Never blocks."""

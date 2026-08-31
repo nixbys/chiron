@@ -11,6 +11,64 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 ## [Unreleased]
 
 ### Added
+- **Security/encryption hardening pass** (Phases 1-3 of 7 — see the plan this shipped under
+  for the rest). Two research passes over the whole app (not just the security-MCP overlay)
+  found: encryption-at-rest already existed and was solid where used
+  (`src/secret_storage.py`, Fernet, `data/.app_key`), but was applied inconsistently, a
+  second weaker duplicate key did the same job, one field of real user content was fully
+  plaintext, session tokens were stored raw (unlike API tokens), and the arbitrary-command-
+  execution toolchain's own auth check used a non-constant-time comparison. Fixed all of it:
+  - **`docker/toolchain/exec_api.py`** (the exec API behind every toolchain-backed tool call):
+    swapped a plain `==` Bearer-token comparison for `secrets.compare_digest` (was a
+    timing-attack surface on the highest-value auth check in the app); the process now
+    **refuses to start** with `EXEC_API_TOKEN` unset or left as `.env.example`'s literal
+    `change_me_before_deploy` placeholder, rather than silently running unauthenticated —
+    `EXEC_API_ALLOW_INSECURE=true` is the explicit, documented opt-out for a throwaway
+    local/dev setup.
+  - **Session tokens are now hashed before being persisted** to `data/sessions.json`
+    (`core/auth.py`) — previously stored as the *raw plaintext dict key*, so anyone who could
+    read that file could forge any active session; `ApiToken` already did this correctly
+    (bcrypt hash + prefix, raw token never stored) and sessions now match. New
+    `secret_storage.hmac_hex()` (deterministic keyed HMAC-SHA256, same app key) is the shared
+    primitive both this and the audit hash-chain (planned, Phase 4) use.
+  - **Retired `src/api_key_manager.py`**, a second, weaker, separate Fernet key
+    (`data/.key`, no idempotency marker, silent plaintext fallback on decrypt failure) that
+    only protected the Brave Search API key and `Webhook.secret`. Both now go through
+    `secret_storage.py`'s key/`enc:` convention, with a one-time migration (decrypt under the
+    old key if needed, re-encrypt under the new one) for `data/api_keys.json` and existing
+    `Webhook.secret` rows. The silent plaintext-on-decrypt-failure fallback is gone too — a
+    decrypt failure now surfaces.
+  - **`EmailAccount.imap_password`/`smtp_password`/`oauth_access_token`/`oauth_refresh_token`**
+    converted to the `EncryptedText` column type — schema-enforced encryption instead of every
+    call site remembering to wrap `encrypt()`/`decrypt()` by hand.
+  - **`Note.content`/`items`** (a Keep-style note or checklist's actual text) was genuinely
+    plaintext — the one real user-content gap found in a pass over every model for anything
+    sensitive stored unencrypted. Now `EncryptedText` too; in-app note search (which reads the
+    already-decrypted ORM attribute, never a SQL `LIKE`/FTS query) is unaffected.
+  - **Toolchain raw-output logs** (`data/audit_logs/*.log`, one file per tool invocation, added
+    last session) are now encrypted at rest via the same key — a pre-encryption file still
+    reads fine (plaintext passes through `decrypt()` unchanged).
+  - **Export ZIPs can now be passphrase-encrypted**: the Export/Export Everything buttons in
+    Security Hub prompt for an optional passphrase; if set, the whole `.zip` is wrapped
+    (PBKDF2-HMAC-SHA256 + Fernet, `cryptography` — already a dependency, no new one added) and
+    served as `.chiron-export`, openable with the new `scripts/decrypt_export.py` plus the
+    passphrase (never stored server-side). Every export also now includes a **`SUMMARY.md`** —
+    a full prose narrative of everything else in the bundle (engagement info, a plain-language
+    findings breakdown, what tools ran, the audit trail's shape, timeline) meant to be read by
+    a human during an audit, alongside the existing machine-readable `manifest.json` and
+    curated `report.pdf`. A completed export now fires a best-effort notification via the
+    app's existing reminder-dispatch channel, and the UI offers a post-export choice: keep the
+    live data as-is, wipe just that engagement's, or wipe everything — new `DELETE
+    /api/security/export/engagement/{id}` and `DELETE /api/security/export/all` routes
+    (`confirm=true` required), deleting findings/audit-trail-and-raw-logs/assets-services/
+    watchlist-entries/timeline across every store that has no SQLite foreign-key cascade
+    actually enforced (child rows are deleted explicitly).
+
+### Fixed
+- (See the hardening pass above — several of those are fixes for real, live gaps, not just
+  new capability: the exec API's timing-unsafe comparison and fail-open default, unhashed
+  session tokens, and the genuinely-plaintext `Note.content`.)
+
 - **Bulk export of everything a security investigation touches** — one downloadable `.zip`
   covering findings, the audit trail (now including full raw tool output, not just a capped
   error message), engagement metadata + timeline, assets/services, watchlist entries,

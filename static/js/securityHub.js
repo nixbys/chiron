@@ -73,6 +73,87 @@ function _body() {
   return document.getElementById('hub-body');
 }
 
+// ── Export (bulk download, optional passphrase, post-export wipe choice) ──
+//
+// POST, not a plain navigation: the passphrase (when given) needs to ride
+// in the request body, never a URL/query string. That means the browser
+// won't trigger its own save dialog on its own, so this does the
+// fetch-blob-synthetic-<a>-click dance itself.
+
+async function _runExport(url, engagementId) {
+  const passphrase = prompt(
+    'Optional: set a passphrase to encrypt this export.\n' +
+    'Leave blank for a plain, unencrypted .zip.\n\n' +
+    'If you set one, save it now -- it is never stored and cannot be recovered. ' +
+    'Opening the file later needs scripts/decrypt_export.py plus this passphrase.'
+  );
+  if (passphrase === null) return; // user hit Cancel
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passphrase: passphrase || '' }),
+    });
+  } catch (err) {
+    alert(`Export failed: ${err.message || String(err)}`);
+    return;
+  }
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    alert(`Export failed: ${detail.detail || res.status}`);
+    return;
+  }
+
+  const disposition = res.headers.get('content-disposition') || '';
+  const match = disposition.match(/filename="([^"]+)"/);
+  const filename = match ? match[1] : 'chiron_export';
+  const blob = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(blobUrl);
+
+  await _offerPostExportWipe(engagementId);
+}
+
+async function _offerPostExportWipe(engagementId) {
+  const scopeLabel = engagementId ? 'this engagement' : 'everything';
+  const choice = prompt(
+    `Export downloaded. Now that it's archived, what do you want to do with the live data?\n\n` +
+    `  keep    — leave everything as-is (default)\n` +
+    `  wipe    — clear ${scopeLabel}'s findings, audit trail, assets, and watchlist entries\n` +
+    (engagementId ? `  wipe-all — clear EVERY engagement's data, not just this one\n` : '') +
+    `\nType one of the above, or leave blank to keep everything:`,
+    'keep'
+  );
+  if (!choice || choice.trim().toLowerCase() === 'keep') return;
+
+  const wipeAll = choice.trim().toLowerCase() === 'wipe-all';
+  const target = wipeAll || !engagementId
+    ? `${API_BASE}/api/security/export/all`
+    : `${API_BASE}/api/security/export/engagement/${encodeURIComponent(engagementId)}`;
+  const confirmLabel = wipeAll || !engagementId ? 'EVERY engagement' : 'this engagement';
+  if (!confirm(`This permanently deletes ${confirmLabel}'s findings, audit trail, assets, and watchlist entries. It was just exported, but this cannot be undone here. Continue?`)) {
+    return;
+  }
+
+  const res = await fetch(`${target}?confirm=true`, { method: 'DELETE', credentials: 'same-origin' });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    alert(`Wipe failed: ${detail.detail || res.status}`);
+    return;
+  }
+  alert('Wiped.');
+  await _loadEngagements();
+  if (_activeTab === 'overview') await _loadOverview();
+}
+
 // ── Overview tab ──
 
 const _SEV_BADGE_CLASS = {
@@ -671,13 +752,9 @@ async function _onBodyClick(e) {
       await _loadEngagementDetail(id);
     }
   } else if (action === 'export-engagement') {
-    // Plain navigation, not fetch+blob: the session cookie rides along
-    // automatically on a same-origin GET, and Content-Disposition:
-    // attachment (routes/export_routes.py) is exactly what triggers the
-    // browser's own save dialog with no extra JS plumbing needed.
-    window.location.href = `${API_BASE}/api/security/export/engagement/${encodeURIComponent(id)}`;
+    await _runExport(`${API_BASE}/api/security/export/engagement/${encodeURIComponent(id)}`, id);
   } else if (action === 'export-all') {
-    window.location.href = `${API_BASE}/api/security/export/all`;
+    await _runExport(`${API_BASE}/api/security/export/all`, null);
   } else if (action === 'close-engagement') {
     if (!confirm('Close this engagement? This records an end date and stops treating it as active.')) return;
     await fetch(`${API_BASE}/api/security/engagements/${encodeURIComponent(id)}/close`, {

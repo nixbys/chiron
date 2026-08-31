@@ -52,6 +52,20 @@ from src.owner_identity import RESERVED_AUTH_USERNAMES
 DEFAULT_AUTH_PATH = AUTH_FILE
 TOKEN_TTL = 60 * 60 * 24 * 7  # 7 days
 
+
+def _session_key(token: str) -> str:
+    """Deterministic hash of a raw session token, for internal dict-key
+    use only (see AuthManager._sessions below) -- never the raw token
+    itself. Deferred import: src.secret_storage -> core.platform_compat ->
+    core/__init__.py -> core.auth is a real circular import at module load
+    time (core/__init__.py imports AuthManager from this file), so this
+    can't be a top-level `from src.secret_storage import hmac_hex` the way
+    every other caller in this codebase does it -- same reason
+    core/database.py's own secret_storage migrations already import it
+    lazily, inside each function, rather than at module top."""
+    from src.secret_storage import hmac_hex
+    return hmac_hex(token)
+
 # Usernames the auth + middleware layer reserves for request sentinels and
 # internal storage owners; they must never belong to a real login account.
 # "internal-tool" is the most dangerous because `core.middleware.require_admin`
@@ -94,7 +108,14 @@ class AuthManager:
         self.auth_path = auth_path
         self._sessions_path = os.path.join(os.path.dirname(auth_path), "sessions.json")
         self._config: Dict[str, Any] = {}
-        self._sessions: Dict[str, Dict[str, Any]] = {}  # token -> {username, expiry}
+        self._sessions: Dict[str, Dict[str, Any]] = {}  # hmac_hex(token) -> {username, expiry}
+        # Keyed by a deterministic HMAC of the raw token, never the raw
+        # token itself -- anyone who could read sessions.json used to be
+        # able to forge any active session directly from it (the dict key
+        # WAS the valid cookie value). Every lookup below hashes the
+        # incoming token via _session_key() before touching this dict; the
+        # raw token is still what's minted and returned to the caller
+        # (create_session_trusted) and what the browser cookie carries.
         # Guards mutations of self._sessions and the on-disk sessions.json.
         # Validate/create/revoke run concurrently from the FastAPI threadpool.
         self._sessions_lock = threading.RLock()
@@ -588,7 +609,7 @@ class AuthManager:
                 logger.warning("Refused to issue session for missing user '%s'", username)
                 return None
             with self._sessions_lock:
-                self._sessions[token] = {
+                self._sessions[_session_key(token)] = {
                     "username": username,
                     "expiry": time.time() + TOKEN_TTL,
                 }
@@ -598,14 +619,15 @@ class AuthManager:
     def validate_token(self, token: Optional[str]) -> bool:
         if not token:
             return False
+        key = _session_key(token)
         expired = False
         deleted_user = False
         with self._sessions_lock:
-            session = self._sessions.get(token)
+            session = self._sessions.get(key)
             if session is None:
                 return False
             if time.time() > session["expiry"]:
-                self._sessions.pop(token, None)
+                self._sessions.pop(key, None)
                 expired = True
             else:
                 # SECURITY: if the user record has since been removed (admin
@@ -613,7 +635,7 @@ class AuthManager:
                 # session so the next request kicks them out instead of
                 # silently authenticating against a non-existent account.
                 if session.get("username") not in self.users:
-                    self._sessions.pop(token, None)
+                    self._sessions.pop(key, None)
                     deleted_user = True
         if expired or deleted_user:
             self._save_sessions()
@@ -624,20 +646,21 @@ class AuthManager:
         """Return the username associated with a valid token."""
         if not token:
             return None
+        key = _session_key(token)
         expired = False
         deleted_user = False
         with self._sessions_lock:
-            session = self._sessions.get(token)
+            session = self._sessions.get(key)
             if session is None:
                 return None
             if time.time() > session["expiry"]:
-                self._sessions.pop(token, None)
+                self._sessions.pop(key, None)
                 expired = True
             else:
                 _u = session["username"]
                 # SECURITY: orphan check — same rationale as validate_token.
                 if _u not in self.users:
-                    self._sessions.pop(token, None)
+                    self._sessions.pop(key, None)
                     deleted_user = True
                 else:
                     return _u
@@ -647,20 +670,21 @@ class AuthManager:
 
     def revoke_token(self, token: str):
         with self._sessions_lock:
-            self._sessions.pop(token, None)
+            self._sessions.pop(_session_key(token), None)
         self._save_sessions()
 
     def revoke_user_sessions(self, username: str, except_token: Optional[str] = None) -> int:
         """Revoke active browser sessions for a user, optionally preserving one."""
         username = username.strip().lower()
+        except_key = _session_key(except_token) if except_token else None
         revoked = 0
         with self._sessions_lock:
             to_drop = [
-                token for token, session in self._sessions.items()
-                if token != except_token and (session or {}).get("username") == username
+                key for key, session in self._sessions.items()
+                if key != except_key and (session or {}).get("username") == username
             ]
-            for token in to_drop:
-                self._sessions.pop(token, None)
+            for key in to_drop:
+                self._sessions.pop(key, None)
                 revoked += 1
             if revoked:
                 self._save_sessions()

@@ -146,8 +146,12 @@ services:
       - toolchain-reports:/reports
     restart: unless-stopped
     environment:
-      # Shared bearer token — set a strong random value in .env
+      # Shared bearer token — set a strong random value in .env. The exec
+      # API refuses to start without one (arbitrary command execution
+      # behind this token) unless EXEC_API_ALLOW_INSECURE is explicitly
+      # set — never for anything beyond a throwaway local/dev setup.
       EXEC_API_TOKEN: "${EXEC_API_TOKEN:-}"
+      EXEC_API_ALLOW_INSECURE: "${EXEC_API_ALLOW_INSECURE:-}"
     cap_drop:
       - ALL
     cap_add:

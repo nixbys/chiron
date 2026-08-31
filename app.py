@@ -596,7 +596,6 @@ upload_handler    = components["upload_handler"]
 app.state.upload_handler = upload_handler
 personal_docs_mgr = components["personal_docs_manager"]
 app.state.personal_docs_manager = personal_docs_mgr
-api_key_manager   = components["api_key_manager"]
 preset_manager    = components["preset_manager"]
 chat_processor    = components["chat_processor"]
 research_handler  = components["research_handler"]
@@ -631,7 +630,7 @@ async def web_search_error_handler(request: Request, exc: WebSearchError):
 # ========= WEBHOOK MANAGER =========
 from src.webhook_manager import WebhookManager
 
-webhook_manager = WebhookManager(api_key_manager=api_key_manager)
+webhook_manager = WebhookManager()
 
 # ========= INCLUDE ROUTERS =========
 
@@ -864,7 +863,7 @@ logger.info("AI interaction tools initialized (session, memory, RAG, UI control)
 
 # Webhooks
 from routes.webhook.webhook_routes import setup_webhook_routes
-app.include_router(setup_webhook_routes(webhook_manager, auth_manager, session_manager, api_key_manager))
+app.include_router(setup_webhook_routes(webhook_manager, auth_manager, session_manager))
 
 # API Tokens
 from routes.api_token_routes import setup_api_token_routes

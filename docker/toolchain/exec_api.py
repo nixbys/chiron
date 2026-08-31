@@ -9,7 +9,13 @@ Listens on 0.0.0.0:8088. Accessible only on the internal compose network —
 the port is never published to the host.
 
 Security:
-  Set EXEC_API_TOKEN in environment to require Bearer auth on every request.
+  EXEC_API_TOKEN is required -- this API is arbitrary command execution
+  behind a Bearer check, so the process refuses to start without a real
+  token (see _validate_token_or_exit below), rather than silently falling
+  back to accepting every request unauthenticated. Set
+  EXEC_API_ALLOW_INSECURE=true to explicitly opt out of that check for a
+  throwaway local/dev setup -- never for anything reachable beyond a
+  single trusted host.
   All invocations are logged as JSON lines to EXEC_LOG_FILE (default
   /var/log/exec_api.jsonl) — mountable as a shared volume for audit purposes.
   args[0] (the binary) is checked against ALLOWED_BINARIES below — only the
@@ -22,12 +28,41 @@ Security:
 import json
 import logging
 import os
+import secrets
 import subprocess
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+# .env.example ships EXEC_API_TOKEN as this literal placeholder --
+# SECURITY.md already calls it out as unsafe for any deployment; treat it
+# the same as "unset" rather than trusting it as a real secret.
+_INSECURE_PLACEHOLDER = "change_me_before_deploy"
+
 _TOKEN = os.environ.get("EXEC_API_TOKEN", "")
+_ALLOW_INSECURE = os.environ.get("EXEC_API_ALLOW_INSECURE", "").strip().lower() in ("1", "true", "yes")
+
+
+def _validate_token_or_exit() -> None:
+    """Refuse to start unauthenticated by default -- this API is arbitrary
+    command execution. Before this check, an unset/placeholder
+    EXEC_API_TOKEN silently ran the server wide open (_authorized()
+    returned True unconditionally), with only a one-line startup log
+    distinguishing "authenticated" from "unauthenticated" mode. Set
+    EXEC_API_ALLOW_INSECURE=true for an explicit, deliberate opt-out."""
+    if _ALLOW_INSECURE:
+        return
+    if not _TOKEN or _TOKEN == _INSECURE_PLACEHOLDER:
+        print(
+            "FATAL: EXEC_API_TOKEN is unset or still the insecure placeholder "
+            "value from .env.example. This API runs arbitrary commands -- "
+            "set a real token (`openssl rand -hex 32`), or set "
+            "EXEC_API_ALLOW_INSECURE=true to run unauthenticated anyway "
+            "(never for anything beyond a single trusted local host).",
+            file=sys.stderr, flush=True,
+        )
+        sys.exit(1)
 
 # Keep in sync with the tools installed by docker/toolchain/Dockerfile.
 ALLOWED_BINARIES = frozenset({
@@ -85,8 +120,11 @@ class ExecHandler(BaseHTTPRequestHandler):
 
     def _authorized(self) -> bool:
         if not _TOKEN:
+            # Only reachable when EXEC_API_ALLOW_INSECURE=true -- see
+            # _validate_token_or_exit(), called before the server ever
+            # starts serving.
             return True
-        return self.headers.get("Authorization", "") == f"Bearer {_TOKEN}"
+        return secrets.compare_digest(self.headers.get("Authorization", ""), f"Bearer {_TOKEN}")
 
     def do_POST(self):
         if self.path != "/exec":
@@ -145,6 +183,7 @@ class ExecHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    mode = "authenticated" if _TOKEN else "unauthenticated"
+    _validate_token_or_exit()
+    mode = "authenticated" if _TOKEN else "unauthenticated (EXEC_API_ALLOW_INSECURE=true)"
     print(f"toolchain exec API listening on :8088 ({mode})", flush=True)
     HTTPServer(("0.0.0.0", 8088), ExecHandler).serve_forever()

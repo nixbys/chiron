@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from core.database import SessionLocal, Webhook, ModelEndpoint
 from src.auth_helpers import owner_filter
+from src.secret_storage import encrypt as _encrypt_secret
 from src.url_security import validate_public_http_url
 from src.webhook_manager import WebhookManager, validate_webhook_url, validate_events
 
@@ -65,7 +66,6 @@ def setup_webhook_routes(
     webhook_manager: WebhookManager,
     auth_manager,
     session_manager=None,
-    api_key_manager=None,
 ) -> APIRouter:
 
     @router.get("/webhooks")
@@ -114,12 +114,12 @@ def setup_webhook_routes(
             raise HTTPException(400, str(e))
 
         secret_val = secret.strip()[:MAX_SECRET_LEN] or None
-        # Encrypt the secret at rest using the same Fernet key as API keys
-        encrypted_secret = None
-        if secret_val and api_key_manager:
-            encrypted_secret = api_key_manager.encrypt_api_key(secret_val)
-        elif secret_val:
-            encrypted_secret = secret_val  # Fallback if no encryption available
+        # Encrypt the secret at rest -- same secret_storage key/`enc:`
+        # convention every other secret in this app uses (retired the
+        # separate api_key_manager Fernet key this used to go through;
+        # see core/database.py's _migrate_encrypt_webhook_secrets for the
+        # one-time migration of anything encrypted under the old key).
+        encrypted_secret = _encrypt_secret(secret_val) if secret_val else None
 
         webhook_id = str(uuid.uuid4())[:8]
         db = SessionLocal()

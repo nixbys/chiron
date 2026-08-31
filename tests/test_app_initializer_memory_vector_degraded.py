@@ -33,7 +33,7 @@ def _neutralize_collaborators(monkeypatch):
     so the test isolates the memory_vector health-handling branch."""
     for name in [
         "MemoryManager", "SkillsManager", "SessionManager", "UploadHandler",
-        "PersonalDocsManager", "APIKeyManager", "PresetManager",
+        "PersonalDocsManager", "PresetManager",
         "MemoryProviderRegistry", "NativeMemoryProvider", "ChatProcessor",
         "ResearchHandler", "ChatHandler", "ModelDiscovery",
     ]:
@@ -41,6 +41,11 @@ def _neutralize_collaborators(monkeypatch):
     monkeypatch.setattr(app_init, "set_session_manager", lambda *a, **k: None)
     monkeypatch.setattr(app_init, "update_search_config", lambda *a, **k: None)
     monkeypatch.setattr(app_init, "create_directories", lambda: None)
+    # Provider API-key loading (retired src.api_key_manager.APIKeyManager;
+    # see src.app_initializer._load_and_migrate_provider_api_keys) reads
+    # data/api_keys.json directly rather than going through a mockable
+    # class attribute -- nothing to stub here as long as the file doesn't
+    # exist under tmp_path, which it doesn't in this test.
 
 
 def test_failed_memory_vector_init_is_kept_not_discarded(monkeypatch, tmp_path):

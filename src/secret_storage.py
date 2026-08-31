@@ -18,6 +18,8 @@ unchanged. That lets legacy rows coexist with new ones until a
 single migration pass rewrites them.
 """
 
+import hashlib
+import hmac as _hmac
 import os
 import logging
 from pathlib import Path
@@ -85,3 +87,38 @@ def decrypt(value: str) -> str:
 
 def is_encrypted(value: str) -> bool:
     return bool(value) and value.startswith(_PREFIX)
+
+
+def load_legacy_api_key_manager_fernet() -> Fernet | None:
+    """Load the retired src/api_key_manager.py's separate Fernet key
+    (data/.key), for one-time migration of anything still encrypted under
+    it (Webhook.secret via core/database.py's
+    _migrate_encrypt_webhook_secrets, the "brave" provider entry in
+    data/api_keys.json via src/app_initializer.py) onto this module's key/
+    `enc:` convention instead. Returns None if data/.key never existed (a
+    fresh install, or one that's already fully migrated) -- that whole
+    module is gone, so this reads the raw key bytes directly rather than
+    importing it."""
+    try:
+        key_path = _KEY_PATH.parent / ".key"
+        if not key_path.exists():
+            return None
+        return Fernet(key_path.read_bytes())
+    except Exception as e:
+        logger.warning(f"Could not load legacy api_key_manager key for migration: {e}")
+        return None
+
+
+def hmac_hex(value: str) -> str:
+    """Deterministic keyed HMAC-SHA256 hex digest of `value`, using the
+    same app key as encrypt()/decrypt() (raw Fernet key bytes -- any
+    sufficiently random key material works fine as an HMAC key; nothing
+    about Fernet's own internal structure is relied on here).
+
+    For values that need to be looked up by exact match without ever
+    storing (or being able to reverse-derive) the original -- e.g.
+    session tokens (core/auth.py) and the audit log's tamper-evident hash
+    chain (mcp_servers/audit_server.py) -- where Fernet (reversible) is
+    the wrong tool and a per-value random salt (like a password hash)
+    would break the O(1)-lookup-by-key use case both of those need."""
+    return _hmac.new(_load_or_create_key(), value.encode("utf-8"), hashlib.sha256).hexdigest()

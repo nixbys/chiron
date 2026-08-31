@@ -390,8 +390,12 @@ class EmailAccount(TimestampMixin, Base):
     """A configured IMAP/SMTP account. Supports multiple accounts per user —
     exactly one row per owner has is_default=True.
 
-    Security note: imap_password / smtp_password are stored Fernet-encrypted
-    via src/secret_storage.py. The key lives at data/.app_key (mode 0o600,
+    Security note: imap_password / smtp_password / oauth_access_token /
+    oauth_refresh_token use the EncryptedText column type -- Fernet-
+    encrypted at rest via src/secret_storage.py, schema-enforced (every
+    write is encrypted regardless of whether the calling code remembers
+    to, unlike a plain String column manually wrapped in encrypt() at
+    each call site). The key lives at data/.app_key (mode 0o600,
     gitignored). Anyone with read access to that file can decrypt every
     row, so the threat model is "stolen SQLite backup" rather than
     "process compromise". On first start any legacy plaintext rows are
@@ -409,7 +413,7 @@ class EmailAccount(TimestampMixin, Base):
     imap_host      = Column(String, default="")
     imap_port      = Column(Integer, default=993)
     imap_user      = Column(String, default="")
-    imap_password  = Column(String, default="")
+    imap_password  = Column(EncryptedText, default="")
     imap_starttls  = Column(Boolean, default=True)
 
     # SMTP (sending)
@@ -417,15 +421,15 @@ class EmailAccount(TimestampMixin, Base):
     smtp_port      = Column(Integer, default=465)
     smtp_security  = Column(String, default="ssl")  # ssl | starttls | none
     smtp_user      = Column(String, default="")
-    smtp_password  = Column(String, default="")
+    smtp_password  = Column(EncryptedText, default="")
 
     from_address   = Column(String, default="")
     display_name   = Column(String, nullable=True)   # "Hriday Ranka" — used in From: header
 
     # OAuth2 (Google / Google Workspace). Tokens stored encrypted via secret_storage.
     oauth_provider      = Column(String, nullable=True)   # "google" or None
-    oauth_access_token  = Column(String, nullable=True)   # encrypted
-    oauth_refresh_token = Column(String, nullable=True)   # encrypted
+    oauth_access_token  = Column(EncryptedText, nullable=True)   # encrypted
+    oauth_refresh_token = Column(EncryptedText, nullable=True)   # encrypted
     oauth_token_expiry  = Column(String, nullable=True)   # unix timestamp string
 
     __table_args__ = (
@@ -1833,14 +1837,26 @@ def _migrate_add_assistant_columns():
 
 
 class Note(TimestampMixin, Base):
-    """A Google Keep-style note or checklist."""
+    """A Google Keep-style note or checklist.
+
+    Security note: content / items (the actual note/checklist text) use
+    EncryptedText -- Fernet-encrypted at rest via src/secret_storage.py,
+    same key/`enc:` convention as every other secret in this app. This was
+    genuinely plaintext before -- the one real user-content gap found in a
+    pass over every model for anything sensitive stored unencrypted. `id`
+    values already start decrypted-search-safe: search over notes
+    (src/tools/notes.py's "search"/"find" action) happens in-app against
+    the already-loaded (transparently decrypted) ORM attribute, never a
+    SQL LIKE/FTS query against this column, so encrypting it doesn't
+    break that.
+    """
     __tablename__ = "notes"
 
     id         = Column(String, primary_key=True, index=True)
     owner      = Column(String, nullable=True, index=True)
     title      = Column(String, default="")
-    content    = Column(Text, nullable=True)
-    items      = Column(Text, nullable=True)       # JSON string of [{text, done}]
+    content    = Column(EncryptedText, nullable=True)
+    items      = Column(EncryptedText, nullable=True)       # JSON string of [{text, done}]
     note_type  = Column(String, default="note")     # "note" or "checklist"
     color      = Column(String, nullable=True)
     label      = Column(String, nullable=True)
@@ -2174,6 +2190,8 @@ def init_db():
     _migrate_encrypt_email_passwords()
     _migrate_encrypt_signatures()
     _migrate_encrypt_endpoint_keys()
+    _migrate_encrypt_webhook_secrets()
+    _migrate_encrypt_notes()
     _migrate_backfill_task_folders()
 
 
@@ -2349,6 +2367,75 @@ def _migrate_add_email_smtp_security():
             conn.close()
         except Exception:
             pass
+
+
+def _migrate_encrypt_webhook_secrets():
+    """Move Webhook.secret off the retired src/api_key_manager.py's
+    separate Fernet key (data/.key) onto secret_storage's key/`enc:`
+    convention -- same one used for every other secret in this table.
+    Idempotent -- rows already `enc:`-prefixed are skipped. A row that
+    fails to decrypt under the old key is treated as already-plaintext
+    (the exact legacy fallback routes/webhook/webhook_routes.py used to
+    take when api_key_manager was unavailable) and encrypted as-is,
+    rather than silently discarded."""
+    try:
+        from src.secret_storage import encrypt, is_encrypted, load_legacy_api_key_manager_fernet
+    except Exception as e:
+        logger.warning(f"secret_storage import failed; skipping webhook-secret migration: {e}")
+        return
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT id, secret FROM webhooks")).fetchall()
+            candidates = [(rid, secret) for rid, secret in rows if secret and not is_encrypted(secret)]
+            if not candidates:
+                return
+            legacy_fernet = load_legacy_api_key_manager_fernet()
+            migrated = 0
+            for rid, secret in candidates:
+                plaintext = secret
+                if legacy_fernet is not None:
+                    try:
+                        plaintext = legacy_fernet.decrypt(secret.encode()).decode()
+                    except Exception:
+                        plaintext = secret  # not a valid old-Fernet token -- already plaintext
+                conn.execute(text("UPDATE webhooks SET secret = :s WHERE id = :id"),
+                             {"s": encrypt(plaintext), "id": rid})
+                migrated += 1
+            if migrated:
+                conn.commit()
+                logger.info(f"Migrated webhook secret(s) to secret_storage encryption on {migrated} row(s)")
+    except Exception as e:
+        logger.warning(f"Webhook-secret encryption migration skipped: {e}")
+
+
+def _migrate_encrypt_notes():
+    """Encrypt any plaintext content/items still in the notes table.
+    Idempotent -- rows already `enc:`-prefixed are skipped. Uses raw SQL so
+    the EncryptedText type decorator isn't applied twice."""
+    try:
+        from src.secret_storage import encrypt, is_encrypted
+    except Exception as e:
+        logger.warning(f"secret_storage import failed; skipping notes migration: {e}")
+        return
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT id, content, items FROM notes")).fetchall()
+            migrated = 0
+            for rid, content, items in rows:
+                updates = {}
+                if content and not is_encrypted(content):
+                    updates["content"] = encrypt(content)
+                if items and not is_encrypted(items):
+                    updates["items"] = encrypt(items)
+                if updates:
+                    sets = ", ".join(f"{k} = :{k}" for k in updates)
+                    conn.execute(text(f"UPDATE notes SET {sets} WHERE id = :id"), {**updates, "id": rid})
+                    migrated += 1
+            if migrated:
+                conn.commit()
+                logger.info(f"Encrypted plaintext note content/items on {migrated} row(s)")
+    except Exception as e:
+        logger.warning(f"Notes encryption migration skipped: {e}")
 
 
 def _migrate_encrypt_endpoint_keys():
