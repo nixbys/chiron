@@ -13,7 +13,22 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import src.builtin_actions as ba_mod
 from src.builtin_actions import TaskNoop, action_scope_violation_check
+
+
+class _FakeMcpManager:
+    """Same shape test_builtin_actions_watchlist_check.py's own fake uses."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def call_tool(self, qualified_name, args):
+        self.calls.append((qualified_name, args))
+        return {"stdout": "ok", "exit_code": 0}
+
+    def get_all_tools(self):
+        return [{"name": "finding_index", "qualified_name": "mcp__findings__finding_index", "is_disabled": False}]
 
 
 @pytest.fixture(autouse=True)
@@ -131,3 +146,121 @@ async def test_dispatch_failure_does_not_crash_the_action(tmp_data_dir):
         summary, success = await action_scope_violation_check("owner1", task_id="task-1")
     assert success is True
     assert "9.9.9.9" in summary
+
+
+# ---- Escalation (Phase J) -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_escalation_fires_when_threshold_crossed(tmp_data_dir):
+    """Default threshold is 3 in a 24h window: baseline run seeds 1
+    (silent), second run adds 2 more -- total 3 crosses the threshold."""
+    _, common_mod = tmp_data_dir
+    common_mod._log_invocation("nmap_scan", ["8.8.8.8"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    with pytest.raises(TaskNoop):  # baseline
+        await action_scope_violation_check("owner1", task_id="task-1")
+
+    common_mod._log_invocation("nmap_scan", ["9.9.9.9"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    common_mod._log_invocation("nmap_scan", ["1.2.3.4"], "n/a", None, "scope_override", "approved", engagement_id="eng-1")
+
+    mgr = _FakeMcpManager()
+    with patch("routes.note_routes.dispatch_reminder", AsyncMock()), \
+         patch("src.tool_utils.get_mcp_manager", return_value=mgr), \
+         patch("mcp_servers.engagement_server._log_event") as mock_log_event:
+        summary, success = await action_scope_violation_check("owner1", task_id="task-1")
+
+    assert success is True
+    assert "Pattern escalation" in summary
+    assert "eng-1" in summary
+    finding_calls = [c for c in mgr.calls if c[0] == "mcp__findings__finding_index"]
+    assert len(finding_calls) == 1
+    assert finding_calls[0][1]["engagement"] == "eng-1"
+    assert finding_calls[0][1]["severity"] == "medium"
+    assert finding_calls[0][1]["tags"] == ["process", "scope-deviation"]
+    mock_log_event.assert_called_once()
+    assert mock_log_event.call_args[0][0] == "eng-1"
+    assert mock_log_event.call_args[0][1] == "finding_added"
+
+
+@pytest.mark.asyncio
+async def test_escalation_does_not_fire_below_threshold(tmp_data_dir):
+    _, common_mod = tmp_data_dir
+    common_mod._log_invocation("nmap_scan", ["8.8.8.8"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    with pytest.raises(TaskNoop):  # baseline
+        await action_scope_violation_check("owner1", task_id="task-1")
+
+    common_mod._log_invocation("nmap_scan", ["9.9.9.9"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+
+    mgr = _FakeMcpManager()
+    with patch("routes.note_routes.dispatch_reminder", AsyncMock()), \
+         patch("src.tool_utils.get_mcp_manager", return_value=mgr):
+        summary, success = await action_scope_violation_check("owner1", task_id="task-1")
+
+    assert success is True
+    assert "Pattern escalation" not in summary
+    assert mgr.calls == []
+
+
+@pytest.mark.asyncio
+async def test_escalation_does_not_refire_once_already_over_threshold(tmp_data_dir):
+    """Once an engagement is already over threshold, a later run with one
+    more new violation must not re-file another finding."""
+    _, common_mod = tmp_data_dir
+    common_mod._log_invocation("nmap_scan", ["8.8.8.8"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    with pytest.raises(TaskNoop):  # baseline
+        await action_scope_violation_check("owner1", task_id="task-1")
+
+    common_mod._log_invocation("nmap_scan", ["9.9.9.9"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    common_mod._log_invocation("nmap_scan", ["1.2.3.4"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    mgr = _FakeMcpManager()
+    with patch("routes.note_routes.dispatch_reminder", AsyncMock()), \
+         patch("src.tool_utils.get_mcp_manager", return_value=mgr):
+        await action_scope_violation_check("owner1", task_id="task-1")  # crosses threshold, fires once
+    assert len(mgr.calls) == 1
+
+    common_mod._log_invocation("nmap_scan", ["5.5.5.5"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    with patch("routes.note_routes.dispatch_reminder", AsyncMock()), \
+         patch("src.tool_utils.get_mcp_manager", return_value=mgr):
+        summary, success = await action_scope_violation_check("owner1", task_id="task-1")
+    assert "Pattern escalation" not in summary
+    assert len(mgr.calls) == 1  # unchanged -- no second finding
+
+
+@pytest.mark.asyncio
+async def test_escalation_disabled_when_threshold_is_zero(tmp_data_dir, monkeypatch):
+    monkeypatch.setattr(ba_mod, "_SCOPE_VIOLATION_ESCALATION_THRESHOLD", 0)
+    _, common_mod = tmp_data_dir
+    common_mod._log_invocation("nmap_scan", ["8.8.8.8"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    with pytest.raises(TaskNoop):  # baseline
+        await action_scope_violation_check("owner1", task_id="task-1")
+
+    for target in ("9.9.9.9", "1.2.3.4", "5.5.5.5"):
+        common_mod._log_invocation("nmap_scan", [target], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+
+    mgr = _FakeMcpManager()
+    with patch("routes.note_routes.dispatch_reminder", AsyncMock()), \
+         patch("src.tool_utils.get_mcp_manager", return_value=mgr):
+        summary, success = await action_scope_violation_check("owner1", task_id="task-1")
+    assert "Pattern escalation" not in summary
+    assert mgr.calls == []
+
+
+@pytest.mark.asyncio
+async def test_escalation_is_per_engagement(tmp_data_dir):
+    """Two engagements each below threshold on their own don't combine to
+    trigger escalation for either."""
+    _, common_mod = tmp_data_dir
+    common_mod._log_invocation("nmap_scan", ["8.8.8.8"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    common_mod._log_invocation("nmap_scan", ["9.9.9.9"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-2")
+    with pytest.raises(TaskNoop):  # baseline
+        await action_scope_violation_check("owner1", task_id="task-1")
+
+    common_mod._log_invocation("nmap_scan", ["1.2.3.4"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    common_mod._log_invocation("nmap_scan", ["5.5.5.5"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-2")
+
+    mgr = _FakeMcpManager()
+    with patch("routes.note_routes.dispatch_reminder", AsyncMock()), \
+         patch("src.tool_utils.get_mcp_manager", return_value=mgr):
+        summary, success = await action_scope_violation_check("owner1", task_id="task-1")
+    assert "Pattern escalation" not in summary
+    assert mgr.calls == []

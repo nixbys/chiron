@@ -149,6 +149,26 @@ def _list_scope_violations_since(after_id: int, engagement_id: str | None = None
         conn.close()
 
 
+def _count_scope_violations_in_window(engagement_id: str, window_s: float) -> int:
+    """Rolling count of this engagement's blocked_out_of_scope/
+    scope_override rows in the trailing `window_s` seconds -- for
+    action_scope_violation_check (src/builtin_actions.py, Phase J) to
+    detect a *pattern* of violations crossing an escalation threshold,
+    independent of the checkpoint-based "new since last poll" count
+    _list_scope_violations_since returns."""
+    conn = _get_db()
+    try:
+        since = time.time() - window_s
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM tool_invocations "
+            "WHERE engagement_id=? AND ts>? AND outcome IN (?, ?)",
+            (engagement_id, since, *_SCOPE_VIOLATION_OUTCOMES),
+        ).fetchone()
+        return row["n"] if row else 0
+    finally:
+        conn.close()
+
+
 def _list_invocations(
     binary: str | None = None,
     outcome: str | None = None,

@@ -3809,13 +3809,98 @@ async def action_watchlist_check(owner: str, **kwargs) -> Tuple[str, bool]:
     return summary, True
 
 
+# Phase J (escalation, on top of Phase F's reminders): a single override
+# is normal pentest work (scope sometimes legitimately expands mid-
+# engagement) -- a *pattern* of overrides/blocks on one engagement in a
+# short window is a signal worth a permanent record. Env-overridable so an
+# operator can tune sensitivity without a code change, same override
+# shape as TOOLCHAIN_RATE_LIMIT/_WINDOW.
+_SCOPE_VIOLATION_ESCALATION_THRESHOLD = int(os.environ.get("SCOPE_VIOLATION_ESCALATION_THRESHOLD", "3") or 0)
+_SCOPE_VIOLATION_ESCALATION_WINDOW_S = int(os.environ.get("SCOPE_VIOLATION_ESCALATION_WINDOW_HOURS", "24") or 0) * 3600
+
+
+async def _escalate_scope_violation_patterns(audit_mod, violations: list) -> list[str]:
+    """For each engagement with a new violation in this run, check whether
+    its rolling violation count (not just this run's new rows) just
+    crossed the escalation threshold, and if so file one findings_server
+    finding (severity medium, tagged process/scope-deviation) -- so a
+    genuine pattern shows up in the engagement's own findings/report, not
+    only in an audit table someone has to think to check.
+
+    Fires at most once per engagement per crossing: computed as "the count
+    *before* this run's new rows was under the threshold, and the count
+    *including* them is at or over it" -- once an engagement is already
+    over threshold, later runs see prior_count already >= threshold and
+    don't re-file. Disabled entirely if the threshold or window is
+    configured to 0.
+
+    Returns engagement ids a finding was actually filed for, for the
+    caller's own summary text.
+    """
+    if _SCOPE_VIOLATION_ESCALATION_THRESHOLD <= 0 or _SCOPE_VIOLATION_ESCALATION_WINDOW_S <= 0:
+        return []
+
+    new_counts: dict[str, int] = {}
+    for v in violations:
+        eng = v.get("engagement_id")
+        if eng:
+            new_counts[eng] = new_counts.get(eng, 0) + 1
+
+    escalated: list[str] = []
+    if not new_counts:
+        return escalated
+
+    import mcp_servers.engagement_server as engagement_mod
+    from src.tool_utils import get_mcp_manager
+
+    findings_tool = await _find_qualified_tool("finding_index")
+    mgr = get_mcp_manager()
+
+    for engagement_id, new_count in new_counts.items():
+        total_count = audit_mod._count_scope_violations_in_window(engagement_id, _SCOPE_VIOLATION_ESCALATION_WINDOW_S)
+        prior_count = total_count - new_count
+        if prior_count >= _SCOPE_VIOLATION_ESCALATION_THRESHOLD or total_count < _SCOPE_VIOLATION_ESCALATION_THRESHOLD:
+            continue
+
+        window_hours = _SCOPE_VIOLATION_ESCALATION_WINDOW_S // 3600
+        title = f"Pattern of scope violations on engagement {engagement_id}"
+        description = (
+            f"{total_count} scope-block/override events in the trailing {window_hours}h "
+            f"(threshold: {_SCOPE_VIOLATION_ESCALATION_THRESHOLD}). See the Security Hub's "
+            "Audit Log tab, filtered by this engagement, for the individual events."
+        )
+        if findings_tool and mgr:
+            try:
+                await mgr.call_tool(findings_tool, {
+                    "title": title,
+                    "severity": "medium",
+                    "tool": "scope_violation_check",
+                    "description": description,
+                    "engagement": engagement_id,
+                    "tags": ["process", "scope-deviation"],
+                })
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"scope_violation_check: escalation finding_index call failed: {e}")
+                continue
+        try:
+            engagement_mod._log_event(engagement_id, "finding_added", title, description)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"scope_violation_check: escalation engagement event log failed: {e}")
+        escalated.append(engagement_id)
+
+    return escalated
+
+
 async def action_scope_violation_check(owner: str, **kwargs) -> Tuple[str, bool]:
     """Check the toolchain audit trail (mcp_servers/audit_server.py) for new
     engagement-scope violations -- mcp_servers/common.py's check_scope()
     logging `blocked_out_of_scope` (a call was blocked) or `scope_override`
     (a block was overridden, itself always flagged, never silent) -- and
     send one batched reminder covering everything new since this task's
-    own last run.
+    own last run. Also escalates a *pattern* of violations on one
+    engagement (SCOPE_VIOLATION_ESCALATION_THRESHOLD+ in the trailing
+    SCOPE_VIOLATION_ESCALATION_WINDOW_HOURS) into a real findings_server
+    finding -- see _escalate_scope_violation_patterns.
 
     check_scope() runs inside an MCP server subprocess, reached only over
     stdio, so it cannot call dispatch_reminder() itself (that's core-app
@@ -3867,6 +3952,15 @@ async def action_scope_violation_check(owner: str, **kwargs) -> Tuple[str, bool]
         if v["outcome"] == "scope_override" and v.get("detail"):
             line += f" — reason: {v['detail']}"
         lines.append(line)
+
+    escalated = await _escalate_scope_violation_patterns(audit_mod, violations)
+    if escalated:
+        lines.append("")
+        lines.append(
+            f"Pattern escalation: filed a finding for {len(escalated)} engagement(s) "
+            f"that crossed {_SCOPE_VIOLATION_ESCALATION_THRESHOLD}+ events in the "
+            f"trailing {_SCOPE_VIOLATION_ESCALATION_WINDOW_S // 3600}h: {', '.join(escalated)}"
+        )
     summary = "\n".join(lines)
 
     try:
@@ -4522,5 +4616,5 @@ BUILTIN_ACTION_INFO = {
     "yara_sweep": "Run yara_scan against a configured target in the Kali toolchain container; files a finding and sends a reminder only when matches changed since the last sweep. Configure via this task's prompt as JSON, e.g. {\"target\": \"case-123/evidence\"}.",
     "host_monitor": "Re-check host telemetry (processes/listening ports/logged-in users, plus opt-in cron/packages) on the host Odysseus itself runs in; files a finding and sends a reminder only when something changed since the last run. Configure via this task's prompt as JSON, e.g. {\"checks\": [\"processes\", \"listening_ports\"]}.",
     "verify_remediation": "Re-check every 'remediated' finding scheduled_recon filed to confirm the issue is actually still gone; reopens it and sends a reminder if it's back, otherwise logs a confirming engagement event. Configure via this task's prompt as JSON, e.g. {\"limit\": 20}.",
-    "scope_violation_check": "Watch the toolchain audit trail for new engagement-scope violations (a blocked out-of-scope call, or an overridden block) and send one batched reminder per run. Configure via this task's prompt as JSON, e.g. {\"engagement_id\": \"...\"} to watch one engagement only; omit to watch every engagement.",
+    "scope_violation_check": "Watch the toolchain audit trail for new engagement-scope violations (a blocked out-of-scope call, or an overridden block) and send one batched reminder per run; a pattern of 3+ (SCOPE_VIOLATION_ESCALATION_THRESHOLD) in 24h (SCOPE_VIOLATION_ESCALATION_WINDOW_HOURS) on one engagement also files a real finding. Configure via this task's prompt as JSON, e.g. {\"engagement_id\": \"...\"} to watch one engagement only; omit to watch every engagement.",
 }

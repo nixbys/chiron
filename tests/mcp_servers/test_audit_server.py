@@ -266,6 +266,33 @@ def test_list_scope_violations_since_filters_by_engagement(tmp_data_dir):
     assert rows[0]["engagement_id"] == "eng-1"
 
 
+# ---- Escalation windowed count (Phase J) ---------------------------------
+
+
+def test_count_scope_violations_in_window_counts_matching_rows(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    common_mod._log_invocation("nmap_scan", ["8.8.8.8"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    common_mod._log_invocation("nmap_scan", ["9.9.9.9"], "n/a", None, "scope_override", engagement_id="eng-1")
+    common_mod._log_invocation("nmap_scan", ["10.0.0.5"], "n/a", None, "ok", engagement_id="eng-1")
+    assert mod._count_scope_violations_in_window("eng-1", 86400) == 2
+
+
+def test_count_scope_violations_in_window_is_per_engagement(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    common_mod._log_invocation("nmap_scan", ["8.8.8.8"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    common_mod._log_invocation("nmap_scan", ["9.9.9.9"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-2")
+    assert mod._count_scope_violations_in_window("eng-1", 86400) == 1
+    assert mod._count_scope_violations_in_window("eng-2", 86400) == 1
+
+
+def test_count_scope_violations_in_window_excludes_old_rows(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    _seed(common_mod, binary="nmap_scan", outcome="blocked_out_of_scope",
+          ts=time.time() - 7200, engagement_id="eng-1")
+    assert mod._count_scope_violations_in_window("eng-1", 3600) == 0
+    assert mod._count_scope_violations_in_window("eng-1", 14400) == 1
+
+
 def test_concurrent_first_access_does_not_deadlock(tmp_data_dir):
     """Regression: routes/security_dashboard_routes.py's Audit Log tab used
     to call _list_invocations and _stats concurrently via asyncio.gather.
