@@ -105,14 +105,21 @@ Update this file at the end of every phase/checkpoint, same discipline as `CHANG
       `out_of_scope` field, a "New Project" flow, a manual link-to-engagement action, and an
       Audit Log engagement filter + badges for the two new scope outcomes. Full details in
       `CHANGELOG.md`'s Unreleased section.
+- [x] **Engagement-scoped Projects addenda, Phases E-H (same plan).** RoE/SOW PDF scope
+      ingestion (extract-and-review, never auto-commit); a `scope_violation_check` scheduled
+      action for batched reminders on scope events (polling, not push — `check_scope()` runs
+      in an MCP server subprocess with no way to call `dispatch_reminder()` directly); a
+      "Project" badge in the chat header itself; a new `secrets_scan` tool on `osint_server`
+      (gitleaks against a cloned repo's full history, redacted output, flag-injection-safe).
+      Full details in `CHANGELOG.md`'s Unreleased section.
 
 ## Near-Term
 
-The same plan's recursive addenda (Phases E-L: RoE/SOW PDF scope ingestion, reminder dispatch
-on scope events, a chat-header project badge, a credential/secrets-scanning tool, plus a
-second layer on each of those) are approved but not started — see the durable copy at
-`/home/nixbys/.claude/projects/-var-home-nixbys-source-repos-odysseus-red/memory/
-engagement_scope_enforcement_plan.md` for full design detail. Otherwise nothing else is
+The same plan's second-order addenda (Phases I-L: temporal scope from the RoE document,
+override-pattern escalation to a real finding, a first-run unscoped-session nudge, wiring
+`secrets_scan` findings into the correlation fabric) are approved but not started — see the
+durable copy at `/home/nixbys/.claude/projects/-var-home-nixbys-source-repos-odysseus-red/
+memory/engagement_scope_enforcement_plan.md` for full design detail. Otherwise nothing else is
 queued; see "Ideas, Not Commitments" below for what's next if this fork keeps growing.
 
 ## Ideas, Not Commitments

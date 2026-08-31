@@ -110,6 +110,17 @@ RUN _gh_latest_tag() { \
       && chmod +x /usr/local/bin/trivy \
       && echo "Installed trivy" \
       || echo "WARNING: failed to install trivy — skipping" \
+    ) && \
+    # gitleaks — git-history secrets scanner (mcp_servers/osint_server.py's
+    # secrets_scan). Also versioned, and "x64" rather than "amd64" in its
+    # asset filename.
+    gitleaks_tag="$(_gh_latest_tag gitleaks/gitleaks)" && \
+    ( curl --retry 3 --retry-delay 5 -fsSL \
+        "https://github.com/gitleaks/gitleaks/releases/download/${gitleaks_tag}/gitleaks_${gitleaks_tag#v}_linux_x64.tar.gz" \
+        | tar -xz -C /usr/local/bin/ gitleaks \
+      && chmod +x /usr/local/bin/gitleaks \
+      && echo "Installed gitleaks" \
+      || echo "WARNING: failed to install gitleaks — skipping" \
     )
 
 # ── Exec API — MCP servers call this instead of podman exec ───────────────────

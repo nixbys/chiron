@@ -7,8 +7,10 @@ All tools run inside the odysseus-toolchain sidecar.
 """
 
 import asyncio
+import re
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -106,7 +108,52 @@ TOOLS = [
             "required": ["domain"],
         },
     ),
+    Tool(
+        name="secrets_scan",
+        description=(
+            "Clone a git repository and scan its full history for leaked credentials/API "
+            "keys/tokens (gitleaks) -- a standard pentest/OSINT deliverable. Matched secret "
+            "values are redacted in the output, never shown in full."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "repo_url": {
+                    "type": "string",
+                    "description": "Git URL to clone, e.g. https://github.com/org/repo.git or git@github.com:org/repo.git",
+                },
+                "timeout": {"type": "integer", "default": 180},
+                **SCOPE_ARG_PROPERTIES,
+            },
+            "required": ["repo_url"],
+        },
+    ),
 ]
+
+# Fixed, non-user-controlled scratch path -- every call clones into (and
+# first rm -rf's) this exact directory rather than a per-call unique name,
+# so no cleanup-on-error bookkeeping is needed and there's no path built
+# from user input anywhere in the rm/git argv. Trade-off: concurrent
+# secrets_scan calls clobber each other's checkout -- acceptable for a
+# one-shot analyst tool, same "small, focused, no queueing" scope as
+# msf_server's read-only search.
+_SECRETS_SCAN_WORKDIR = "/workspaces/secrets_scan_repo"
+
+# An http(s):// URL, or SCP-like git@host:path -- and never starting with
+# "-", which would otherwise let a crafted repo_url be interpreted as a
+# `git clone` flag (e.g. "--upload-pack=...") instead of a URL argument.
+_GIT_URL_RE = re.compile(r"^(?:https?://[^\s]+|[\w.-]+@[\w.-]+:[^\s]+)$")
+
+
+def _git_repo_host(repo_url: str) -> str | None:
+    """Best-effort hostname extraction for check_scope() -- cloning FROM a
+    remote host is exactly the kind of network-reaching action scope
+    enforcement exists for, even though the "tool" here is git, not one of
+    the usual scan binaries."""
+    if repo_url.startswith(("http://", "https://")):
+        return urlparse(repo_url).hostname
+    m = re.match(r"^[\w.-]+@([\w.-]+):", repo_url)
+    return m.group(1) if m else None
 
 
 @server.list_tools()
@@ -166,6 +213,36 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if passive:
             cmd.append("-passive")
         result = exec_in_toolchain(cmd, timeout=timeout, engagement_id=arguments.get("engagement_id"))
+
+    elif name == "secrets_scan":
+        repo_url = arguments["repo_url"].strip()
+        if not _GIT_URL_RE.match(repo_url):
+            return [TextContent(type="text", text=mcp_error(
+                "invalid_repo_url",
+                "repo_url must be an http(s):// URL or an SCP-like git@host:path address (and must not start with '-')",
+            ))]
+        host = _git_repo_host(repo_url)
+        if host and (err := check_scope_from_args(arguments, host, "secrets_scan")):
+            return [TextContent(type="text", text=err)]
+        timeout = int(arguments.get("timeout", 180))
+        engagement_id = arguments.get("engagement_id")
+
+        # Fixed workdir (see _SECRETS_SCAN_WORKDIR) -- always cleared first
+        # so a stale checkout from a prior call/crash never mixes into this
+        # scan's results.
+        exec_in_toolchain(["rm", "-rf", _SECRETS_SCAN_WORKDIR], timeout=15, engagement_id=engagement_id)
+        clone_out = exec_in_toolchain(
+            ["git", "clone", "--depth", "1", repo_url, _SECRETS_SCAN_WORKDIR],
+            timeout=timeout, engagement_id=engagement_id,
+        )
+        if clone_out.startswith("[error:"):
+            result = clone_out
+        else:
+            scan_out = exec_in_toolchain(
+                ["gitleaks", "detect", "--source", _SECRETS_SCAN_WORKDIR, "--no-banner", "--redact", "-v"],
+                timeout=timeout, engagement_id=engagement_id,
+            )
+            result = f"[git clone]\n{clone_out}\n\n[gitleaks]\n{scan_out}"
 
     else:
         result = mcp_error("unknown_tool", name)
