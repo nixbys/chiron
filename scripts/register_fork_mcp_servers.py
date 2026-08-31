@@ -70,6 +70,7 @@ LABELS: dict[str, str] = {
     "host_telemetry_server": "Blue: Host Telemetry",
     "compliance_server": "Blue: NIST Compliance",
     "audit_server": "Blue: Audit Log",
+    "msf_server": "Red: Metasploit (module search/info)",
 }
 
 

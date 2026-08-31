@@ -65,6 +65,31 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
   (`**Odysseus\nRed** (this fork)`) — fixed to `**Chiron** (this fork)`.
 
 ### Added
+- **Engagement-scoped "Projects" + a Metasploit MCP server.** Chat sessions can now be
+  linked to an Engagement (`Session.engagement_id`, new migration), and any tool call with a
+  real network target is checked against that engagement's declared `scope`/`out_of_scope`
+  before it runs — block by default, with an explicit `override_scope=true` (+
+  `override_reason`) always logged as its own flagged audit outcome (`scope_override`), never
+  a silent pass-through; a plain block logs `blocked_out_of_scope`. New `check_scope()`/
+  `_target_matches()` (exact/CIDR/domain-suffix) in `mcp_servers/common.py`, reading
+  `engagement_server`'s own SQLite directly (the fork's standard no-cross-import pattern).
+  Wired into every tool with a real target: `recon_server`, `web_vuln_server`, `osint_server`,
+  `intel_server`, `watchlist_server` (skipped for hash indicators, which have no network
+  scope); `yara_server`'s `yara_scan` gets `engagement_id` audit tagging only (a filesystem
+  path has no in/out-of-scope concept). `src/tool_execution.py`'s MCP dispatch auto-injects a
+  linked session's `engagement_id` into these calls (mirroring the existing email-owner
+  injection precedent) — a model-supplied `engagement_id` in the call always wins. Security
+  Hub: the Engagements tab gained the missing `out_of_scope` field (the backend already
+  accepted it) and a "New Project" flow that creates an engagement and a linked chat session
+  in one step; existing sessions get a manual "Link current chat" action; the Audit Log tab
+  gained an engagement filter and badges for the two new outcomes. New 22nd MCP server,
+  `msf_server` (Metasploit): `msf_search`/`msf_module_info`, read-only module search/info via
+  a one-shot `msfconsole -q -x` — no RPC daemon, no session-driven exploit execution, that's a
+  separate follow-up. Also fixed a real bug found while wiring the Audit Log's new filter
+  through: `GET /api/security/audit` called `audit_server._list_invocations(binary, outcome,
+  limit)` positionally, so inserting `engagement_id` before `limit` in that function's
+  signature had been silently passing `limit` into the `engagement_id` slot — every existing
+  test for the route mocks the function entirely, so none of them caught it.
 - **Toolchain invocation audit trail + rate limiting**, both enforced at `mcp_servers/
   common.py`'s `exec_in_toolchain()` — the one chokepoint every red-team MCP server's tool
   calls pass through, so no changes were needed in any of the other 20 server modules. Every
