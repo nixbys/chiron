@@ -46,13 +46,15 @@ ALLOWED_BINARIES = frozenset({
     # Go-based recon suite
     "nuclei", "httpx", "subfinder", "amass",
     # Misc utilities the sidecar exposes
-    "trivy", "jq", "git", "unzip", "7z",
+    "trivy", "jq", "git", "unzip", "7z", "gitleaks",
     # Base coreutils/grep the MCP servers shell out to directly (yara_server's
     # rule-file writes/reads/listing, exploit_server's local Metasploit
-    # module grep) — always present on the base image, not separately
-    # apt-installed. No general-purpose shell (sh/bash) is ever allowed here
-    # — MCP servers must call one of these directly, not chain commands.
-    "ls", "mkdir", "tee", "grep", "cat",
+    # module grep, osint_server's secrets_scan clearing its own fixed
+    # scratch checkout dir before each clone) — always present on the base
+    # image, not separately apt-installed. No general-purpose shell (sh/
+    # bash) is ever allowed here — MCP servers must call one of these
+    # directly, not chain commands.
+    "ls", "mkdir", "tee", "grep", "cat", "rm",
 })
 
 _log_path = Path(os.environ.get("EXEC_LOG_FILE", "/var/log/exec_api.jsonl"))

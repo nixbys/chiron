@@ -90,6 +90,26 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
   limit)` positionally, so inserting `engagement_id` before `limit` in that function's
   signature had been silently passing `limit` into the `engagement_id` slot — every existing
   test for the route mocks the function entirely, so none of them caught it.
+- **Four follow-on additions to the Engagement-scoped Projects work above** (approved
+  addenda, same plan): (1) RoE/SOW PDF scope ingestion — new `POST /api/security/
+  roe/parse-scope` extracts IP/CIDR/domain-shaped candidate targets from an uploaded
+  authorization document (`pdf_server.py`'s existing `pdf_extract_text`, validated the same
+  way every other target-taking tool validates one) and pre-fills the "New Project" form's
+  scope field — reviewed and confirmed by the user, never auto-committed. (2) A new
+  `scope_violation_check` scheduled action polls the audit trail for new
+  `blocked_out_of_scope`/`scope_override` rows and sends one batched reminder per run, the
+  same polling shape every other drift-detection reminder in this fork already uses (`check_
+  scope()` runs inside an MCP server subprocess and has no way to call `dispatch_reminder()`
+  itself). (3) A "Project" badge in the chat header itself when the active session is linked
+  to an engagement, linking through to that engagement's Security Hub detail view — `GET
+  /api/sessions` now also reports each session's `engagement_id`. (4) New `secrets_scan` tool
+  on `osint_server` (the 22nd server's 23rd tool, no new server needed): clones a git repo and
+  scans its full history for leaked credentials with `gitleaks` (new toolchain sidecar
+  dependency, plus `rm` newly allowlisted in `docker/toolchain/exec_api.py` so the tool can
+  clear its own fixed scratch checkout before each run) — matched secret values are redacted
+  in the output, never shown in full, and a crafted `repo_url` starting with `-` is rejected
+  outright (closes a `git clone` flag-injection vector, e.g. `--upload-pack=...`, before it
+  shipped).
 - **Toolchain invocation audit trail + rate limiting**, both enforced at `mcp_servers/
   common.py`'s `exec_in_toolchain()` — the one chokepoint every red-team MCP server's tool
   calls pass through, so no changes were needed in any of the other 20 server modules. Every

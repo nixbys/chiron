@@ -196,6 +196,7 @@ Every tool below is exposed to the chat/agent layer over stdio MCP — nothing h
 | `dns_enum` | DNS record enumeration (A, MX, NS, TXT, CNAME) |
 | `whois_lookup` | WHOIS registration data |
 | `subdomain_enum` | Passive subdomain enumeration via Amass (cert transparency, DNS brute-force, APIs) |
+| `secrets_scan` | Clone a git repo and scan its full history for leaked credentials/API keys/tokens (gitleaks) -- matched secret values are redacted, never shown in full |
 
 ### `web_vuln_server` — Web Assessment
 
