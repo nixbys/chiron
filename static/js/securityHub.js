@@ -16,16 +16,23 @@
 
 const API_BASE = window.location.origin;
 
+// Set by the chat SPA's sidebar Security Hub button (static/app.js) as
+// ?session_id=... on navigation -- this is a real page load, not a SPA
+// route, so a URL param is the only way this page can know which chat sent
+// the user here. Absent (direct navigation, bookmark, /login-style access)
+// = no "current chat" to offer linking.
+const _CURRENT_SESSION_ID = new URLSearchParams(window.location.search).get('session_id') || '';
+
 let _activeTab = 'overview';
 
 // Per-tab cached state, so switching tabs doesn't lose an in-progress
 // form or force a re-fetch every time.
 const _state = {
-  engagements: { list: null, expandedId: null, detail: null, formOpen: false },
+  engagements: { list: null, expandedId: null, detail: null, formOpen: false, newProjectOpen: false },
   watchlist: { list: null, formOpen: false },
   rules: { sigma: null, yara: null, viewing: null, content: null },
   services: { list: null },
-  audit: { invocations: null, stats: null, binary: '', outcome: '' },
+  audit: { invocations: null, stats: null, binary: '', outcome: '', engagementId: '' },
 };
 
 // ── Shared render helpers ──
@@ -193,6 +200,7 @@ function _engagementRow(e) {
   if (expanded && _state.engagements.detail) {
     const d = _state.engagements.detail;
     const scope = (d.engagement.scope || []).join(', ') || '(none)';
+    const outOfScope = (d.engagement.out_of_scope || []).join(', ') || '(none)';
     const timeline = (d.timeline || []).map(ev => {
       const when = ev.ts ? new Date(ev.ts * 1000).toLocaleString() : '';
       return `<div class="sec-tl-row"><span class="sec-tl-time">${_escape(when)}</span><span class="sec-tl-dot sec-muted"></span><span class="sec-tl-text">[${_escape(ev.event_type)}] ${_escape(ev.summary)}</span></div>`;
@@ -201,6 +209,9 @@ function _engagementRow(e) {
       <div style="padding:10px 0 2px;font-size:12px;color:var(--fg-muted);">
         <div style="margin-bottom:6px;">${_escape(d.engagement.description || '(no description)')}</div>
         <div style="margin-bottom:6px;">Scope: ${_escape(scope)}</div>
+        <div style="margin-bottom:10px;">Out of scope: ${_escape(outOfScope)}</div>
+        <div style="margin-bottom:10px;">Id: <code style="font-family:var(--font-family,'IBM Plex Mono',monospace);">${_escape(e.id)}</code> <span style="opacity:0.75;">(paste into the Audit Log tab's engagement filter)</span></div>
+        ${_CURRENT_SESSION_ID ? `<div style="margin-bottom:10px;">${_smallBtn('Link current chat to this engagement', 'link-current-chat', e.id)}</div>` : ''}
         <div class="sec-timeline">${timeline}</div>
       </div>`;
   } else if (expanded) {
@@ -219,14 +230,36 @@ function _engagementRow(e) {
 }
 
 function _renderEngagementForm() {
+  if (_state.engagements.newProjectOpen) {
+    return `
+      <form data-action="create-new-project" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px;align-items:center;">
+        <input class="sec-hub-input" name="name" placeholder="name (required)" required style="flex:1;min-width:140px;">
+        <input class="sec-hub-input" name="client" placeholder="client" style="flex:1;min-width:120px;">
+        <input class="sec-hub-input" name="scope" placeholder="scope, comma-separated" style="flex:2;min-width:180px;">
+        <input class="sec-hub-input" name="out_of_scope" placeholder="out of scope, comma-separated" style="flex:2;min-width:180px;">
+        <input class="sec-hub-input" name="tags" placeholder="tags, comma-separated" style="flex:1;min-width:140px;">
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--fg-muted);white-space:nowrap;">
+          <input type="checkbox" name="rag"> RAG
+        </label>
+        <button type="submit" class="sec-hub-btn sec-hub-btn-primary">Create Project + Open Chat</button>
+        ${_smallBtn('Cancel', 'toggle-new-project-form', '')}
+      </form>
+      <div style="font-size:11px;color:var(--fg-muted);margin:0 0 12px;">
+        Creates the engagement, then a new chat session already linked to it and scoped by it -- pick a model once the chat opens.
+      </div>`;
+  }
   if (!_state.engagements.formOpen) {
-    return `<div style="margin-bottom:10px;">${_smallBtn('+ New Engagement', 'toggle-engagement-form', '')}</div>`;
+    return `<div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;">
+      ${_smallBtn('+ New Project (Engagement + Chat)', 'toggle-new-project-form', '')}
+      ${_smallBtn('+ New Engagement', 'toggle-engagement-form', '')}
+    </div>`;
   }
   return `
     <form data-action="create-engagement" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;align-items:center;">
       <input class="sec-hub-input" name="name" placeholder="name (required)" required style="flex:1;min-width:140px;">
       <input class="sec-hub-input" name="client" placeholder="client" style="flex:1;min-width:120px;">
       <input class="sec-hub-input" name="scope" placeholder="scope, comma-separated" style="flex:2;min-width:180px;">
+      <input class="sec-hub-input" name="out_of_scope" placeholder="out of scope, comma-separated" style="flex:2;min-width:180px;">
       <button type="submit" class="sec-hub-btn sec-hub-btn-primary">Create</button>
       ${_smallBtn('Cancel', 'toggle-engagement-form', '')}
     </form>`;
@@ -467,7 +500,14 @@ async function _loadServicesTab() {
 
 // ── Audit Log tab ──
 
-const _OUTCOME_BADGE_CLASS = { ok: 'sec-badge-low', error: 'sec-badge-high', timeout: 'sec-badge-medium', rate_limited: 'sec-badge-critical' };
+const _OUTCOME_BADGE_CLASS = {
+  ok: 'sec-badge-low', error: 'sec-badge-high', timeout: 'sec-badge-medium', rate_limited: 'sec-badge-critical',
+  // Scope-enforcement outcomes (mcp_servers/common.py's check_scope()): a
+  // block is a hard stop, so it reads as critical/red same as rate_limited;
+  // an override proceeded, but is still a flagged deviation worth eyes on,
+  // so it reads as a warning/amber rather than the "fine" green of ok.
+  blocked_out_of_scope: 'sec-badge-critical', scope_override: 'sec-badge-medium',
+};
 
 function _outcomeBadge(outcome) {
   const cls = _OUTCOME_BADGE_CLASS[outcome];
@@ -476,14 +516,15 @@ function _outcomeBadge(outcome) {
 }
 
 function _auditFilterForm() {
-  const { binary, outcome } = _state.audit;
-  const outcomes = ['', 'ok', 'error', 'timeout', 'rate_limited'];
+  const { binary, outcome, engagementId } = _state.audit;
+  const outcomes = ['', 'ok', 'error', 'timeout', 'rate_limited', 'blocked_out_of_scope', 'scope_override'];
   return `
     <form data-action="filter-audit" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;align-items:center;">
       <input class="sec-hub-input" name="binary" placeholder="binary, e.g. nmap" value="${_escape(binary)}" style="flex:1;min-width:140px;">
       <select class="sec-hub-input" name="outcome" style="flex:0 0 auto;">
         ${outcomes.map(o => `<option value="${o}" ${o === outcome ? 'selected' : ''}>${o || 'any outcome'}</option>`).join('')}
       </select>
+      <input class="sec-hub-input" name="engagement_id" placeholder="engagement id" value="${_escape(engagementId)}" style="flex:1;min-width:140px;">
       <button type="submit" class="sec-hub-btn sec-hub-btn-primary">Filter</button>
     </form>`;
 }
@@ -505,12 +546,13 @@ function _auditRow(inv) {
   const args = Array.isArray(inv.args) ? inv.args.join(' ') : String(inv.args ?? '');
   const dur = inv.duration_ms != null ? `${inv.duration_ms}ms` : '—';
   return `
-    <div class="sec-tl-row" style="grid-template-columns:140px 90px 70px 110px 60px 1fr;">
+    <div class="sec-tl-row" style="grid-template-columns:140px 90px 70px 150px 60px 110px 1fr;">
       <span class="sec-tl-time">${_escape(when)}</span>
       <span class="sec-tl-target">${_escape(inv.binary)}</span>
       <span style="color:var(--fg-muted);font-size:11px;">${_escape(inv.mode)}</span>
       <span>${_outcomeBadge(inv.outcome)}</span>
       <span style="color:var(--fg-muted);font-size:11px;font-variant-numeric:tabular-nums;">${dur}</span>
+      <span style="color:var(--fg-muted);font-size:11px;">${_escape(inv.engagement_id || '—')}</span>
       <code style="font-family:var(--font-family,'IBM Plex Mono',monospace);font-size:11.5px;color:var(--fg-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_escape(args)}</code>
     </div>`;
 }
@@ -531,10 +573,11 @@ function _renderAuditTab() {
 
 async function _loadAuditTab() {
   _renderAuditTab();
-  const { binary, outcome } = _state.audit;
+  const { binary, outcome, engagementId } = _state.audit;
   const params = new URLSearchParams({ limit: '100' });
   if (binary) params.set('binary', binary);
   if (outcome) params.set('outcome', outcome);
+  if (engagementId) params.set('engagement_id', engagementId);
   try {
     const res = await fetch(`${API_BASE}/api/security/audit?${params}`, { credentials: 'same-origin' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -580,6 +623,9 @@ async function _onBodyClick(e) {
   if (action === 'toggle-engagement-form') {
     _state.engagements.formOpen = !_state.engagements.formOpen;
     _renderEngagements();
+  } else if (action === 'toggle-new-project-form') {
+    _state.engagements.newProjectOpen = !_state.engagements.newProjectOpen;
+    _renderEngagements();
   } else if (action === 'toggle-watchlist-form') {
     _state.watchlist.formOpen = !_state.watchlist.formOpen;
     _renderWatchlistTab();
@@ -616,6 +662,17 @@ async function _onBodyClick(e) {
     await _loadWatchlistTab();
   } else if (action === 'view-rule') {
     await _loadRuleContent(target.dataset.kind, id);
+  } else if (action === 'link-current-chat') {
+    if (!_CURRENT_SESSION_ID) return;
+    const res = await fetch(`${API_BASE}/api/session/${encodeURIComponent(_CURRENT_SESSION_ID)}`, {
+      method: 'PATCH', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ engagement_id: id }),
+    });
+    if (res.ok) {
+      target.textContent = 'Linked ✓';
+      target.disabled = true;
+    }
   }
 }
 
@@ -630,12 +687,58 @@ async function _onBodySubmit(e) {
     const name = String(fd.get('name') || '').trim();
     if (!name) return;
     const scope = String(fd.get('scope') || '').split(',').map(s => s.trim()).filter(Boolean);
+    const outOfScope = String(fd.get('out_of_scope') || '').split(',').map(s => s.trim()).filter(Boolean);
     const res = await fetch(`${API_BASE}/api/security/engagements`, {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, client: String(fd.get('client') || ''), scope }),
+      body: JSON.stringify({ name, client: String(fd.get('client') || ''), scope, out_of_scope: outOfScope }),
     });
     if (res.ok) _state.engagements.formOpen = false;
     await _loadEngagements();
+  } else if (action === 'create-new-project') {
+    const name = String(fd.get('name') || '').trim();
+    if (!name) return;
+    const scope = String(fd.get('scope') || '').split(',').map(s => s.trim()).filter(Boolean);
+    const outOfScope = String(fd.get('out_of_scope') || '').split(',').map(s => s.trim()).filter(Boolean);
+    const tags = String(fd.get('tags') || '').split(',').map(s => s.trim()).filter(Boolean);
+    const engRes = await fetch(`${API_BASE}/api/security/engagements`, {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, client: String(fd.get('client') || ''), scope, out_of_scope: outOfScope, tags }),
+    });
+    if (!engRes.ok) {
+      alert('Failed to create the engagement -- nothing else was created.');
+      return;
+    }
+    const engData = await engRes.json();
+    const engagementId = engData.engagement_id;
+    _state.engagements.newProjectOpen = false;
+    if (!engagementId) {
+      // Created, but the id couldn't be parsed back out (see _CREATED_ID_RE
+      // in routes/security_dashboard_routes.py) -- link a chat manually from
+      // the engagement's own row instead of guessing at an id.
+      alert('Project created, but no session was started automatically -- open it below and use "Link current chat" instead.');
+      await _loadEngagements();
+      return;
+    }
+    const sessRes = await fetch(`${API_BASE}/api/session`, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        name: `${name} — Project Chat`,
+        skip_validation: 'true',
+        rag: fd.get('rag') ? 'true' : 'false',
+        engagement_id: engagementId,
+      }),
+    });
+    if (!sessRes.ok) {
+      alert('Project created, but starting its chat session failed -- open it below and use "Link current chat" instead.');
+      await _loadEngagements();
+      return;
+    }
+    const sess = await sessRes.json();
+    // The chat SPA's own session-list boot reads window.location.hash to
+    // restore/select a session on load (static/js/sessions.js) -- the same
+    // deep-link convention already used for session-switch navigation.
+    window.location.href = `/#${encodeURIComponent(sess.id)}`;
   } else if (action === 'add-watchlist') {
     const indicator = String(fd.get('indicator') || '').trim();
     if (!indicator) return;
@@ -648,6 +751,7 @@ async function _onBodySubmit(e) {
   } else if (action === 'filter-audit') {
     _state.audit.binary = String(fd.get('binary') || '').trim();
     _state.audit.outcome = String(fd.get('outcome') || '');
+    _state.audit.engagementId = String(fd.get('engagement_id') || '').trim();
     await _loadAuditTab();
   }
 }

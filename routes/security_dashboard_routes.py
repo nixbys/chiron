@@ -397,7 +397,13 @@ def setup_security_dashboard_routes():
     # ---- Audit Log ----------------------------------------------------
 
     @router.get("/audit")
-    async def list_audit_log(request: Request, binary: str | None = None, outcome: str | None = None, limit: int = 100):
+    async def list_audit_log(
+        request: Request,
+        binary: str | None = None,
+        outcome: str | None = None,
+        engagement_id: str | None = None,
+        limit: int = 100,
+    ):
         require_admin(request)
         import mcp_servers.audit_server as mod
         limit = max(1, min(limit, 500))
@@ -408,7 +414,10 @@ def setup_security_dashboard_routes():
         # concurrently on the very first request (nothing has written to
         # audit.db yet) raced two threads through that one-time schema
         # setup and hit a real "database is locked" 500 in practice.
-        invocations = await asyncio.to_thread(mod._list_invocations, binary, outcome, limit)
+        invocations = await asyncio.to_thread(
+            mod._list_invocations, binary=binary, outcome=outcome,
+            engagement_id=engagement_id, limit=limit,
+        )
         stats = await asyncio.to_thread(mod._stats, 86400)
         return {"invocations": invocations, "stats": stats}
 
