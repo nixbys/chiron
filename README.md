@@ -34,7 +34,7 @@
 
 Chiron layers a complete cybersecurity toolchain on top of a self-hosted AI workspace (see credit above). The base platform provides chat, agents, memory, deep research, documents, and MCP — this fork adds:
 
-- **21 cybersecurity MCP servers** wired to a Kali-based sidecar, SpiderFoot OSINT platform, OpenSearch, BentoPDF, and CyberChef
+- **22 cybersecurity MCP servers** wired to a Kali-based sidecar, SpiderFoot OSINT platform, OpenSearch, BentoPDF, and CyberChef
 - **Toolchain audit trail + rate limiting** — every scan/exploit/recon call is logged (what ran, against what, when, how it turned out) and throttled per-binary, both enforced at the one chokepoint every red-team MCP server's calls pass through
 - **Pre-built agent skill workflows** for reconnaissance, OSINT, incident response, threat hunting, malware analysis, web assessment, continuous monitoring, and reporting
 - **Continuous scanning** — schedule recon (ports/subdomains/TLS cert/CVEs) to re-run on a cron and only file a finding when something actually changed
@@ -81,9 +81,9 @@ Native installs, GPU notes, Windows/macOS instructions, and HTTPS are covered in
 
 ## Architecture
 
-Chiron is the upstream Odysseus core — chat, agents, memory, research, documents — **unmodified**, with 21 security MCP servers layered on top and wired to a handful of sidecar services. Everything below the core is additive: it lives in `mcp_servers/`, `docker/toolchain/`, and `docker-compose.security.yml`, and attaches to the same container network without touching a single upstream file.
+Chiron is the upstream Odysseus core — chat, agents, memory, research, documents — **unmodified**, with 22 security MCP servers layered on top and wired to a handful of sidecar services. Everything below the core is additive: it lives in `mcp_servers/`, `docker/toolchain/`, and `docker-compose.security.yml`, and attaches to the same container network without touching a single upstream file.
 
-The 21 servers split along the offense/defense line from [ADR 007](docs/adr/007-security-detection-lifecycle.md) — **Red** (runs tools against a target), **Blue** (persists, correlates, and watches for drift), and one **Utility** server that's neither:
+The 22 servers split along the offense/defense line from [ADR 007](docs/adr/007-security-detection-lifecycle.md) — **Red** (runs tools against a target), **Blue** (persists, correlates, and watches for drift), and one **Utility** server that's neither:
 
 ```mermaid
 graph TD
@@ -100,6 +100,7 @@ graph TD
         webvuln[web_vuln_server]
         hashcrack[hashcrack_server]
         exploit[exploit_server]
+        msf[msf_server]
         intel[intel_server]
         sfserver[spiderfoot_server]
         pdf[pdf_server]
@@ -130,6 +131,7 @@ graph TD
     webvuln --> Toolchain
     hashcrack --> Toolchain
     exploit --> Toolchain
+    msf --> Toolchain
     yara --> Toolchain
 
     intel --> ThreatAPIs[("Shodan · VirusTotal<br/>OTX · Censys · NVD")]
@@ -164,7 +166,7 @@ See [MCP Tools](#mcp-tools) below for what each server actually does, and the [r
 
 ## MCP Tools
 
-Every tool below is exposed to the chat/agent layer over stdio MCP — nothing here requires a separate integration step beyond registering the server (see [`docs/develop-mcp-servers.md`](docs/develop-mcp-servers.md), or run [`scripts/register_fork_mcp_servers.py`](scripts/register_fork_mcp_servers.py) to register all 21 at once). Servers are listed roughly in offense → defense → utility order, matching the [Architecture](#architecture) diagram above.
+Every tool below is exposed to the chat/agent layer over stdio MCP — nothing here requires a separate integration step beyond registering the server (see [`docs/develop-mcp-servers.md`](docs/develop-mcp-servers.md), or run [`scripts/register_fork_mcp_servers.py`](scripts/register_fork_mcp_servers.py) to register all 22 at once). Servers are listed roughly in offense → defense → utility order, matching the [Architecture](#architecture) diagram above.
 
 ### `recon_server` — Network Reconnaissance
 
@@ -268,6 +270,15 @@ since the last sweep. Configure via the task's prompt as JSON, e.g.
 | `cve_to_exploit` | Find all known exploits for a CVE identifier |
 
 Uses the local `exploitdb` package installed in the Kali container — no network required.
+
+### `msf_server` — Metasploit Module Search
+
+| Tool | Description |
+|------|-------------|
+| `msf_search` | Search Metasploit Framework modules by keyword, CVE ID, platform, or type |
+| `msf_module_info` | Full details (description, targets, options, references) for one module |
+
+Read-only in this phase — module search/info only, via a one-shot `msfconsole -q -x`. No RPC daemon, no session-driven exploit execution or payload delivery; that's a separate, riskier follow-up.
 
 ### `transform_server` — Data Transformation
 
@@ -546,6 +557,7 @@ chiron/
 │   ├── pdf_server.py            # PDF intel + report assembly (pypdf)
 │   ├── yara_server.py           # YARA scan, rule management
 │   ├── exploit_server.py        # searchsploit, Exploit-DB lookup
+│   ├── msf_server.py            # Metasploit module search/info (read-only)
 │   ├── transform_server.py      # encode/decode, hash, JWT, XOR (in-process)
 │   ├── asset_server.py          # SQLite asset + findings inventory
 │   ├── attck_server.py          # MITRE ATT&CK STIX lookup

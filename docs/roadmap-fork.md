@@ -9,15 +9,16 @@ Update this file at the end of every phase/checkpoint, same discipline as `CHANG
 
 ## Current State
 
-- **21 security MCP servers** (recon, osint, intel, web_vuln, hashcrack, spiderfoot, pdf,
-  yara, sigma, exploit, transform, asset, attck, risk, findings, engagement, watchlist,
+- **22 security MCP servers** (recon, osint, intel, web_vuln, hashcrack, spiderfoot, pdf,
+  yara, sigma, exploit, msf, transform, asset, attck, risk, findings, engagement, watchlist,
   monitor, host_telemetry, compliance, audit), a Kali-based toolchain sidecar, SpiderFoot,
   OpenSearch-backed findings persistence, and BentoPDF — all wired through one detection
   pipeline (`docs/adr/007-security-detection-lifecycle.md`): every finding lands in
   `findings_server`/`asset_server`, every engagement gets one timeline, one event
   (`security_finding_added`), one notification path (`dispatch_reminder`). Every toolchain
-  invocation (not just findings) is also audited and rate-limited — see "Ideas, Not
-  Commitments" below, now shipped.
+  invocation (not just findings) is also audited and rate-limited. Chat sessions can be
+  linked to an engagement ("Project") and get real-time scope enforcement (block by default,
+  audited override) on every tool call with a network target.
 - A from-scratch dark-first design system (Chakra Petch / IBM Plex Sans / IBM Plex Mono,
   the "Duality" blue/crimson palette, a sharper/flatter shape language) applied app-wide,
   not just the security surfaces.
@@ -96,11 +97,23 @@ Update this file at the end of every phase/checkpoint, same discipline as `CHANG
       CyberChef (`docker.io/mcoutinho/cyberchef` on `127.0.0.1:8000`, per the standing
       "Connected Services" pattern) rounds out the manual-analyst-workflow story next to a
       Kali toolchain. Full details in `CHANGELOG.md`'s Unreleased section.
+- [x] **Engagement-scoped Projects + `msf_server` (Phases A-D of a plan approved 2026-08-29,
+      executed 2026-08-30).** Chat sessions can be linked to an Engagement; any tool call with
+      a real network target is checked against that engagement's declared scope before it
+      runs, block by default with an audited override. New 22nd MCP server, `msf_server`
+      (Metasploit `msf_search`/`msf_module_info`, read-only). Security Hub gained the missing
+      `out_of_scope` field, a "New Project" flow, a manual link-to-engagement action, and an
+      Audit Log engagement filter + badges for the two new scope outcomes. Full details in
+      `CHANGELOG.md`'s Unreleased section.
 
 ## Near-Term
 
-Nothing currently queued. See "Ideas, Not Commitments" below for what's next if this fork
-keeps growing.
+The same plan's recursive addenda (Phases E-L: RoE/SOW PDF scope ingestion, reminder dispatch
+on scope events, a chat-header project badge, a credential/secrets-scanning tool, plus a
+second layer on each of those) are approved but not started — see the durable copy at
+`/home/nixbys/.claude/projects/-var-home-nixbys-source-repos-odysseus-red/memory/
+engagement_scope_enforcement_plan.md` for full design detail. Otherwise nothing else is
+queued; see "Ideas, Not Commitments" below for what's next if this fork keeps growing.
 
 ## Ideas, Not Commitments
 
