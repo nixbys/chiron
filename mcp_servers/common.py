@@ -22,7 +22,9 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -64,38 +66,95 @@ _RATE_LIMIT_DEFAULT = int(os.environ.get("TOOLCHAIN_RATE_LIMIT", "20") or 0)
 # become the largest file in the data dir.
 _MAX_LOGGED_ARG_LEN = 2000
 
+# Full, unredacted stdout+stderr for every toolchain call, one file per
+# invocation -- kept out of the audit DB row itself (unlike the existing
+# capped `detail` field below, which only ever holds an error message and
+# only up to 500 chars) because real tool output can run well past what
+# belongs in a SQLite TEXT column read on every dashboard page load. This
+# is what routes/export_routes.py actually reads back for a "raw logs"
+# export; audit_server.py's own list/search views never touch it.
+_RAW_LOGS_DIR = _DATA_DIR / "audit_logs"
+_MAX_RAW_LOG_BYTES = 2 * 1024 * 1024  # 2MB/call -- generous, bounded against a pathological dump
+
+
+def _write_raw_log(binary: str, text: str) -> str | None:
+    """Persist one call's full output to its own file, returning a path
+    relative to _DATA_DIR to store on the audit row, or None on any
+    failure -- best-effort, same swallow-and-log discipline as
+    _log_invocation() itself: a logging bug must never break an actual
+    scan."""
+    if not text:
+        return None
+    try:
+        _RAW_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        name = f"{int(time.time() * 1000)}_{binary}_{uuid.uuid4().hex[:8]}.log"
+        (_RAW_LOGS_DIR / name).write_text(text[:_MAX_RAW_LOG_BYTES], encoding="utf-8")
+        return f"audit_logs/{name}"
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to write raw log file for %r", binary, exc_info=True)
+        return None
+
+
+_audit_db_init_lock = threading.Lock()
+
+
+def _new_audit_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(_AUDIT_DB_PATH), timeout=10)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
 
 def _get_audit_db() -> sqlite3.Connection:
     global _audit_db_initialized
     _AUDIT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_AUDIT_DB_PATH), timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     if not _audit_db_initialized:
-        with conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS tool_invocations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts REAL NOT NULL,
-                    binary TEXT NOT NULL,
-                    args TEXT NOT NULL,
-                    mode TEXT NOT NULL,
-                    duration_ms INTEGER,
-                    outcome TEXT NOT NULL,
-                    detail TEXT DEFAULT '',
-                    engagement_id TEXT
-                );
-            """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_binary_ts ON tool_invocations(binary, ts);")
-            # Migrate in engagement_id for a pre-existing audit.db (added
-            # alongside check_scope() -- see below) -- CREATE TABLE IF NOT
-            # EXISTS above is a no-op against an already-existing table.
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(tool_invocations)").fetchall()]
-            if "engagement_id" not in cols:
-                conn.execute("ALTER TABLE tool_invocations ADD COLUMN engagement_id TEXT")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_engagement ON tool_invocations(engagement_id);")
-        _audit_db_initialized = True
-    return conn
+        # Guards the check-and-set above -- without it, several threads
+        # hitting _get_audit_db() concurrently on a brand-new audit.db can
+        # all see _audit_db_initialized == False and each run the
+        # CREATE TABLE/ALTER TABLE block itself; CREATE TABLE IF NOT
+        # EXISTS tolerates that, but ALTER TABLE ADD COLUMN does not
+        # ("duplicate column name") once a second migration joined the
+        # first. The connection used for schema setup is also opened
+        # *inside* the lock, after the double-checked flag, not before it
+        # like every other caller's connection -- opening every thread's
+        # connection unconditionally up front left several already-open
+        # (idle) connections coexisting with the one running ALTER TABLE,
+        # and SQLite's schema lock requirements for DDL turned that into a
+        # real, reproducible "database is locked" even with the lock above
+        # already preventing the duplicate-column race (audit_server.py's
+        # own duplicate of this same pattern hit both failure modes in
+        # test_concurrent_first_access_does_not_deadlock).
+        with _audit_db_init_lock:
+            if not _audit_db_initialized:
+                conn = _new_audit_connection()
+                with conn:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS tool_invocations (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            ts REAL NOT NULL,
+                            binary TEXT NOT NULL,
+                            args TEXT NOT NULL,
+                            mode TEXT NOT NULL,
+                            duration_ms INTEGER,
+                            outcome TEXT NOT NULL,
+                            detail TEXT DEFAULT '',
+                            engagement_id TEXT
+                        );
+                    """)
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_binary_ts ON tool_invocations(binary, ts);")
+                    # Migrate in engagement_id for a pre-existing audit.db (added
+                    # alongside check_scope() -- see below) -- CREATE TABLE IF NOT
+                    # EXISTS above is a no-op against an already-existing table.
+                    cols = [r[1] for r in conn.execute("PRAGMA table_info(tool_invocations)").fetchall()]
+                    if "engagement_id" not in cols:
+                        conn.execute("ALTER TABLE tool_invocations ADD COLUMN engagement_id TEXT")
+                    if "raw_log_path" not in cols:
+                        conn.execute("ALTER TABLE tool_invocations ADD COLUMN raw_log_path TEXT")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_engagement ON tool_invocations(engagement_id);")
+                _audit_db_initialized = True
+                return conn
+    return _new_audit_connection()
 
 
 def _log_invocation(
@@ -106,6 +165,7 @@ def _log_invocation(
     outcome: str,
     detail: str = "",
     engagement_id: str | None = None,
+    raw_log_path: str | None = None,
 ) -> None:
     """Best-effort audit write -- a logging bug must never break an actual
     scan, so any failure here is swallowed (and reported to the module
@@ -115,8 +175,8 @@ def _log_invocation(
         conn = _get_audit_db()
         try:
             conn.execute(
-                "INSERT INTO tool_invocations (ts, binary, args, mode, duration_ms, outcome, detail, engagement_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (time.time(), binary, args_json, mode, duration_ms, outcome, detail[:500], engagement_id),
+                "INSERT INTO tool_invocations (ts, binary, args, mode, duration_ms, outcome, detail, engagement_id, raw_log_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (time.time(), binary, args_json, mode, duration_ms, outcome, detail[:500], engagement_id, raw_log_path),
             )
             conn.commit()
         finally:
@@ -271,7 +331,8 @@ def exec_in_toolchain(
         outcome, detail = "error", result
     else:
         outcome, detail = "ok", ""
-    _log_invocation(binary, cmd, mode, duration_ms, outcome, detail, engagement_id=engagement_id)
+    raw_log_path = _write_raw_log(binary, result)
+    _log_invocation(binary, cmd, mode, duration_ms, outcome, detail, engagement_id=engagement_id, raw_log_path=raw_log_path)
 
     return result
 

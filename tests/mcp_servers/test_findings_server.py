@@ -113,3 +113,66 @@ async def test_finding_index_includes_ip_when_provided():
         )
 
     assert captured["doc"]["ip"] == "10.0.0.5"
+
+
+# ---- _export_findings (export feature) --------------------------------------
+
+
+def test_export_findings_returns_source_docs_with_id():
+    hits = {"hits": {"hits": [
+        {"_id": "abc123", "_source": {"title": "Open SSH", "severity": "low", "engagement": "eng-1"}},
+    ]}}
+    with patch.object(findings_mod, "_ensure_index", return_value=None), \
+         patch.object(findings_mod, "_req", return_value=hits):
+        docs = findings_mod._export_findings()
+    assert len(docs) == 1
+    assert docs[0]["title"] == "Open SSH"
+    assert docs[0]["_id"] == "abc123"
+
+
+def test_export_findings_filters_by_engagement():
+    captured = {}
+
+    def _fake_req(method, path, body=None):
+        captured["body"] = body
+        return {"hits": {"hits": []}}
+
+    with patch.object(findings_mod, "_ensure_index", return_value=None), \
+         patch.object(findings_mod, "_req", side_effect=_fake_req):
+        findings_mod._export_findings(engagement="eng-1")
+
+    assert captured["body"]["query"] == {"term": {"engagement": "eng-1"}}
+
+
+def test_export_findings_match_all_when_no_engagement():
+    captured = {}
+
+    def _fake_req(method, path, body=None):
+        captured["body"] = body
+        return {"hits": {"hits": []}}
+
+    with patch.object(findings_mod, "_ensure_index", return_value=None), \
+         patch.object(findings_mod, "_req", side_effect=_fake_req):
+        findings_mod._export_findings()
+
+    assert captured["body"]["query"] == {"match_all": {}}
+
+
+def test_export_findings_propagates_ensure_index_error():
+    with patch.object(findings_mod, "_ensure_index", return_value="OpenSearch unreachable"):
+        docs = findings_mod._export_findings()
+    assert docs == [{"error": "OpenSearch unreachable"}]
+
+
+def test_export_findings_caps_size_at_max_result_window():
+    captured = {}
+
+    def _fake_req(method, path, body=None):
+        captured["body"] = body
+        return {"hits": {"hits": []}}
+
+    with patch.object(findings_mod, "_ensure_index", return_value=None), \
+         patch.object(findings_mod, "_req", side_effect=_fake_req):
+        findings_mod._export_findings(size=999999)
+
+    assert captured["body"]["size"] == 10000

@@ -115,6 +115,50 @@ def _init_db(conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_findings_engagement ON findings(engagement_id)")
 
 
+def _export_data(engagement_id: str | None = None, limit: int = 5000) -> dict:
+    """Structured (not text-table) dump of this store's own three tables,
+    for direct import by routes/export_routes.py -- same "small _get_*/
+    _list_* helper for structured JSON" convention security_dashboard_
+    routes.py's own docstring establishes, just returning everything at
+    once since an export wants all three together. `services` is joined
+    against `assets` for its `ip` (services itself has no engagement_id
+    column -- it hangs off asset_id, not an engagement, directly)."""
+    conn = _get_db()
+    try:
+        params: list = [limit]
+        eng_clause = ""
+        if engagement_id:
+            eng_clause = " AND engagement_id=?"
+            params = [engagement_id, limit]
+        assets = [dict(r) for r in conn.execute(
+            f"SELECT * FROM assets WHERE 1=1{eng_clause} ORDER BY last_seen DESC LIMIT ?", params,
+        ).fetchall()]
+        findings = [dict(r) for r in conn.execute(
+            f"SELECT * FROM findings WHERE 1=1{eng_clause} ORDER BY last_seen DESC LIMIT ?", params,
+        ).fetchall()]
+        if engagement_id:
+            services = [dict(r) for r in conn.execute(
+                "SELECT s.*, a.ip AS asset_ip FROM services s JOIN assets a ON s.asset_id=a.id "
+                "WHERE a.engagement_id=? ORDER BY s.last_seen DESC LIMIT ?",
+                [engagement_id, limit],
+            ).fetchall()]
+        else:
+            services = [dict(r) for r in conn.execute(
+                "SELECT s.*, a.ip AS asset_ip FROM services s JOIN assets a ON s.asset_id=a.id "
+                "ORDER BY s.last_seen DESC LIMIT ?",
+                [limit],
+            ).fetchall()]
+        for row in assets + findings:
+            if "tags" in row:
+                try:
+                    row["tags"] = json.loads(row["tags"] or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        return {"assets": assets, "services": services, "findings": findings}
+    finally:
+        conn.close()
+
+
 TOOLS = [
     Tool(
         name="asset_add",

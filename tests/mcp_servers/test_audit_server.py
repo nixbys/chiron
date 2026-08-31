@@ -128,6 +128,19 @@ def test_list_invocations_helper_filters(tmp_data_dir):
     assert len(mod._list_invocations()) == 2
 
 
+def test_list_invocations_helper_exposes_raw_log_path(tmp_data_dir):
+    """Regression: the export feature (routes/export_routes.py) reads
+    raw_log_path off each invocation row to pull the full unredacted
+    output back in -- it must survive the audit_server.py's own read
+    query, not just common.py's write."""
+    mod, common_mod = tmp_data_dir
+    common_mod._log_invocation(
+        "nmap", ["nmap"], "container", 1, "ok", raw_log_path="audit_logs/123_nmap_abcd1234.log",
+    )
+    rows = mod._list_invocations()
+    assert rows[0]["raw_log_path"] == "audit_logs/123_nmap_abcd1234.log"
+
+
 def test_stats_helper(tmp_data_dir):
     mod, common_mod = tmp_data_dir
     common_mod._log_invocation("nmap", ["nmap"], "container", 1, "ok")

@@ -11,6 +11,51 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 ## [Unreleased]
 
 ### Added
+- **Bulk export of everything a security investigation touches** — one downloadable `.zip`
+  covering findings, the audit trail (now including full raw tool output, not just a capped
+  error message), engagement metadata + timeline, assets/services, watchlist entries,
+  detection rules, and the existing one-call PDF report. Two modes, both new `Export`
+  buttons in the Security Hub's Engagements tab (and `GET /api/security/export/engagement/
+  {id}` / `GET /api/security/export/all` directly): one engagement at a time, or everything
+  across every engagement and all time. Reuses each MCP server's own existing structured
+  read helpers (`engagement_server._get_engagement`/`_get_timeline`, `audit_server.
+  _list_invocations`, `watchlist_server._list_watchlist`, `sigma_server`/`yara_server`'s rule
+  readers) rather than re-deriving any of it, plus two new ones added for this feature:
+  `findings_server._export_findings` (full OpenSearch documents, not the aggregated summary
+  `finding_stats` already exposed) and `asset_server._export_data` (its own separate local
+  SQLite assets/services/findings tables — a second findings store distinct from
+  `findings_server`'s OpenSearch index, both included and clearly labeled).
+- **Full raw tool output is now actually captured**, not just a 500-char-capped error
+  message. `mcp_servers/common.py`'s `exec_in_toolchain()` — the one chokepoint every
+  toolchain-backed tool call passes through — now writes the complete, unredacted
+  stdout+stderr of every call (success or failure) to its own file under
+  `data/audit_logs/`, linked from the audit row via a new `raw_log_path` column. This is
+  what the export feature above actually reads back for "raw logs"; before this, a
+  successful call's real output was never persisted anywhere once returned to the caller.
+
+### Fixed
+- **A real, latent race in the audit DB's one-time schema migration**, exposed (not caused)
+  by adding the `raw_log_path` column above: `mcp_servers/common.py`'s `_get_audit_db()` and
+  `mcp_servers/audit_server.py`'s `_get_db()` (two independent copies of the same
+  CREATE-TABLE-IF-NOT-EXISTS-then-ALTER-TABLE pattern, per this fork's MCP servers never
+  importing each other) each guarded their one-time setup with a plain module-level bool and
+  no lock — several threads hitting either function concurrently on a brand-new `audit.db`
+  could all see "not yet initialized" and each run the migration block itself.
+  `CREATE TABLE IF NOT EXISTS` tolerates that race; `ALTER TABLE ADD COLUMN` does not
+  (`duplicate column name`) once a second migration joined the first. A single first
+  `ALTER TABLE` (added for `engagement_id` earlier this fork's life) apparently never won
+  that race in practice; a second one reliably did, surfacing as a genuine, reproducible
+  failure in `test_concurrent_first_access_does_not_deadlock`. A first fix (a
+  `threading.Lock()` around just the check-and-set) turned out to be incomplete — every
+  thread still opened its own connection to the file *before* even reaching the lock, so
+  several already-open (idle) connections could still coexist with the one thread running
+  `ALTER TABLE`, and SQLite's schema-lock requirements for DDL turned *that* into a second,
+  equally real "database is locked" failure, confirmed reproducing in ~35% of runs even with
+  the lock in place. The actual fix also moves connection creation itself inside the lock for
+  the first caller, so no other connection exists at all until the schema is fully settled;
+  confirmed with 40 back-to-back runs of the regression test after the fix, 0 failures (vs.
+  ~35% before).
+
 - **`scripts/demo_full_stack.py`** — a single guided-tour script exercising all 22 fork
   security MCP servers (and, through them, every sidecar: the Kali toolchain, SpiderFoot,
   OpenSearch, BentoPDF, CyberChef) under one Engagement, speaking the real MCP stdio protocol
