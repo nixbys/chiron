@@ -73,7 +73,9 @@ def _init_db(conn: sqlite3.Connection) -> None:
                 end_date REAL,
                 tags TEXT DEFAULT '[]',
                 created_at REAL,
-                updated_at REAL
+                updated_at REAL,
+                authorized_hours TEXT DEFAULT '',
+                blackout_dates TEXT DEFAULT '[]'
             );
 
             CREATE TABLE IF NOT EXISTS engagement_events (
@@ -88,6 +90,16 @@ def _init_db(conn: sqlite3.Connection) -> None:
             CREATE INDEX IF NOT EXISTS idx_engagement_events_eng ON engagement_events(engagement_id);
             CREATE INDEX IF NOT EXISTS idx_engagements_status ON engagements(status);
         """)
+        # Migrate in the two temporal-scope columns (Phase I) for a
+        # pre-existing engagements.db -- CREATE TABLE IF NOT EXISTS above
+        # is a no-op against an already-existing table, same pattern
+        # common.py's _get_audit_db()/audit_server.py's _get_db() use for
+        # their own post-launch column additions.
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(engagements)").fetchall()]
+        if "authorized_hours" not in cols:
+            conn.execute("ALTER TABLE engagements ADD COLUMN authorized_hours TEXT DEFAULT ''")
+        if "blackout_dates" not in cols:
+            conn.execute("ALTER TABLE engagements ADD COLUMN blackout_dates TEXT DEFAULT '[]'")
 
 
 def _get_engagement(engagement_id: str) -> dict | None:
@@ -169,6 +181,17 @@ TOOLS = [
                 "scope": {"type": "array", "items": {"type": "string"}, "description": "In-scope targets/CIDRs/domains", "default": []},
                 "out_of_scope": {"type": "array", "items": {"type": "string"}, "default": []},
                 "tags": {"type": "array", "items": {"type": "string"}, "default": []},
+                "authorized_hours": {
+                    "type": "string",
+                    "description": "Daily authorized testing window as HH:MM-HH:MM, server-local time (e.g. '09:00-17:00'). Empty = no time-of-day restriction.",
+                    "default": "",
+                },
+                "blackout_dates": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Dates (YYYY-MM-DD) testing is never authorized, regardless of authorized_hours.",
+                    "default": [],
+                },
             },
             "required": ["name"],
         },
@@ -205,6 +228,8 @@ TOOLS = [
                 "scope": {"type": "array", "items": {"type": "string"}},
                 "out_of_scope": {"type": "array", "items": {"type": "string"}},
                 "tags": {"type": "array", "items": {"type": "string"}},
+                "authorized_hours": {"type": "string", "description": "HH:MM-HH:MM, server-local time; empty string clears it"},
+                "blackout_dates": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["engagement_id"],
         },
@@ -263,13 +288,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:  # noqa: C
             try:
                 conn.execute("""
                     INSERT INTO engagements
-                        (id, name, description, client, scope, out_of_scope, status, start_date, tags, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+                        (id, name, description, client, scope, out_of_scope, status, start_date, tags, created_at, updated_at, authorized_hours, blackout_dates)
+                    VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)
                 """, (
                     engagement_id, arguments["name"], arguments.get("description", ""),
                     arguments.get("client", ""), json.dumps(arguments.get("scope", [])),
                     json.dumps(arguments.get("out_of_scope", [])), now,
                     json.dumps(arguments.get("tags", [])), now, now,
+                    arguments.get("authorized_hours", ""), json.dumps(arguments.get("blackout_dates", [])),
                 ))
                 conn.commit()
                 result = f"Engagement '{arguments['name']}' created (id={engagement_id})."
@@ -310,6 +336,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:  # noqa: C
                     f"Description: {row['description'] or '(none)'}\n"
                     f"Scope: {', '.join(json.loads(row['scope'] or '[]')) or '(none)'}\n"
                     f"Out of scope: {', '.join(json.loads(row['out_of_scope'] or '[]')) or '(none)'}\n"
+                    f"Authorized hours: {row['authorized_hours'] or '(no restriction)'}\n"
+                    f"Blackout dates: {', '.join(json.loads(row['blackout_dates'] or '[]')) or '(none)'}\n"
                     f"Tags: {', '.join(json.loads(row['tags'] or '[]')) or '(none)'}\n"
                     f"Recent events:\n{event_lines}"
                 )
@@ -320,11 +348,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:  # noqa: C
                 result = mcp_error("not_found", f"No engagement with id {engagement_id!r}")
             else:
                 fields, params = [], []
-                for key in ("description", "client"):
+                for key in ("description", "client", "authorized_hours"):
                     if key in arguments:
                         fields.append(f"{key}=?")
                         params.append(arguments[key])
-                for key in ("scope", "out_of_scope", "tags"):
+                for key in ("scope", "out_of_scope", "tags", "blackout_dates"):
                     if key in arguments:
                         fields.append(f"{key}=?")
                         params.append(json.dumps(arguments[key]))

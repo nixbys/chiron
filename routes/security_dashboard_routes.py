@@ -241,6 +241,31 @@ def _extract_candidate_targets(text: str) -> list[str]:
     return sorted(candidates)
 
 
+# A HH:MM-HH:MM (or "to"/"through"/en-dash/em-dash separated) time window,
+# and any ISO date near the word "blackout" -- both best-effort, both
+# pre-filled for review like the target candidates above, never
+# auto-committed. Phase I's check_scope() only understands the strict
+# HH:MM-HH:MM shape (see mcp_servers/common.py's _AUTHORIZED_HOURS_RE), so
+# this normalizes to that before returning a candidate.
+_TIME_WINDOW_RE = re.compile(r"\b(\d{1,2}):(\d{2})\s*(?:-|to|through|–|—)\s*(\d{1,2}):(\d{2})\b", re.IGNORECASE)
+_ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+
+
+def _extract_candidate_temporal_scope(text: str) -> dict:
+    authorized_hours = ""
+    m = _TIME_WINDOW_RE.search(text)
+    if m:
+        sh, sm, eh, em = m.groups()
+        authorized_hours = f"{int(sh):02d}:{sm}-{int(eh):02d}:{em}"
+
+    blackout_dates: set[str] = set()
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        if "blackout" in sentence.lower():
+            blackout_dates.update(_ISO_DATE_RE.findall(sentence))
+
+    return {"authorized_hours": authorized_hours, "blackout_dates": sorted(blackout_dates)}
+
+
 class EngagementCreateBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: str = ""
@@ -248,6 +273,8 @@ class EngagementCreateBody(BaseModel):
     scope: list[str] = Field(default_factory=list)
     out_of_scope: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    authorized_hours: str = ""
+    blackout_dates: list[str] = Field(default_factory=list)
 
 
 class EngagementUpdateBody(BaseModel):
@@ -256,6 +283,8 @@ class EngagementUpdateBody(BaseModel):
     scope: list[str] | None = None
     out_of_scope: list[str] | None = None
     tags: list[str] | None = None
+    authorized_hours: str | None = None
+    blackout_dates: list[str] | None = None
 
 
 class WatchlistAddBody(BaseModel):
@@ -307,7 +336,7 @@ def setup_security_dashboard_routes():
         engagement = await asyncio.to_thread(mod._get_engagement, engagement_id)
         if engagement is None:
             raise HTTPException(404, f"No engagement with id {engagement_id!r}")
-        for field in ("scope", "out_of_scope", "tags"):
+        for field in ("scope", "out_of_scope", "tags", "blackout_dates"):
             engagement[field] = json.loads(engagement.get(field) or "[]")
         timeline = await asyncio.to_thread(mod._get_timeline, engagement_id, max(1, min(timeline_limit, 1000)))
         return {"engagement": engagement, "timeline": timeline}
@@ -370,8 +399,12 @@ def setup_security_dashboard_routes():
         if text.startswith("[error]"):
             raise HTTPException(400, text)
         if text.startswith("(no extractable text"):
-            return {"candidates": [], "extracted_chars": 0, "message": text}
-        return {"candidates": _extract_candidate_targets(text), "extracted_chars": len(text)}
+            return {"candidates": [], "extracted_chars": 0, "message": text, "authorized_hours": "", "blackout_dates": []}
+        return {
+            "candidates": _extract_candidate_targets(text),
+            "extracted_chars": len(text),
+            **_extract_candidate_temporal_scope(text),
+        }
 
     # ---- Watchlist --------------------------------------------------------
 

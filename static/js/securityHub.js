@@ -208,6 +208,8 @@ function _engagementRow(e) {
     const d = _state.engagements.detail;
     const scope = (d.engagement.scope || []).join(', ') || '(none)';
     const outOfScope = (d.engagement.out_of_scope || []).join(', ') || '(none)';
+    const authorizedHours = d.engagement.authorized_hours || '(no restriction)';
+    const blackoutDates = (d.engagement.blackout_dates || []).join(', ') || '(none)';
     const timeline = (d.timeline || []).map(ev => {
       const when = ev.ts ? new Date(ev.ts * 1000).toLocaleString() : '';
       return `<div class="sec-tl-row"><span class="sec-tl-time">${_escape(when)}</span><span class="sec-tl-dot sec-muted"></span><span class="sec-tl-text">[${_escape(ev.event_type)}] ${_escape(ev.summary)}</span></div>`;
@@ -217,6 +219,8 @@ function _engagementRow(e) {
         <div style="margin-bottom:6px;">${_escape(d.engagement.description || '(no description)')}</div>
         <div style="margin-bottom:6px;">Scope: ${_escape(scope)}</div>
         <div style="margin-bottom:10px;">Out of scope: ${_escape(outOfScope)}</div>
+        <div style="margin-bottom:6px;">Authorized hours: ${_escape(authorizedHours)}</div>
+        <div style="margin-bottom:10px;">Blackout dates: ${_escape(blackoutDates)}</div>
         <div style="margin-bottom:10px;">Id: <code style="font-family:var(--font-family,'IBM Plex Mono',monospace);">${_escape(e.id)}</code> <span style="opacity:0.75;">(paste into the Audit Log tab's engagement filter)</span></div>
         ${_CURRENT_SESSION_ID ? `<div style="margin-bottom:10px;">${_smallBtn('Link current chat to this engagement', 'link-current-chat', e.id)}</div>` : ''}
         <div class="sec-timeline">${timeline}</div>
@@ -245,6 +249,8 @@ function _renderEngagementForm() {
         <input class="sec-hub-input" name="scope" placeholder="scope, comma-separated" style="flex:2;min-width:180px;">
         <input class="sec-hub-input" name="out_of_scope" placeholder="out of scope, comma-separated" style="flex:2;min-width:180px;">
         <input class="sec-hub-input" name="tags" placeholder="tags, comma-separated" style="flex:1;min-width:140px;">
+        <input class="sec-hub-input" name="authorized_hours" placeholder="authorized hours, HH:MM-HH:MM" style="flex:1;min-width:180px;">
+        <input class="sec-hub-input" name="blackout_dates" placeholder="blackout dates, YYYY-MM-DD comma-separated" style="flex:1;min-width:220px;">
         <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--fg-muted);white-space:nowrap;">
           <input type="checkbox" name="rag"> RAG
         </label>
@@ -272,6 +278,8 @@ function _renderEngagementForm() {
       <input class="sec-hub-input" name="client" placeholder="client" style="flex:1;min-width:120px;">
       <input class="sec-hub-input" name="scope" placeholder="scope, comma-separated" style="flex:2;min-width:180px;">
       <input class="sec-hub-input" name="out_of_scope" placeholder="out of scope, comma-separated" style="flex:2;min-width:180px;">
+      <input class="sec-hub-input" name="authorized_hours" placeholder="authorized hours, HH:MM-HH:MM" style="flex:1;min-width:180px;">
+      <input class="sec-hub-input" name="blackout_dates" placeholder="blackout dates, YYYY-MM-DD comma-separated" style="flex:1;min-width:220px;">
       <button type="submit" class="sec-hub-btn sec-hub-btn-primary">Create</button>
       ${_smallBtn('Cancel', 'toggle-engagement-form', '')}
     </form>`;
@@ -706,18 +714,34 @@ async function _onBodyClick(e) {
         return;
       }
       const candidates = data.candidates || [];
-      if (!candidates.length) {
-        if (status) status.textContent = 'No IP/CIDR/domain-looking targets found in the document.';
+      const blackoutDates = data.blackout_dates || [];
+      const authorizedHours = data.authorized_hours || '';
+      if (!candidates.length && !blackoutDates.length && !authorizedHours) {
+        if (status) status.textContent = 'No candidate scope/schedule found in the document.';
         return;
       }
-      // Pre-fill, never auto-commit -- the scope field stays a plain
-      // editable text input the user reviews before Create is pressed.
-      const scopeInput = document.querySelector('[data-action="create-new-project"] [name="scope"]');
-      if (scopeInput) {
+      // Pre-fill, never auto-commit -- every field stays a plain editable
+      // input the user reviews before Create is pressed.
+      const form = '[data-action="create-new-project"]';
+      const scopeInput = document.querySelector(`${form} [name="scope"]`);
+      if (scopeInput && candidates.length) {
         const existing = scopeInput.value.split(',').map(s => s.trim()).filter(Boolean);
         scopeInput.value = Array.from(new Set([...existing, ...candidates])).join(', ');
       }
-      if (status) status.textContent = `Found ${candidates.length} candidate target${candidates.length === 1 ? '' : 's'} -- review before creating.`;
+      const hoursInput = document.querySelector(`${form} [name="authorized_hours"]`);
+      if (hoursInput && authorizedHours && !hoursInput.value.trim()) {
+        hoursInput.value = authorizedHours;
+      }
+      const blackoutInput = document.querySelector(`${form} [name="blackout_dates"]`);
+      if (blackoutInput && blackoutDates.length) {
+        const existing = blackoutInput.value.split(',').map(s => s.trim()).filter(Boolean);
+        blackoutInput.value = Array.from(new Set([...existing, ...blackoutDates])).join(', ');
+      }
+      const parts = [];
+      if (candidates.length) parts.push(`${candidates.length} target${candidates.length === 1 ? '' : 's'}`);
+      if (authorizedHours) parts.push('a testing window');
+      if (blackoutDates.length) parts.push(`${blackoutDates.length} blackout date${blackoutDates.length === 1 ? '' : 's'}`);
+      if (status) status.textContent = `Found ${parts.join(', ')} -- review before creating.`;
     } catch (err) {
       if (status) status.textContent = `Failed: ${err.message || String(err)}`;
     } finally {
@@ -749,9 +773,13 @@ async function _onBodySubmit(e) {
     if (!name) return;
     const scope = String(fd.get('scope') || '').split(',').map(s => s.trim()).filter(Boolean);
     const outOfScope = String(fd.get('out_of_scope') || '').split(',').map(s => s.trim()).filter(Boolean);
+    const blackoutDates = String(fd.get('blackout_dates') || '').split(',').map(s => s.trim()).filter(Boolean);
     const res = await fetch(`${API_BASE}/api/security/engagements`, {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, client: String(fd.get('client') || ''), scope, out_of_scope: outOfScope }),
+      body: JSON.stringify({
+        name, client: String(fd.get('client') || ''), scope, out_of_scope: outOfScope,
+        authorized_hours: String(fd.get('authorized_hours') || '').trim(), blackout_dates: blackoutDates,
+      }),
     });
     if (res.ok) _state.engagements.formOpen = false;
     await _loadEngagements();
@@ -761,9 +789,13 @@ async function _onBodySubmit(e) {
     const scope = String(fd.get('scope') || '').split(',').map(s => s.trim()).filter(Boolean);
     const outOfScope = String(fd.get('out_of_scope') || '').split(',').map(s => s.trim()).filter(Boolean);
     const tags = String(fd.get('tags') || '').split(',').map(s => s.trim()).filter(Boolean);
+    const blackoutDates = String(fd.get('blackout_dates') || '').split(',').map(s => s.trim()).filter(Boolean);
     const engRes = await fetch(`${API_BASE}/api/security/engagements`, {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, client: String(fd.get('client') || ''), scope, out_of_scope: outOfScope, tags }),
+      body: JSON.stringify({
+        name, client: String(fd.get('client') || ''), scope, out_of_scope: outOfScope, tags,
+        authorized_hours: String(fd.get('authorized_hours') || '').trim(), blackout_dates: blackoutDates,
+      }),
     });
     if (!engRes.ok) {
       alert('Failed to create the engagement -- nothing else was created.');

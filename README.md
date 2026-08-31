@@ -365,12 +365,14 @@ Backs the `verify_remediation` scheduled-task action (`src/builtin_actions.py`):
 | `engagement_create` | Create a named engagement (pentest, red-team op, incident) with scope and client metadata |
 | `engagement_list` | List engagements, optionally filtered by status |
 | `engagement_get` | Get full engagement details plus its recent timeline |
-| `engagement_update` | Update description, client, scope, or tags |
+| `engagement_update` | Update description, client, scope, tags, authorized hours, or blackout dates |
 | `engagement_close` | Mark an engagement closed and record its end date |
 | `engagement_log_event` | Append a scan/finding/note event to an engagement's timeline |
 | `engagement_timeline` | Return the chronological timeline for a report |
 
 Pass the returned `engagement_id` to `asset_server`'s `asset_add`/`finding_add` (an `engagement_id` column) and `findings_server`'s `finding_index` (the `engagement` field) to group activity by case; there's no shared database between servers, so `engagement_id` is a convention key, not a foreign key. Backed by a WAL-mode SQLite database at `$ODYSSEUS_DATA_DIR/engagements.db`.
+
+An engagement can also declare a daily `authorized_hours` window (`HH:MM-HH:MM`, server-local time) and `blackout_dates` (`YYYY-MM-DD`) -- `mcp_servers/common.py`'s `check_scope()` enforces both as a second, independent check alongside target scope: an in-scope target run outside the authorized window, or on a blackout date, is still blocked (same block-by-default + logged-override shape). The Security Hub's "New Project"/"New Engagement" forms can pre-fill both from an uploaded RoE/SOW PDF (see `POST /api/security/roe/parse-scope`).
 
 ### `monitor_server` — Continuous Scan Drift Tracking
 

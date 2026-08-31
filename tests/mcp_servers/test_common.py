@@ -6,6 +6,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -225,14 +226,18 @@ def test_rate_limit_check_fails_open_on_db_error(audit_env, monkeypatch):
 # than importing engagement_server, matching that same isolation.
 
 
-def _seed_engagement(data_dir, engagement_id, scope=None, out_of_scope=None):
+def _seed_engagement(data_dir, engagement_id, scope=None, out_of_scope=None,
+                      authorized_hours="", blackout_dates=None):
     conn = sqlite3.connect(str(Path(data_dir) / "engagements.db"))
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS engagements (id TEXT PRIMARY KEY, scope TEXT, out_of_scope TEXT)"
+        "CREATE TABLE IF NOT EXISTS engagements (id TEXT PRIMARY KEY, scope TEXT, "
+        "out_of_scope TEXT, authorized_hours TEXT DEFAULT '', blackout_dates TEXT DEFAULT '[]')"
     )
     conn.execute(
-        "INSERT INTO engagements (id, scope, out_of_scope) VALUES (?, ?, ?)",
-        (engagement_id, json.dumps(scope or []), json.dumps(out_of_scope or [])),
+        "INSERT INTO engagements (id, scope, out_of_scope, authorized_hours, blackout_dates) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (engagement_id, json.dumps(scope or []), json.dumps(out_of_scope or []),
+         authorized_hours, json.dumps(blackout_dates or [])),
     )
     conn.commit()
     conn.close()
@@ -338,3 +343,115 @@ def test_exec_in_toolchain_tags_engagement_id_on_every_invocation(audit_env):
     row = conn.execute("SELECT * FROM tool_invocations WHERE binary='nmap'").fetchone()
     conn.close()
     assert row["engagement_id"] == "eng-1"
+
+
+# ---- Temporal scope (Phase I) -------------------------------------------
+#
+# _check_temporal_window() calls datetime.now() via the `datetime` name
+# imported into common.py's own module namespace -- monkeypatching that
+# name (a datetime subclass with a fixed .now()) redirects it without
+# needing a real-time-dependent test or a freezegun dependency.
+
+
+def _frozen_at(iso_dt):
+    fixed = datetime.fromisoformat(iso_dt)
+
+    class _FakeDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    return _FakeDatetime
+
+
+def test_check_temporal_window_no_restrictions_is_never_a_violation(audit_env):
+    assert audit_env._check_temporal_window("", "[]") == (False, "")
+
+
+def test_check_temporal_window_inside_authorized_hours(audit_env, monkeypatch):
+    monkeypatch.setattr(audit_env, "datetime", _frozen_at("2026-08-30T14:30:00"))
+    violation, reason = audit_env._check_temporal_window("09:00-17:00", "[]")
+    assert violation is False
+    assert reason == ""
+
+
+def test_check_temporal_window_outside_authorized_hours(audit_env, monkeypatch):
+    monkeypatch.setattr(audit_env, "datetime", _frozen_at("2026-08-30T22:15:00"))
+    violation, reason = audit_env._check_temporal_window("09:00-17:00", "[]")
+    assert violation is True
+    assert "22:15" in reason
+    assert "09:00-17:00" in reason
+
+
+def test_check_temporal_window_overnight_window_crossing_midnight(audit_env, monkeypatch):
+    # 22:00-02:00 authorizes late-night testing -- 23:30 and 01:00 are both
+    # inside it, 12:00 is not.
+    monkeypatch.setattr(audit_env, "datetime", _frozen_at("2026-08-30T23:30:00"))
+    assert audit_env._check_temporal_window("22:00-02:00", "[]")[0] is False
+    monkeypatch.setattr(audit_env, "datetime", _frozen_at("2026-08-31T01:00:00"))
+    assert audit_env._check_temporal_window("22:00-02:00", "[]")[0] is False
+    monkeypatch.setattr(audit_env, "datetime", _frozen_at("2026-08-31T12:00:00"))
+    assert audit_env._check_temporal_window("22:00-02:00", "[]")[0] is True
+
+
+def test_check_temporal_window_blackout_date(audit_env, monkeypatch):
+    monkeypatch.setattr(audit_env, "datetime", _frozen_at("2026-12-25T10:00:00"))
+    violation, reason = audit_env._check_temporal_window("", '["2026-12-25"]')
+    assert violation is True
+    assert "2026-12-25" in reason
+
+
+def test_check_temporal_window_blackout_overrides_authorized_hours(audit_env, monkeypatch):
+    """A blackout date blocks even a time that would otherwise be inside
+    authorized_hours -- it's an independent, stronger restriction."""
+    monkeypatch.setattr(audit_env, "datetime", _frozen_at("2026-12-25T12:00:00"))
+    violation, reason = audit_env._check_temporal_window("09:00-17:00", '["2026-12-25"]')
+    assert violation is True
+    assert "blackout" in reason
+
+
+def test_check_temporal_window_malformed_hours_is_ignored(audit_env):
+    """Fails open on a malformed authorized_hours value rather than
+    blocking every call for an engagement with a typo in its config."""
+    assert audit_env._check_temporal_window("not a time range", "[]") == (False, "")
+
+
+def test_check_temporal_window_malformed_blackout_json_is_ignored(audit_env):
+    assert audit_env._check_temporal_window("", "not json") == (False, "")
+
+
+def test_check_scope_blocks_in_scope_target_outside_authorized_hours(audit_env, tmp_path, monkeypatch):
+    _seed_engagement(tmp_path, "eng-1", scope=["10.0.0.0/24"], authorized_hours="09:00-17:00")
+    monkeypatch.setattr(audit_env, "datetime", _frozen_at("2026-08-30T22:00:00"))
+    result = audit_env.check_scope("eng-1", "10.0.0.5", "nmap_scan")
+    assert result is not None
+    assert "[error:out_of_scope]" in result
+    assert "authorized testing window" in result
+
+
+def test_check_scope_allows_in_scope_target_inside_authorized_hours(audit_env, tmp_path, monkeypatch):
+    _seed_engagement(tmp_path, "eng-1", scope=["10.0.0.0/24"], authorized_hours="09:00-17:00")
+    monkeypatch.setattr(audit_env, "datetime", _frozen_at("2026-08-30T12:00:00"))
+    assert audit_env.check_scope("eng-1", "10.0.0.5", "nmap_scan") is None
+
+
+def test_check_scope_blackout_date_blocks_even_in_scope_target(audit_env, tmp_path, monkeypatch):
+    _seed_engagement(tmp_path, "eng-1", scope=["10.0.0.0/24"], blackout_dates=["2026-12-25"])
+    monkeypatch.setattr(audit_env, "datetime", _frozen_at("2026-12-25T12:00:00"))
+    result = audit_env.check_scope("eng-1", "10.0.0.5", "nmap_scan")
+    assert result is not None
+    assert "blackout" in result
+
+
+def test_check_scope_temporal_override_is_flagged(audit_env, tmp_path, monkeypatch):
+    _seed_engagement(tmp_path, "eng-1", scope=["10.0.0.0/24"], authorized_hours="09:00-17:00")
+    monkeypatch.setattr(audit_env, "datetime", _frozen_at("2026-08-30T22:00:00"))
+    result = audit_env.check_scope(
+        "eng-1", "10.0.0.5", "nmap_scan", override=True, override_reason="client requested off-hours test",
+    )
+    assert result is None
+    conn = audit_env._get_audit_db()
+    row = conn.execute("SELECT * FROM tool_invocations WHERE outcome='scope_override'").fetchone()
+    conn.close()
+    assert row is not None
+    assert "off-hours" in row["detail"]

@@ -112,14 +112,19 @@ Update this file at the end of every phase/checkpoint, same discipline as `CHANG
       "Project" badge in the chat header itself; a new `secrets_scan` tool on `osint_server`
       (gitleaks against a cloned repo's full history, redacted output, flag-injection-safe).
       Full details in `CHANGELOG.md`'s Unreleased section.
+- [x] **Engagement-scoped Projects, Phase I (second-order addendum, on top of Phase E).**
+      Temporal scope: engagements can declare a daily authorized testing window and blackout
+      dates; `check_scope()` enforces both independently of target scope, same block/override
+      shape. RoE/SOW parsing extracts candidates for both. Full details in `CHANGELOG.md`'s
+      Unreleased section.
 
 ## Near-Term
 
-The same plan's second-order addenda (Phases I-L: temporal scope from the RoE document,
-override-pattern escalation to a real finding, a first-run unscoped-session nudge, wiring
-`secrets_scan` findings into the correlation fabric) are approved but not started — see the
-durable copy at `/home/nixbys/.claude/projects/-var-home-nixbys-source-repos-odysseus-red/
-memory/engagement_scope_enforcement_plan.md` for full design detail. Otherwise nothing else is
+The same plan's remaining second-order addenda (Phase J: override-pattern escalation to a
+real finding; Phase K: a first-run unscoped-session nudge; Phase L: wiring `secrets_scan`
+findings into the correlation fabric) are approved but not started — see the durable copy at
+`/home/nixbys/.claude/projects/-var-home-nixbys-source-repos-odysseus-red/memory/
+engagement_scope_enforcement_plan.md` for full design detail. Otherwise nothing else is
 queued; see "Ideas, Not Commitments" below for what's next if this fork keeps growing.
 
 ## Ideas, Not Commitments

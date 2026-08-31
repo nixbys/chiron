@@ -110,6 +110,17 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
   in the output, never shown in full, and a crafted `repo_url` starting with `-` is rejected
   outright (closes a `git clone` flag-injection vector, e.g. `--upload-pack=...`, before it
   shipped).
+- **Temporal scope, on top of the RoE/SOW ingestion above (Phase I of the same plan).**
+  Engagements can now declare a daily `authorized_hours` window (`HH:MM-HH:MM`, server-local)
+  and `blackout_dates` (`YYYY-MM-DD`) — new columns + migration on `engagement_server.py`'s
+  `engagements` table, new `engagement_create`/`engagement_update` fields. `check_scope()`
+  gains a second, independent check alongside target scope: an in-scope target run outside
+  the authorized window, or on a blackout date, is still blocked (same block-by-default +
+  logged-override shape, reusing the existing `blocked_out_of_scope`/`scope_override`
+  outcomes rather than adding new ones — the audit `detail` field explains which check
+  actually failed). `POST /api/security/roe/parse-scope` also extracts a candidate time
+  window and blackout dates from the uploaded document now, pre-filling both new form fields
+  the same reviewed-not-auto-committed way target candidates already work.
 - **Toolchain invocation audit trail + rate limiting**, both enforced at `mcp_servers/
   common.py`'s `exec_in_toolchain()` — the one chokepoint every red-team MCP server's tool
   calls pass through, so no changes were needed in any of the other 20 server modules. Every

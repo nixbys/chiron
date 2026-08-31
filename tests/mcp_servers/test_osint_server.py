@@ -108,7 +108,10 @@ def scope_env(tmp_path, monkeypatch):
     monkeypatch.setenv("TOOLCHAIN_RATE_LIMIT_WINDOW", "0")
     importlib.reload(common)
     conn = sqlite3.connect(str(tmp_path / "engagements.db"))
-    conn.execute("CREATE TABLE engagements (id TEXT PRIMARY KEY, scope TEXT, out_of_scope TEXT)")
+    conn.execute(
+        "CREATE TABLE engagements (id TEXT PRIMARY KEY, scope TEXT, out_of_scope TEXT, "
+        "authorized_hours TEXT DEFAULT '', blackout_dates TEXT DEFAULT '[]')"
+    )
     conn.execute(
         "INSERT INTO engagements (id, scope, out_of_scope) VALUES (?, ?, ?)",
         ("eng-1", json.dumps(["github.com"]), json.dumps([])),
