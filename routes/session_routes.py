@@ -337,6 +337,7 @@ def setup_session_routes(
         skip_validation: str = Form(None),
         api_key: str = Form(""),
         endpoint_id: str = Form(""),
+        engagement_id: str = Form(""),
     ):
         skip_val = str(skip_validation).lower() == "true"
         user = effective_user(request)
@@ -432,6 +433,7 @@ def setup_session_routes(
             model=model_to_use,
             rag=str(rag).lower() == "true" if rag else False,
             owner=user,
+            engagement_id=engagement_id.strip() or None,
         )
         # Set auth headers for custom API-key endpoints
         resolved_key = request_api_key
@@ -463,7 +465,8 @@ def setup_session_routes(
         request: Request, sid: str,
         name: str = Form(None), folder: str = Form(None),
         model: str = Form(None), endpoint_url: str = Form(None),
-        endpoint_id: str = Form(None),
+        endpoint_id: str = Form(None), engagement_id: str = Form(None),
+        detach_engagement: str = Form(None),
     ):
         _verify_session_owner(request, sid)
         try:
@@ -534,6 +537,17 @@ def setup_session_routes(
                 db.close()
             result["model"] = model
             result["endpoint_url"] = endpoint_url
+        # Attach/detach the Engagement ("Project") this session is scoped to.
+        # detach_engagement is a separate explicit flag rather than an empty
+        # engagement_id string -- FastAPI's Form() coerces an empty-string
+        # value to the field's default before this handler ever sees it, so
+        # "" can't be distinguished from the field being omitted entirely.
+        if str(detach_engagement).lower() == "true":
+            session_manager.update_session_engagement(sid, None)
+            result["engagement_id"] = None
+        elif engagement_id is not None and engagement_id.strip():
+            session_manager.update_session_engagement(sid, engagement_id.strip())
+            result["engagement_id"] = engagement_id.strip()
         return result
     
     @router.post("/session/{sid}/inject_messages")
