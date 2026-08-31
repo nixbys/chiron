@@ -29,7 +29,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from mcp_servers.common import mcp_error
+from mcp_servers.common import mcp_error, _CHAIN_GENESIS, _compute_row_hash
 
 server = Server("audit")
 
@@ -101,6 +101,8 @@ def _get_db() -> sqlite3.Connection:
                         conn.execute("ALTER TABLE tool_invocations ADD COLUMN engagement_id TEXT")
                     if "raw_log_path" not in cols:
                         conn.execute("ALTER TABLE tool_invocations ADD COLUMN raw_log_path TEXT")
+                    if "row_hash" not in cols:
+                        conn.execute("ALTER TABLE tool_invocations ADD COLUMN row_hash TEXT")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_engagement ON tool_invocations(engagement_id);")
                     # Checkpoint state for the scope_violation_check scheduled
                     # action (src/builtin_actions.py) -- "how far into
@@ -261,6 +263,59 @@ def _stats(window_s: int = 86400) -> dict:
         conn.close()
 
 
+def _verify_chain() -> dict:
+    """Walk tool_invocations in insertion (id) order, recomputing each
+    row's expected hash from its own columns plus the *actual* preceding
+    row's stored hash (mcp_servers/common.py's _compute_row_hash --
+    same function _log_invocation() itself uses to write these), and
+    comparing to what's actually stored. Detects both edits (a row's own
+    hash won't match its content anymore) and deletions (the next
+    surviving row's hash was computed assuming a predecessor that's no
+    longer there, so it won't match the new "actual previous row" either)
+    -- anyone with only filesystem access to audit.db, not the app's own
+    secret_storage key, cannot recompute a replacement chain that
+    verifies clean.
+
+    Rows with no row_hash at all (written before this feature shipped)
+    are skipped rather than reported as tampered -- when _log_invocation
+    computed the *next* row's hash, it saw that predecessor's NULL hash
+    and treated it as "no real predecessor" (_CHAIN_GENESIS), exactly
+    like the start of a fresh chain; this mirrors that read-side so a
+    legacy/pre-migration boundary doesn't look like a broken chain."""
+    conn = _get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, ts, binary, args, mode, duration_ms, outcome, detail, "
+            "engagement_id, raw_log_path, row_hash FROM tool_invocations ORDER BY id ASC"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return {"intact": True, "checked": 0, "total_rows": 0, "broken_at_id": None}
+
+    prev_hash = _CHAIN_GENESIS
+    checked = 0
+    for row in rows:
+        if not row["row_hash"]:
+            prev_hash = _CHAIN_GENESIS
+            continue
+        expected = _compute_row_hash(
+            prev_hash, row["ts"], row["binary"], row["args"], row["mode"],
+            row["duration_ms"], row["outcome"], row["detail"],
+            row["engagement_id"], row["raw_log_path"],
+        )
+        checked += 1
+        if row["row_hash"] != expected:
+            return {
+                "intact": False, "checked": checked, "total_rows": len(rows),
+                "broken_at_id": row["id"],
+            }
+        prev_hash = row["row_hash"]
+
+    return {"intact": True, "checked": checked, "total_rows": len(rows), "broken_at_id": None}
+
+
 TOOLS = [
     Tool(
         name="audit_list",
@@ -282,6 +337,11 @@ TOOLS = [
             "type": "object",
             "properties": {"window_hours": {"type": "number", "default": 24}},
         },
+    ),
+    Tool(
+        name="audit_verify",
+        description="Verify the audit trail's tamper-evidence hash chain end to end. Reports the chain intact through every row, or the exact row where it first breaks -- evidence someone edited or deleted a row without the app's own encryption key.",
+        inputSchema={"type": "object", "properties": {}},
     ),
 ]
 
@@ -323,6 +383,21 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 by_binary = ", ".join(f"{r['binary']}={r['n']}" for r in stats["by_binary"])
                 by_outcome = ", ".join(f"{r['outcome']}={r['n']}" for r in stats["by_outcome"])
                 result = f"Total: {stats['total']}\nBy binary: {by_binary}\nBy outcome: {by_outcome}"
+
+        elif name == "audit_verify":
+            v = _verify_chain()
+            if v["total_rows"] == 0:
+                result = "No invocations recorded yet -- nothing to verify."
+            elif v["intact"]:
+                result = f"Chain intact: {v['checked']} row(s) verified across {v['total_rows']} total row(s)."
+            else:
+                result = (
+                    f"TAMPER DETECTED: chain broke at row id={v['broken_at_id']} "
+                    f"(verified {v['checked']} row(s) before the break, {v['total_rows']} total row(s)). "
+                    "That row's stored hash doesn't match what its own content + the true "
+                    "preceding row's hash produce -- it (or a row before it) was edited or deleted "
+                    "outside the app."
+                )
 
         else:
             result = mcp_error("unknown_tool", name)

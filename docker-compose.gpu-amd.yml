@@ -28,6 +28,10 @@ services:
       # land under /app/.local for the odysseus user. Persist them so a
       # container recreate does not silently remove installed serve engines.
       - ${APP_DATA_DIR:-./data}/local:/app/.local:z
+      # Optional in-app TLS cert/key (see docs/TLS.md) -- only read when
+      # SSL_KEYFILE/SSL_CERTFILE below point inside this directory. Absent
+      # by default; mounting an empty/missing host dir here is harmless.
+      - ${APP_TLS_DIR:-./certs}:/app/certs:z,ro
     extra_hosts:
       # Lets the container reach local services on the Docker host, including
       # Ollama at http://host.docker.internal:11434.
@@ -51,6 +55,12 @@ services:
       - ODYSSEUS_ADMIN_PASSWORD=${ODYSSEUS_ADMIN_PASSWORD:-}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
       - SECURE_COOKIES=${SECURE_COOKIES:-}
+      # Optional in-app TLS (see docs/TLS.md) -- both unset by default, so
+      # the app keeps serving plain HTTP for a reverse proxy to front, same
+      # as before. Paths are read *inside* the container -- point them at
+      # /app/certs/... (the mount above), not a host path.
+      - SSL_KEYFILE=${SSL_KEYFILE:-}
+      - SSL_CERTFILE=${SSL_CERTFILE:-}
       - EMBEDDING_URL=${EMBEDDING_URL:-}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-}
       - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}

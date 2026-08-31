@@ -140,7 +140,21 @@ export PATH="/app/.local/bin:$PATH"
 # || true so a setup failure never prevents the container from starting.
 "$GOSU_BIN" "$ODY_USER" "$PYTHON_BIN" /app/setup.py || true
 
+# Optional in-app TLS: append --ssl-keyfile/--ssl-certfile to the real
+# `uvicorn app:app ...` CLI invocation (the Dockerfile's own CMD, passed
+# through here as "$@") when both SSL_KEYFILE and SSL_CERTFILE are set.
+# Additive -- the existing reverse-proxy-fronted model (this container
+# serving plain HTTP behind Caddy/nginx/Tailscale, SECURITY.md's own
+# documented default) keeps working unchanged when these are unset. See
+# docs/TLS.md; app.py's own uvicorn.run() call reads the same two env
+# vars for the native (non-container) install path, which never runs
+# this script.
+SSL_ARGS=""
+if [ -n "${SSL_KEYFILE:-}" ] && [ -n "${SSL_CERTFILE:-}" ]; then
+    SSL_ARGS="--ssl-keyfile ${SSL_KEYFILE} --ssl-certfile ${SSL_CERTFILE}"
+fi
+
 # Drop root and run the actual app. `gosu` is preferred over `su` /
 # `sudo` because it cleans up the process tree (no extra shell layer)
 # so signals (SIGTERM from `docker stop`) reach uvicorn directly.
-exec "$GOSU_BIN" "$ODY_USER" "$@"
+exec "$GOSU_BIN" "$ODY_USER" "$@" $SSL_ARGS

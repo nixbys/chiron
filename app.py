@@ -1328,4 +1328,18 @@ if __name__ == "__main__":
     bind_host = os.getenv("APP_BIND", "127.0.0.1")
     bind_port = int(os.getenv("APP_PORT", "7000"))
 
-    uvicorn.run(app, host=bind_host, port=bind_port, log_level="info")
+    # Optional in-app TLS -- additive to the existing reverse-proxy-fronted
+    # model (SECURITY.md's own documented default: put a trusted proxy or
+    # VPN in front and let it terminate HTTPS). Set both SSL_KEYFILE and
+    # SSL_CERTFILE to have uvicorn terminate TLS itself instead -- for a
+    # container/Compose deployment, the same two env vars are read by
+    # docker/entrypoint.sh, which passes the equivalent --ssl-keyfile/
+    # --ssl-certfile flags to the real `uvicorn app:app` CLI invocation
+    # (this __main__ block never runs there). See docs/TLS.md.
+    ssl_keyfile = os.getenv("SSL_KEYFILE") or None
+    ssl_certfile = os.getenv("SSL_CERTFILE") or None
+
+    uvicorn.run(
+        app, host=bind_host, port=bind_port, log_level="info",
+        ssl_keyfile=ssl_keyfile, ssl_certfile=ssl_certfile,
+    )

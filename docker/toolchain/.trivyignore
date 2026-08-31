@@ -1,0 +1,21 @@
+# Used only by the *blocking* CRITICAL-severity trivy step in
+# .github/workflows/ci-security.yml -- the informational CRITICAL+HIGH
+# report earlier in that job does NOT use this file, so everything below
+# still shows up there for visibility. Every entry here is something we
+# cannot fix ourselves; each has a plan for re-checking it, not a
+# permanent blanket exemption.
+
+# golang.org/x/crypto/ssh auth bypass (unenforced source-address
+# restrictions) -- a transitive dependency baked into pre-built upstream
+# Go binaries this Dockerfile downloads as release artifacts (nuclei,
+# httpx, subfinder), not something we build or vendor ourselves. Fixing
+# it requires each upstream project (projectdiscovery/nuclei, /httpx,
+# /subfinder) to cut a new release against golang.org/x/crypto >= 0.55.0.
+# Re-check and remove this line once they have.
+CVE-2026-56854
+
+# crypto/tls: incorrect certificate validation during TLS session
+# resumption -- same situation: baked into subfinder's own upstream Go
+# toolchain build, not ours to patch directly. Re-check once
+# projectdiscovery/subfinder ships a build against a patched Go stdlib.
+CVE-2025-68121

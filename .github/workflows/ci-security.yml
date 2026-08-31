@@ -164,7 +164,9 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
             | sh -s -- -b /usr/local/bin latest
       - name: Scan image with trivy
-        # exit-code 0 so unfixed vulns do not block CI — results are informational
+        # exit-code 0 so unfixed HIGH vulns do not block CI — this report is
+        # informational (uploaded as an artifact below); the separate step
+        # after this one is the actual blocking gate, CRITICAL-only.
         run: |
           trivy image \
             --format table \
@@ -179,6 +181,40 @@ jobs:
         with:
           name: trivy-results
           path: trivy-results.txt
+      - name: Fail on fixable CRITICAL vulnerabilities
+        # Separate invocation, not a second --severity pass over the same
+        # report: trivy's --exit-code applies uniformly to whatever
+        # --severity list is given in one run, so the informational
+        # CRITICAL+HIGH report above (deliberately non-blocking) and this
+        # actual gate (CRITICAL-only, blocking) need to be two trivy calls.
+        # --ignore-unfixed still applies -- this blocks on vulnerabilities
+        # that are both the most severe *and* have a fix available today,
+        # not every CVE ever recorded against any package.
+        #
+        # --skip-dirs excludes nuclei's own bundled detection-rule
+        # templates: one of their regex patterns for matching a leaked GCP
+        # service-account key looks enough like key material itself that
+        # trivy's secret scanner flags the pattern as a CRITICAL secret --
+        # a false positive against nuclei's own threat-intel data, not
+        # anything this image actually leaks.
+        #
+        # --ignorefile suppresses two CVEs baked into pre-built upstream Go
+        # binaries (nuclei/httpx/subfinder) that this Dockerfile downloads
+        # as release artifacts -- transitive golang.org/x/crypto and Go
+        # stdlib versions we don't control or rebuild ourselves; see
+        # docker/toolchain/.trivyignore for exactly which CVEs and why.
+        # Confirmed clean against the current image with both exclusions
+        # in place -- if a NEW fixable CRITICAL shows up in anything this
+        # job actually builds, this step blocks on it.
+        run: |
+          trivy image \
+            --format table \
+            --severity CRITICAL \
+            --ignore-unfixed \
+            --skip-dirs /root/nuclei-templates \
+            --ignorefile docker/toolchain/.trivyignore \
+            --exit-code 1 \
+            odysseus-toolchain:ci
 
   python-syntax:
     name: Python syntax (compileall — fork additions)

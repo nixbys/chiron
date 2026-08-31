@@ -169,10 +169,42 @@ def _get_audit_db() -> sqlite3.Connection:
                         conn.execute("ALTER TABLE tool_invocations ADD COLUMN engagement_id TEXT")
                     if "raw_log_path" not in cols:
                         conn.execute("ALTER TABLE tool_invocations ADD COLUMN raw_log_path TEXT")
+                    if "row_hash" not in cols:
+                        conn.execute("ALTER TABLE tool_invocations ADD COLUMN row_hash TEXT")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_engagement ON tool_invocations(engagement_id);")
                 _audit_db_initialized = True
                 return conn
     return _new_audit_connection()
+
+
+# Fixed value chained into the very first row's hash (there's no real
+# predecessor to reference) -- distinct from "" so a from-scratch DB and a
+# corrupted/blanked-out prev_hash aren't indistinguishable to
+# audit_verify (see audit_server.py).
+_CHAIN_GENESIS = "GENESIS"
+
+
+def _compute_row_hash(
+    prev_hash: str, ts: float, binary: str, args_json: str, mode: str,
+    duration_ms: int | None, outcome: str, detail: str,
+    engagement_id: str | None, raw_log_path: str | None,
+) -> str:
+    """Tamper-evidence for the audit trail: each row's hash folds in the
+    previous row's hash (by insertion order) plus every column of this
+    row, keyed by the same app-wide secret secret_storage.py's Fernet key
+    also uses (hmac_hex -- see that function's own docstring for why HMAC,
+    not Fernet, is the right primitive here: a value that needs to be
+    verified by recomputation, never decrypted back). Editing or deleting
+    any row breaks every hash from that point forward, and recomputing a
+    replacement chain requires the same key an attacker with only
+    filesystem access to audit.db does not have -- see audit_server.py's
+    audit_verify tool for the read side that actually checks this."""
+    from src.secret_storage import hmac_hex
+    canonical = json.dumps([
+        prev_hash, ts, binary, args_json, mode, duration_ms, outcome,
+        detail, engagement_id, raw_log_path,
+    ])
+    return hmac_hex(canonical)
 
 
 def _log_invocation(
@@ -190,13 +222,30 @@ def _log_invocation(
     logger, not raised)."""
     try:
         args_json = json.dumps(args)[:_MAX_LOGGED_ARG_LEN]
+        ts = time.time()
+        detail = detail[:500]
         conn = _get_audit_db()
         try:
-            conn.execute(
-                "INSERT INTO tool_invocations (ts, binary, args, mode, duration_ms, outcome, detail, engagement_id, raw_log_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (time.time(), binary, args_json, mode, duration_ms, outcome, detail[:500], engagement_id, raw_log_path),
-            )
-            conn.commit()
+            # SELECT (previous row's hash) + INSERT wrapped in one
+            # transaction (`with conn:`) so concurrent writers -- every
+            # MCP server is its own subprocess, several can log at once --
+            # can't interleave a read and a write into two rows that both
+            # chain from the same predecessor. SQLite serializes writers
+            # even under WAL, so this blocks/retries rather than racing.
+            with conn:
+                prev = conn.execute(
+                    "SELECT row_hash FROM tool_invocations ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                prev_hash = (prev["row_hash"] if prev else None) or _CHAIN_GENESIS
+                row_hash = _compute_row_hash(
+                    prev_hash, ts, binary, args_json, mode, duration_ms,
+                    outcome, detail, engagement_id, raw_log_path,
+                )
+                conn.execute(
+                    "INSERT INTO tool_invocations (ts, binary, args, mode, duration_ms, outcome, detail, engagement_id, raw_log_path, row_hash) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (ts, binary, args_json, mode, duration_ms, outcome, detail, engagement_id, raw_log_path, row_hash),
+                )
         finally:
             conn.close()
     except Exception:  # noqa: BLE001
