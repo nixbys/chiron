@@ -209,6 +209,63 @@ def test_new_scope_outcomes_are_in_outcomes_tuple(tmp_data_dir):
     assert "scope_override" in mod._OUTCOMES
 
 
+# ---- Scope-violation checkpoint + query (Phase F) ---------------------
+
+
+def test_get_checkpoint_defaults_to_zero_for_unknown_task(tmp_data_dir):
+    mod, _ = tmp_data_dir
+    assert mod._get_checkpoint("task-1") == 0
+
+
+def test_save_and_get_checkpoint_roundtrips(tmp_data_dir):
+    mod, _ = tmp_data_dir
+    mod._save_checkpoint("task-1", 42)
+    assert mod._get_checkpoint("task-1") == 42
+
+
+def test_save_checkpoint_upserts_on_repeat_calls(tmp_data_dir):
+    mod, _ = tmp_data_dir
+    mod._save_checkpoint("task-1", 10)
+    mod._save_checkpoint("task-1", 20)
+    assert mod._get_checkpoint("task-1") == 20
+
+
+def test_checkpoints_are_independent_per_task(tmp_data_dir):
+    mod, _ = tmp_data_dir
+    mod._save_checkpoint("task-1", 10)
+    mod._save_checkpoint("task-2", 99)
+    assert mod._get_checkpoint("task-1") == 10
+    assert mod._get_checkpoint("task-2") == 99
+
+
+def test_list_scope_violations_since_only_returns_scope_outcomes(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    common_mod._log_invocation("nmap_scan", ["10.0.0.5"], "n/a", None, "ok", engagement_id="eng-1")
+    common_mod._log_invocation("nmap_scan", ["8.8.8.8"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    common_mod._log_invocation("nmap_scan", ["8.8.8.8"], "n/a", None, "scope_override", "approved", engagement_id="eng-1")
+    rows = mod._list_scope_violations_since(0)
+    assert [r["outcome"] for r in rows] == ["blocked_out_of_scope", "scope_override"]
+
+
+def test_list_scope_violations_since_respects_after_id(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    common_mod._log_invocation("nmap_scan", ["8.8.8.8"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    first_id = mod._list_scope_violations_since(0)[0]["id"]
+    common_mod._log_invocation("nmap_scan", ["9.9.9.9"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    rows = mod._list_scope_violations_since(first_id)
+    assert len(rows) == 1
+    assert rows[0]["args"] == ["9.9.9.9"]
+
+
+def test_list_scope_violations_since_filters_by_engagement(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    common_mod._log_invocation("nmap_scan", ["8.8.8.8"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-1")
+    common_mod._log_invocation("nmap_scan", ["9.9.9.9"], "n/a", None, "blocked_out_of_scope", engagement_id="eng-2")
+    rows = mod._list_scope_violations_since(0, engagement_id="eng-1")
+    assert len(rows) == 1
+    assert rows[0]["engagement_id"] == "eng-1"
+
+
 def test_concurrent_first_access_does_not_deadlock(tmp_data_dir):
     """Regression: routes/security_dashboard_routes.py's Audit Log tab used
     to call _list_invocations and _stats concurrently via asyncio.gather.
