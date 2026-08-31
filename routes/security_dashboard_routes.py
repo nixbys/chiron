@@ -27,9 +27,10 @@ import json
 import logging
 import os
 import re
+import uuid
 
 import requests
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from core.middleware import require_admin
@@ -210,6 +211,35 @@ async def _call_tool(mod, tool_name: str, arguments: dict) -> str:
 
 _CREATED_ID_RE = re.compile(r"\(id=([0-9a-f]+)\)")
 
+# ---- RoE/SOW scope extraction (Phase E) --------------------------------
+#
+# Pulls IP/CIDR/domain-looking tokens out of an uploaded authorization
+# document's extracted text, for the "New Project" flow to offer as an
+# *editable, pre-filled* candidate scope list -- never auto-committed as
+# an authorization boundary. Same validators mcp_servers/common.py's own
+# tools already use, so "looks like a real target" here means the same
+# thing it means everywhere else in this fork.
+_IP_CIDR_TOKEN_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?\b")
+_DOMAIN_TOKEN_RE = re.compile(r"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}\b")
+# A domain-shaped token that's actually a scope-document footer artifact,
+# not a target -- filtered out even though it passes validate_domain().
+_DOMAIN_TOKEN_DENYLIST = {"e.g", "i.e", "etc.com"}
+
+
+def _extract_candidate_targets(text: str) -> list[str]:
+    import mcp_servers.common as common_mod
+    candidates: set[str] = set()
+    for token in _IP_CIDR_TOKEN_RE.findall(text):
+        if common_mod.validate_ip(token) is None:
+            candidates.add(token)
+    for token in _DOMAIN_TOKEN_RE.findall(text):
+        low = token.lower().rstrip(".")
+        if low in _DOMAIN_TOKEN_DENYLIST:
+            continue
+        if common_mod.validate_domain(low) is None:
+            candidates.add(low)
+    return sorted(candidates)
+
 
 class EngagementCreateBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
@@ -302,6 +332,46 @@ def setup_security_dashboard_routes():
         require_admin(request)
         import mcp_servers.engagement_server as mod
         return {"message": await _call_tool(mod, "engagement_close", {"engagement_id": engagement_id})}
+
+    @router.post("/roe/parse-scope")
+    async def parse_roe_scope(request: Request, file: UploadFile = File(...)):
+        """Extract candidate in/out-of-scope targets from an uploaded Rules-
+        of-Engagement/SOW PDF, for the "New Project" flow to pre-fill --
+        the caller still reviews and confirms before anything is created,
+        this never writes an engagement itself."""
+        require_admin(request)
+        import mcp_servers.pdf_server as pdf_mod
+        if not getattr(pdf_mod, "_PYPDF_AVAILABLE", False):
+            raise HTTPException(400, "PDF support isn't installed on this server (the 'pypdf' package is missing)")
+
+        content = await file.read()
+        _MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+        if len(content) > _MAX_UPLOAD_BYTES:
+            raise HTTPException(400, f"File too large (max {_MAX_UPLOAD_BYTES // (1024 * 1024)}MB)")
+
+        # A throwaway temp file under pdf_server's own data dir, so
+        # _pdf_extract_text's existing _resolve() path-traversal guard
+        # applies here too rather than a second one reimplemented in this
+        # route -- deleted again once text extraction is done, since this
+        # is a scope-parsing scratch file, not a document meant to persist.
+        upload_dir = pdf_mod._DATA_DIR / "tmp_roe_uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = f"{uuid.uuid4().hex}.pdf"
+        dest = upload_dir / safe_name
+        dest.write_bytes(content)
+        try:
+            text = await asyncio.to_thread(pdf_mod._pdf_extract_text, f"tmp_roe_uploads/{safe_name}", "", 0)
+        finally:
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+
+        if text.startswith("[error]"):
+            raise HTTPException(400, text)
+        if text.startswith("(no extractable text"):
+            return {"candidates": [], "extracted_chars": 0, "message": text}
+        return {"candidates": _extract_candidate_targets(text), "extracted_chars": len(text)}
 
     # ---- Watchlist --------------------------------------------------------
 

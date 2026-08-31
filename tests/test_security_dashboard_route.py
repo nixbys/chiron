@@ -263,6 +263,92 @@ async def test_close_engagement_route_maps_not_found_to_404(monkeypatch):
     assert r.status_code == 404
 
 
+# ---- RoE/SOW scope extraction (Phase E) ---------------------------------
+
+
+def test_extract_candidate_targets_finds_ips_cidrs_and_domains():
+    text = (
+        "Authorized scope for this engagement includes 10.0.0.0/24 and "
+        "203.0.113.5, plus the web properties app.example.com and "
+        "example.com. The vendor's own status page, "
+        "e.g. status.example.org, is explicitly out of scope."
+    )
+    got = set(secdash._extract_candidate_targets(text))
+    assert "10.0.0.0/24" in got
+    assert "203.0.113.5" in got
+    assert "app.example.com" in got
+    assert "example.com" in got
+    assert "status.example.org" in got
+    # Plain English prose isn't IP/CIDR- or domain-shaped at all, so it
+    # never even reaches validate_ip/validate_domain to begin with.
+    assert "engagement" not in got
+    assert "vendor's" not in got
+
+
+def test_extract_candidate_targets_filters_denylisted_footer_artifacts():
+    got = secdash._extract_candidate_targets("Scope includes hosts, e.g. anything on the internal network.")
+    assert "e.g" not in got
+
+
+def test_extract_candidate_targets_empty_text_returns_empty_list():
+    assert secdash._extract_candidate_targets("") == []
+
+
+def test_parse_roe_scope_route_requires_admin(monkeypatch):
+    client = _client_with_admin_gate(monkeypatch, _deny)
+    r = client.post("/api/security/roe/parse-scope", files={"file": ("roe.pdf", b"%PDF-1.4 fake", "application/pdf")})
+    assert r.status_code == 403
+
+
+def test_parse_roe_scope_route_returns_candidates(monkeypatch):
+    import mcp_servers.pdf_server as pdf_mod
+    monkeypatch.setattr(pdf_mod, "_PYPDF_AVAILABLE", True)
+    monkeypatch.setattr(pdf_mod, "_pdf_extract_text", lambda file_path, pages, max_chars: "In scope: 10.0.0.0/24 and app.example.com.")
+    client = _hub_client(monkeypatch)
+    r = client.post("/api/security/roe/parse-scope", files={"file": ("roe.pdf", b"%PDF-1.4 fake", "application/pdf")})
+    assert r.status_code == 200
+    body = r.json()
+    assert "10.0.0.0/24" in body["candidates"]
+    assert "app.example.com" in body["candidates"]
+    assert body["extracted_chars"] > 0
+
+
+def test_parse_roe_scope_route_cleans_up_temp_file(monkeypatch, tmp_path):
+    import mcp_servers.pdf_server as pdf_mod
+    monkeypatch.setattr(pdf_mod, "_PYPDF_AVAILABLE", True)
+    monkeypatch.setattr(pdf_mod, "_DATA_DIR", tmp_path)
+
+    def fake_extract(file_path, pages, max_chars):
+        # The upload must exist on disk *while* extraction runs...
+        assert (tmp_path / file_path).exists()
+        return "10.0.0.1"
+
+    monkeypatch.setattr(pdf_mod, "_pdf_extract_text", fake_extract)
+    client = _hub_client(monkeypatch)
+    r = client.post("/api/security/roe/parse-scope", files={"file": ("roe.pdf", b"%PDF-1.4 fake", "application/pdf")})
+    assert r.status_code == 200
+    # ...and be gone again afterward -- this is a scratch file, not a kept upload.
+    assert list((tmp_path / "tmp_roe_uploads").iterdir()) == []
+
+
+def test_parse_roe_scope_route_rejects_when_pypdf_unavailable(monkeypatch):
+    import mcp_servers.pdf_server as pdf_mod
+    monkeypatch.setattr(pdf_mod, "_PYPDF_AVAILABLE", False)
+    client = _hub_client(monkeypatch)
+    r = client.post("/api/security/roe/parse-scope", files={"file": ("roe.pdf", b"%PDF-1.4 fake", "application/pdf")})
+    assert r.status_code == 400
+
+
+def test_parse_roe_scope_route_no_extractable_text(monkeypatch):
+    import mcp_servers.pdf_server as pdf_mod
+    monkeypatch.setattr(pdf_mod, "_PYPDF_AVAILABLE", True)
+    monkeypatch.setattr(pdf_mod, "_pdf_extract_text", lambda file_path, pages, max_chars: "(no extractable text — PDF may be scanned/image-only)")
+    client = _hub_client(monkeypatch)
+    r = client.post("/api/security/roe/parse-scope", files={"file": ("roe.pdf", b"%PDF-1.4 fake", "application/pdf")})
+    assert r.status_code == 200
+    assert r.json()["candidates"] == []
+
+
 def test_list_watchlist_route(monkeypatch):
     import mcp_servers.watchlist_server as watchlist_mod
     rows = [{"id": 1, "indicator": "1.2.3.4", "kind": "ip"}]
