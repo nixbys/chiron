@@ -20,12 +20,22 @@ import src.tool_execution as tool_execution
 
 
 class _FakeMcp:
-    def __init__(self):
+    def __init__(self, tool_results=None):
         self.calls = []
+        # name -> result dict to return for that qualified/bare name (e.g.
+        # "finding_index"); anything not listed falls back to the default.
+        self._tool_results = tool_results or {}
 
     async def call_tool(self, name, args):
         self.calls.append((name, args))
+        if name in self._tool_results:
+            return self._tool_results[name]
         return {"output": "called", "exit_code": 0}
+
+    def get_all_tools(self):
+        return [
+            {"name": "finding_index", "qualified_name": "mcp__findings__finding_index", "is_disabled": False},
+        ]
 
 
 @pytest.fixture
@@ -231,3 +241,115 @@ async def test_secrets_scan_is_in_engagement_scoped_tools():
     check_scope_from_args wiring but never to this set, so a linked
     session's engagement_id was silently never auto-injected into it."""
     assert "secrets_scan" in tool_execution._ENGAGEMENT_SCOPED_MCP_TOOLS
+
+
+# ---- Auto-filing secrets_scan findings (Phase L) -------------------------
+
+
+@pytest.mark.asyncio
+async def test_secrets_scan_leaks_found_files_a_finding(monkeypatch, db_env):
+    tool_execution, manager, _ = db_env
+    manager.create_session(
+        session_id="s1", name="t", endpoint_url="x", model="m", engagement_id="eng-1",
+    )
+    fake = _FakeMcp(tool_results={
+        "mcp__findings__finding_index": {"output": "Finding indexed (id=abc).", "exit_code": 0},
+    })
+    monkeypatch.setattr(tool_execution, "get_mcp_manager", lambda: fake)
+    monkeypatch.setattr("mcp_servers.engagement_server._log_event", lambda *a, **k: None)
+
+    fake._tool_results["mcp__abc123__secrets_scan"] = {
+        "stdout": "[git clone]\nCloning...\n\n[gitleaks]\n10:15AM WRN leaks found: 2",
+        "exit_code": 0,
+    }
+
+    desc, result = await _run(
+        tool_execution, "mcp__abc123__secrets_scan",
+        '{"repo_url": "https://github.com/org/repo.git"}', session_id="s1",
+    )
+
+    finding_calls = [c for c in fake.calls if c[0] == "mcp__findings__finding_index"]
+    assert len(finding_calls) == 1
+    assert finding_calls[0][1]["severity"] == "high"
+    assert finding_calls[0][1]["tool"] == "secrets_scan"
+    assert finding_calls[0][1]["engagement"] == "eng-1"
+    assert finding_calls[0][1]["tags"] == ["secrets", "credential-leak"]
+    assert "2" in finding_calls[0][1]["title"]
+    assert "[Filed as a finding" in result["stdout"]
+
+
+@pytest.mark.asyncio
+async def test_secrets_scan_no_leaks_does_not_file_a_finding(monkeypatch, db_env):
+    tool_execution, manager, _ = db_env
+    manager.create_session(session_id="s1", name="t", endpoint_url="x", model="m")
+    fake = _FakeMcp()
+    monkeypatch.setattr(tool_execution, "get_mcp_manager", lambda: fake)
+    fake._tool_results["mcp__abc123__secrets_scan"] = {
+        "stdout": "[git clone]\nCloning...\n\n[gitleaks]\n10:15AM INF no leaks found",
+        "exit_code": 0,
+    }
+
+    desc, result = await _run(
+        tool_execution, "mcp__abc123__secrets_scan",
+        '{"repo_url": "https://github.com/org/repo.git"}', session_id="s1",
+    )
+
+    assert not any(c[0] == "mcp__findings__finding_index" for c in fake.calls)
+    assert "Filed as a finding" not in result["stdout"]
+
+
+@pytest.mark.asyncio
+async def test_secrets_scan_error_result_does_not_file_a_finding(monkeypatch, db_env):
+    tool_execution, manager, _ = db_env
+    manager.create_session(session_id="s1", name="t", endpoint_url="x", model="m")
+    fake = _FakeMcp()
+    monkeypatch.setattr(tool_execution, "get_mcp_manager", lambda: fake)
+    fake._tool_results["mcp__abc123__secrets_scan"] = {"error": "[error:timeout]", "exit_code": 1}
+
+    await _run(
+        tool_execution, "mcp__abc123__secrets_scan",
+        '{"repo_url": "https://github.com/org/repo.git"}', session_id="s1",
+    )
+
+    assert not any(c[0] == "mcp__findings__finding_index" for c in fake.calls)
+
+
+@pytest.mark.asyncio
+async def test_secrets_scan_finding_index_unavailable_does_not_crash(monkeypatch, db_env):
+    """No connected server currently exposes finding_index (e.g. findings_
+    server not registered) -- the scan result itself must still come back
+    fine, just without the auto-file."""
+    tool_execution, manager, _ = db_env
+    manager.create_session(session_id="s1", name="t", endpoint_url="x", model="m")
+
+    class _NoFindingsMcp(_FakeMcp):
+        def get_all_tools(self):
+            return []
+
+    fake = _NoFindingsMcp()
+    monkeypatch.setattr(tool_execution, "get_mcp_manager", lambda: fake)
+    fake._tool_results["mcp__abc123__secrets_scan"] = {
+        "stdout": "[gitleaks]\nleaks found: 1", "exit_code": 0,
+    }
+
+    desc, result = await _run(
+        tool_execution, "mcp__abc123__secrets_scan",
+        '{"repo_url": "https://github.com/org/repo.git"}', session_id="s1",
+    )
+    assert "leaks found: 1" in result["stdout"]
+    assert "Filed as a finding" not in result["stdout"]
+
+
+@pytest.mark.asyncio
+async def test_other_tools_never_trigger_secrets_scan_filing(monkeypatch, db_env):
+    tool_execution, manager, _ = db_env
+    manager.create_session(session_id="s1", name="t", endpoint_url="x", model="m")
+    fake = _FakeMcp()
+    monkeypatch.setattr(tool_execution, "get_mcp_manager", lambda: fake)
+    fake._tool_results["mcp__abc123__nmap_scan"] = {
+        "stdout": "leaks found: 99 (coincidentally matching text)", "exit_code": 0,
+    }
+
+    await _run(tool_execution, "mcp__abc123__nmap_scan", '{"target": "10.0.0.5"}', session_id="s1")
+
+    assert not any(c[0] == "mcp__findings__finding_index" for c in fake.calls)
