@@ -34,6 +34,44 @@ const _isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 const _mod = _isMac ? '⌘' : 'Ctrl';
 let _historyPager = null;
 
+// Chat header "Project" badge (see mcp_servers/common.py's check_scope()) --
+// shows the Engagement a session is linked to, if any. Names are fetched
+// lazily and cached by id so switching back to an already-seen session
+// never re-fetches.
+const _engagementNameCache = {};
+
+async function _updateProjectBadge(engagementId) {
+  const badge = document.getElementById('chat-project-badge');
+  const label = document.getElementById('chat-project-badge-label');
+  if (!badge || !label) return;
+  if (!engagementId) {
+    badge.hidden = true;
+    return;
+  }
+  badge.href = `/security?tab=engagements&engagement_id=${encodeURIComponent(engagementId)}`;
+  if (_engagementNameCache[engagementId]) {
+    label.textContent = _engagementNameCache[engagementId];
+    badge.hidden = false;
+    return;
+  }
+  label.textContent = 'Project';
+  badge.hidden = false;
+  try {
+    const res = await fetch(`${API_BASE}/api/security/engagements/${encodeURIComponent(engagementId)}`, { credentials: 'same-origin' });
+    if (!res.ok) return;
+    const data = await res.json();
+    const name = data && data.engagement && data.engagement.name;
+    if (name) {
+      _engagementNameCache[engagementId] = name;
+      // The user may have switched sessions again while this was in
+      // flight -- only apply if the badge is still pointing at this id.
+      if (badge.href.includes(encodeURIComponent(engagementId))) label.textContent = name;
+    }
+  } catch {
+    // Badge already shows a generic "Project" label -- fine to leave as-is.
+  }
+}
+
 function _shouldPreserveStartupComposer(msgInput) {
   if (!msgInput || !msgInput.value) return false;
   if (window.__odysseusComposerUserEdited) return true;
@@ -287,6 +325,7 @@ function _deselectCurrentSession(sid) {
   currentSessionId = null;
   uiModule.el('chat-history').innerHTML = '';
   uiModule.el('current-meta').textContent = 'Chiron Chat';
+  _updateProjectBadge(null);
   Storage.remove('lastSessionId');
   history.replaceState(null, '', window.location.pathname);
   if (window.chatModule && window.chatModule.showWelcomeScreen) {
@@ -1939,6 +1978,7 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
     if (currentMetaEl) {
       currentMetaEl.textContent = meta ? meta.name : 'Chiron Chat';
     }
+    _updateProjectBadge(meta ? meta.engagement_id : null);
     // Update model picker visibility
     updateModelPicker();
     if (window.refreshChatContextHeader) window.refreshChatContextHeader('select-session');
@@ -2260,6 +2300,7 @@ export function createDirectChat(url, modelId, endpointId, opts = {}) {
   if (metaEl) {
     metaEl.textContent = 'New Chat';
   }
+  _updateProjectBadge(null);
 
   // Enable input
   const msgInput = document.getElementById('message');

@@ -23,6 +23,13 @@ const API_BASE = window.location.origin;
 // = no "current chat" to offer linking.
 const _CURRENT_SESSION_ID = new URLSearchParams(window.location.search).get('session_id') || '';
 
+// Deep-link support for the chat header's "Project" badge (static/js/
+// sessions.js) -- /security?tab=engagements&engagement_id=... lands
+// directly on that engagement's expanded detail view instead of Overview.
+const _DEEP_LINK_PARAMS = new URLSearchParams(window.location.search);
+const _DEEP_LINK_TAB = _DEEP_LINK_PARAMS.get('tab') || '';
+const _DEEP_LINK_ENGAGEMENT_ID = _DEEP_LINK_PARAMS.get('engagement_id') || '';
+
 let _activeTab = 'overview';
 
 // Per-tab cached state, so switching tabs doesn't lose an in-progress
@@ -296,6 +303,16 @@ async function _loadEngagements() {
     const el = _body();
     if (el) el.innerHTML = _errorLine(err.message || String(err));
     return;
+  }
+  // Deep link from the chat header's "Project" badge -- land straight on
+  // that engagement's expanded detail, once, not on every reload of this tab.
+  if (_DEEP_LINK_ENGAGEMENT_ID && _state.engagements.expandedId == null) {
+    const target = _state.engagements.list.find(e => e.id === _DEEP_LINK_ENGAGEMENT_ID);
+    if (target) {
+      _state.engagements.expandedId = target.id;
+      await _loadEngagementDetail(target.id);
+      return;
+    }
   }
   _renderEngagements();
 }
@@ -811,7 +828,12 @@ export function initSecurityHub() {
     body.addEventListener('click', _onBodyClick);
     body.addEventListener('submit', _onBodySubmit);
   }
-  _loadActiveTab();
+  const validDeepLinkTab = _DEEP_LINK_TAB && document.querySelector(`#hub-tabs [data-sec-tab="${_DEEP_LINK_TAB}"]`);
+  if (validDeepLinkTab) {
+    _switchTab(_DEEP_LINK_TAB);
+  } else {
+    _loadActiveTab();
+  }
 }
 
 export default { initSecurityHub };

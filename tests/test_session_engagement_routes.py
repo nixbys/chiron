@@ -119,6 +119,26 @@ def test_patch_session_detaches_engagement_with_explicit_flag(app_env):
     assert row.engagement_id is None
 
 
+def test_list_sessions_includes_engagement_id(app_env):
+    """Phase G's chat-header project badge (static/js/sessions.js) reads
+    engagement_id off each row in GET /api/sessions -- session_manager's
+    in-memory Session objects already carry it (Phase B), this just
+    confirms the route actually serializes it."""
+    client, TestSessionLocal = app_env
+    scoped_id = client.post("/api/session", data={
+        "name": "scoped chat", "skip_validation": "true", "engagement_id": "eng-1",
+    }).json()["id"]
+    unscoped_id = client.post("/api/session", data={
+        "name": "unscoped chat", "skip_validation": "true",
+    }).json()["id"]
+
+    resp = client.get("/api/sessions")
+    assert resp.status_code == 200
+    by_id = {s["id"]: s for s in resp.json()}
+    assert by_id[scoped_id]["engagement_id"] == "eng-1"
+    assert by_id[unscoped_id]["engagement_id"] is None
+
+
 def test_patch_session_omitting_engagement_id_leaves_it_untouched(app_env):
     client, TestSessionLocal = app_env
     sid = client.post("/api/session", data={
