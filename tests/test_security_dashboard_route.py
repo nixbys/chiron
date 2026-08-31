@@ -407,7 +407,7 @@ def test_list_audit_log_route_returns_invocations_and_stats(monkeypatch):
     import mcp_servers.audit_server as audit_mod
     rows = [{"id": 1, "binary": "nmap", "args": ["nmap", "10.0.0.5"], "outcome": "ok"}]
     stats = {"total": 1, "by_binary": [{"binary": "nmap", "n": 1}], "by_outcome": [{"outcome": "ok", "n": 1}]}
-    monkeypatch.setattr(audit_mod, "_list_invocations", lambda binary, outcome, limit: rows)
+    monkeypatch.setattr(audit_mod, "_list_invocations", lambda binary, outcome, engagement_id, limit: rows)
     monkeypatch.setattr(audit_mod, "_stats", lambda window_s: stats)
     client = _hub_client(monkeypatch)
     r = client.get("/api/security/audit")
@@ -421,23 +421,53 @@ def test_list_audit_log_route_passes_filters_through(monkeypatch):
     import mcp_servers.audit_server as audit_mod
     seen = {}
 
-    def fake_list(binary, outcome, limit):
-        seen["args"] = (binary, outcome, limit)
+    def fake_list(binary, outcome, engagement_id, limit):
+        seen["args"] = (binary, outcome, engagement_id, limit)
         return []
 
     monkeypatch.setattr(audit_mod, "_list_invocations", fake_list)
     monkeypatch.setattr(audit_mod, "_stats", lambda window_s: {"total": 0, "by_binary": [], "by_outcome": []})
     client = _hub_client(monkeypatch)
-    r = client.get("/api/security/audit?binary=nmap&outcome=error&limit=10")
+    r = client.get("/api/security/audit?binary=nmap&outcome=error&engagement_id=eng-1&limit=10")
     assert r.status_code == 200
-    assert seen["args"] == ("nmap", "error", 10)
+    assert seen["args"] == ("nmap", "error", "eng-1", 10)
+
+
+def test_list_audit_log_route_engagement_filter_against_real_audit_db(monkeypatch, tmp_path):
+    """Regression: the route used to call _list_invocations(binary, outcome,
+    limit) *positionally*; adding an engagement_id parameter before limit
+    (Phase A) silently landed `limit` in the engagement_id slot for this
+    exact call site (every other test here mocks _list_invocations
+    entirely, so none of them would have caught it). Exercises the real,
+    unmocked function against a real isolated audit.db instead."""
+    import importlib
+    monkeypatch.setenv("ODYSSEUS_DATA_DIR", str(tmp_path))
+    import mcp_servers.common as common_mod
+    import mcp_servers.audit_server as audit_mod
+    importlib.reload(common_mod)
+    importlib.reload(audit_mod)
+    monkeypatch.setattr(secdash, "require_admin", _allow)
+
+    common_mod._log_invocation("nmap", ["nmap", "10.0.0.5"], "container", 100, "ok", engagement_id="eng-1")
+    common_mod._log_invocation("nmap", ["nmap", "10.0.0.6"], "container", 100, "ok", engagement_id="eng-2")
+
+    app = FastAPI()
+    app.include_router(secdash.setup_security_dashboard_routes())
+    client = TestClient(app, raise_server_exceptions=False)
+
+    r = client.get("/api/security/audit?engagement_id=eng-1&limit=10")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["invocations"]) == 1
+    assert body["invocations"][0]["engagement_id"] == "eng-1"
+    assert body["invocations"][0]["args"] == ["nmap", "10.0.0.5"]
 
 
 def test_list_audit_log_route_clamps_limit(monkeypatch):
     import mcp_servers.audit_server as audit_mod
     seen = {}
 
-    def fake_list(binary, outcome, limit):
+    def fake_list(binary, outcome, engagement_id, limit):
         seen["limit"] = limit
         return []
 

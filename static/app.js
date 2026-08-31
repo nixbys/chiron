@@ -1077,7 +1077,13 @@ function initializeEventListeners() {
   const toolSecurityBtn = el('tool-security-btn');
   if (toolSecurityBtn) {
     toolSecurityBtn.addEventListener('click', () => {
-      window.location.href = '/security';
+      // Pass the current chat along via ?session_id= so the Security Hub's
+      // Engagements tab can offer "Link current chat to this engagement" --
+      // a real cross-page navigation, not a SPA route, so this is the only
+      // way that page can know which session sent the user here.
+      const sid = window.sessionModule && window.sessionModule.getCurrentSessionId
+        && window.sessionModule.getCurrentSessionId();
+      window.location.href = sid ? `/security?session_id=${encodeURIComponent(sid)}` : '/security';
     });
   }
 
