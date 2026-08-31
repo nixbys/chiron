@@ -196,7 +196,7 @@ Every tool below is exposed to the chat/agent layer over stdio MCP — nothing h
 | `dns_enum` | DNS record enumeration (A, MX, NS, TXT, CNAME) |
 | `whois_lookup` | WHOIS registration data |
 | `subdomain_enum` | Passive subdomain enumeration via Amass (cert transparency, DNS brute-force, APIs) |
-| `secrets_scan` | Clone a git repo and scan its full history for leaked credentials/API keys/tokens (gitleaks) -- matched secret values are redacted, never shown in full |
+| `secrets_scan` | Clone a git repo and scan its full history for leaked credentials/API keys/tokens (gitleaks) -- matched secret values are redacted, never shown in full. A positive result auto-files a `findings_server` finding (severity `high`, tagged `secrets`/`credential-leak`) via `src/tool_execution.py`'s MCP dispatch layer, since `osint_server.py` itself can't call another MCP server's tools directly |
 
 ### `web_vuln_server` — Web Assessment
 

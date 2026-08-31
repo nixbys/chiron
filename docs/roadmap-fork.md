@@ -128,14 +128,18 @@ Update this file at the end of every phase/checkpoint, same discipline as `CHANG
       along the way: `secrets_scan` (Phase H) was never added to `src/tool_execution.py`'s
       auto-injection set, so a linked session's `engagement_id` was silently never passed to
       it. Full details in `CHANGELOG.md`'s Unreleased section.
+- [x] **Engagement-scoped Projects, Phase L (second-order addendum, on top of Phase H) — plan
+      complete.** A positive `secrets_scan` result now auto-files a `findings_server` finding,
+      same pipeline every other detector uses (ADR 007), via `src/tool_execution.py`'s MCP
+      dispatch layer (the only place that can call across servers — `osint_server.py` itself
+      can't). This closes out every phase (A-L) of the engagement-scope-enforcement +
+      Metasploit MCP server plan approved 2026-08-29 and executed 2026-08-30. Full details in
+      `CHANGELOG.md`'s Unreleased section.
 
 ## Near-Term
 
-The same plan's last remaining second-order addendum (Phase L: wiring `secrets_scan` findings
-into the correlation fabric) is approved but not started — see the durable copy at
-`/home/nixbys/.claude/projects/-var-home-nixbys-source-repos-odysseus-red/memory/
-engagement_scope_enforcement_plan.md` for full design detail. Otherwise nothing else is
-queued; see "Ideas, Not Commitments" below for what's next if this fork keeps growing.
+Nothing currently queued from that plan — all twelve phases (A-L) are shipped. See "Ideas, Not
+Commitments" below for what's next if this fork keeps growing.
 
 ## Ideas, Not Commitments
 

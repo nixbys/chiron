@@ -144,6 +144,18 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
   `_ENGAGEMENT_SCOPED_MCP_TOOLS` set, so a linked session's `engagement_id` was silently never
   auto-injected into it — the tool worked, but only ever as if called from an unscoped session
   unless the model happened to pass `engagement_id` explicitly.
+- **Feed `secrets_scan` discoveries back into the correlation fabric (Phase L, the last phase
+  of the same plan).** A leaked secret was previously a dead-end chat message; a positive
+  `secrets_scan` result now auto-files a `findings_server` finding (severity `high`, tagged
+  `secrets`/`credential-leak`) the same way every other detector in this fork's pipeline does
+  (ADR 007) — parsed best-effort from gitleaks' own `-v` summary line ("leaks found: N"), same
+  scrape-free-text-output philosophy `action_scheduled_recon`'s own parser already documents.
+  `osint_server.py` can't file this itself (MCP servers never call another server's tools
+  directly); it happens in `src/tool_execution.py`'s MCP dispatch layer instead — the one
+  place that already sits between every call and its result with a live MCP manager on hand.
+  Deliberately doesn't also watchlist the leaked value (the one further step the plan left
+  optional): `--redact` never exposes the actual secret, and un-redacting it just to enable
+  watchlisting would undo the exact safety property that flag exists for.
 - **Toolchain invocation audit trail + rate limiting**, both enforced at `mcp_servers/
   common.py`'s `exec_in_toolchain()` — the one chokepoint every red-team MCP server's tool
   calls pass through, so no changes were needed in any of the other 20 server modules. Every

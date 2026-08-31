@@ -387,6 +387,74 @@ _UNSCOPED_NUDGE_TEXT = (
 )
 
 
+# gitleaks' own -v summary line, e.g. "10:15AM WRN leaks found: 2" or
+# "10:15AM INF no leaks found" -- best-effort text parsing (a parse miss
+# just means the auto-file below is skipped, never a crash; same
+# philosophy src/builtin_actions.py's _parse_scheduled_recon_output
+# already documents for scraping other tools' free-text output).
+_GITLEAKS_LEAK_COUNT_RE = re.compile(r"leaks found:\s*(\d+)", re.IGNORECASE)
+
+
+async def _auto_file_secrets_scan_finding(mcp, result: Dict, args: Dict, session_id: Optional[str]) -> None:
+    """Phase L: a secret gitleaks finds is currently a dead-end text
+    result -- wire it into the same findings_server pipeline every other
+    detector already uses (ADR 007's "one pipeline, not parallel
+    systems"), instead of leaving it a one-off chat message the model has
+    to remember to act on itself.
+
+    osint_server.py can't do this itself: MCP servers in this fork never
+    import each other or call another server's tools directly (see that
+    module's own docstring) -- this runs here instead, in the one place
+    that already sits between every MCP call and its result and already
+    has a live MCP manager to call *other* servers' tools through."""
+    if not isinstance(result, dict) or result.get("error"):
+        return
+    text = result.get("stdout") or ""
+    m = _GITLEAKS_LEAK_COUNT_RE.search(text)
+    leak_count = int(m.group(1)) if m else 0
+    if leak_count <= 0:
+        return
+    try:
+        # Resolve via the `mcp` object already in scope here, not
+        # src.builtin_actions._find_qualified_tool's own independent
+        # get_mcp_manager() lookup -- that helper is written for scheduled
+        # actions calling it fresh from the main process, and pulling a
+        # *second*, possibly-different manager reference in from here
+        # would silently diverge from the one this dispatch call actually
+        # used.
+        findings_tool = next(
+            (t["qualified_name"] for t in mcp.get_all_tools()
+             if t["name"] == "finding_index" and not t.get("is_disabled")),
+            None,
+        )
+        if not findings_tool:
+            return
+        repo_url = args.get("repo_url", "(unknown repo)")
+        engagement_id = args.get("engagement_id")
+        await mcp.call_tool(findings_tool, {
+            "title": f"{leak_count} leaked secret(s) found in {repo_url}",
+            "severity": "high",
+            "tool": "secrets_scan",
+            "description": (
+                f"gitleaks found {leak_count} potential credential(s)/API key(s)/token(s) "
+                f"in {repo_url}'s git history. Secret values are redacted in the raw scan "
+                "output -- review the chat transcript for file/line/rule details, then "
+                "rotate anything confirmed live."
+            ),
+            "engagement": engagement_id,
+            "tags": ["secrets", "credential-leak"],
+        })
+        if engagement_id:
+            import mcp_servers.engagement_server as engagement_mod
+            engagement_mod._log_event(
+                engagement_id, "finding_added",
+                f"{leak_count} leaked secret(s) found in {repo_url}", "",
+            )
+        result["stdout"] = text + f"\n\n[Filed as a finding: {leak_count} leaked secret(s) in {repo_url}]"
+    except Exception as e:  # noqa: BLE001
+        logger.warning("secrets_scan: auto-file finding failed: %s", e, exc_info=True)
+
+
 def _session_engagement_id(session_id: Optional[str]) -> Optional[str]:
     """Look up the Engagement ("Project") a chat session is attached to, if
     any -- a cheap point lookup rather than threading a new parameter down
@@ -1225,6 +1293,8 @@ async def _execute_tool_block_impl(
                         _nudged_unscoped_sessions.add(session_id)
                         _needs_unscoped_nudge = True
                 result = await mcp.call_tool(tool, args)
+                if _mcp_tool_name == "secrets_scan":
+                    await _auto_file_secrets_scan_finding(mcp, result, args, session_id)
                 if _needs_unscoped_nudge and isinstance(result, dict) and not result.get("error"):
                     result["stdout"] = (result.get("stdout") or "") + _UNSCOPED_NUDGE_TEXT
         else:
