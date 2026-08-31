@@ -212,6 +212,8 @@ export function initKeyboardShortcuts(modules) {
             sessionModule.setCurrentSessionId(null);
             el('chat-history').innerHTML = '';
             el('current-meta').textContent = 'Chiron Chat';
+            const projectBadge = el('chat-project-badge');
+            if (projectBadge) projectBadge.hidden = true;
             Storage.remove('lastSessionId');
             if (chatModule && chatModule.showWelcomeScreen) chatModule.showWelcomeScreen();
           }
