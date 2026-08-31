@@ -335,3 +335,134 @@ def test_concurrent_first_access_does_not_deadlock(tmp_data_dir):
         t.join(timeout=5)
 
     assert not errors, f"concurrent _get_db() calls raised: {errors}"
+
+
+# ---- audit_verify / _verify_chain -------------------------------------------
+
+
+def _log_real(common_mod, binary="nmap", outcome="ok"):
+    """Insert a properly hash-chained row via the real writer, unlike
+    _seed() above (which bypasses _log_invocation entirely and leaves
+    row_hash NULL -- useful for the legacy-row tests, wrong for these)."""
+    common_mod._log_invocation(binary, [binary, "127.0.0.1"], "container", 100, outcome)
+
+
+def test_verify_chain_empty_db(tmp_data_dir):
+    mod, _ = tmp_data_dir
+    v = mod._verify_chain()
+    assert v == {"intact": True, "checked": 0, "total_rows": 0, "broken_at_id": None}
+
+
+def test_verify_chain_intact_across_several_rows(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    for i in range(5):
+        _log_real(common_mod, binary=f"tool{i}")
+    v = mod._verify_chain()
+    assert v["intact"] is True
+    assert v["checked"] == 5
+    assert v["total_rows"] == 5
+    assert v["broken_at_id"] is None
+
+
+def test_verify_chain_detects_edited_row(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    for i in range(3):
+        _log_real(common_mod, binary=f"tool{i}")
+    conn = common_mod._get_audit_db()
+    conn.execute("UPDATE tool_invocations SET outcome='blocked_out_of_scope' WHERE binary='tool1'")
+    conn.commit()
+    conn.close()
+
+    v = mod._verify_chain()
+    assert v["intact"] is False
+    # tool1 is the 2nd row (id order); its own hash no longer matches its
+    # (edited) content, so the break is reported at that row.
+    edited_id = common_mod._get_audit_db().execute(
+        "SELECT id FROM tool_invocations WHERE binary='tool1'"
+    ).fetchone()[0]
+    assert v["broken_at_id"] == edited_id
+    assert v["checked"] == 2  # tool0 verified fine, tool1 itself is where the mismatch was found
+
+
+def test_verify_chain_detects_deleted_row(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    for i in range(3):
+        _log_real(common_mod, binary=f"tool{i}")
+    conn = common_mod._get_audit_db()
+    conn.execute("DELETE FROM tool_invocations WHERE binary='tool1'")
+    conn.commit()
+    conn.close()
+
+    v = mod._verify_chain()
+    assert v["intact"] is False
+    # tool2's hash was computed chaining from tool1's hash -- with tool1
+    # gone, tool2 is now (wrongly) adjacent to tool0 and won't verify.
+    surviving_id = common_mod._get_audit_db().execute(
+        "SELECT id FROM tool_invocations WHERE binary='tool2'"
+    ).fetchone()[0]
+    assert v["broken_at_id"] == surviving_id
+
+
+def test_verify_chain_tolerates_pre_hash_chain_legacy_rows(tmp_data_dir):
+    """Rows inserted before this feature shipped (via the old code path,
+    or here directly via _seed()) have row_hash IS NULL -- these must not
+    be reported as tampered, and the chain must still verify correctly
+    for real rows logged after them."""
+    mod, common_mod = tmp_data_dir
+    _seed(common_mod, binary="legacy1")  # row_hash NULL
+    _seed(common_mod, binary="legacy2")  # row_hash NULL
+    _log_real(common_mod, binary="modern1")
+    _log_real(common_mod, binary="modern2")
+
+    v = mod._verify_chain()
+    assert v["intact"] is True
+    assert v["checked"] == 2  # only the two post-migration rows are actually verified
+    assert v["total_rows"] == 4
+
+
+def test_verify_chain_detects_tamper_after_legacy_rows(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    _seed(common_mod, binary="legacy1")
+    _log_real(common_mod, binary="modern1")
+    _log_real(common_mod, binary="modern2")
+
+    conn = common_mod._get_audit_db()
+    conn.execute("UPDATE tool_invocations SET outcome='error' WHERE binary='modern1'")
+    conn.commit()
+    conn.close()
+
+    v = mod._verify_chain()
+    assert v["intact"] is False
+
+
+@pytest.mark.asyncio
+async def test_audit_verify_tool_reports_intact(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    _log_real(common_mod, binary="nmap")
+    _log_real(common_mod, binary="whois")
+    results = await mod.call_tool("audit_verify", {})
+    text = results[0].text
+    assert "intact" in text.lower()
+    assert "2" in text
+
+
+@pytest.mark.asyncio
+async def test_audit_verify_tool_reports_tamper(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    _log_real(common_mod, binary="nmap")
+    _log_real(common_mod, binary="whois")
+    conn = common_mod._get_audit_db()
+    conn.execute("DELETE FROM tool_invocations WHERE binary='nmap'")
+    conn.commit()
+    conn.close()
+
+    results = await mod.call_tool("audit_verify", {})
+    text = results[0].text
+    assert "TAMPER DETECTED" in text
+
+
+@pytest.mark.asyncio
+async def test_audit_verify_tool_empty_db(tmp_data_dir):
+    mod, _ = tmp_data_dir
+    results = await mod.call_tool("audit_verify", {})
+    assert "nothing to verify" in results[0].text.lower()

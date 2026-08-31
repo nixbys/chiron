@@ -143,6 +143,55 @@ def test_exec_in_toolchain_logs_timeout_outcome(audit_env):
     assert row["outcome"] == "timeout"
 
 
+# ---- Tamper-evidence hash chain ----------------------------------------------
+
+
+def test_first_row_chains_from_genesis(audit_env):
+    with patch.object(audit_env, "_exec_container", return_value="ok output"):
+        audit_env.exec_in_toolchain(["nmap", "10.0.0.5"])
+    conn = audit_env._get_audit_db()
+    row = conn.execute("SELECT * FROM tool_invocations WHERE binary='nmap'").fetchone()
+    conn.close()
+    assert row["row_hash"]
+    expected = audit_env._compute_row_hash(
+        audit_env._CHAIN_GENESIS, row["ts"], row["binary"], row["args"], row["mode"],
+        row["duration_ms"], row["outcome"], row["detail"], row["engagement_id"], row["raw_log_path"],
+    )
+    assert row["row_hash"] == expected
+
+
+def test_second_row_chains_from_first_rows_hash(audit_env):
+    with patch.object(audit_env, "_exec_container", return_value="output 1"):
+        audit_env.exec_in_toolchain(["nmap", "10.0.0.5"])
+    with patch.object(audit_env, "_exec_container", return_value="output 2"):
+        audit_env.exec_in_toolchain(["whois", "10.0.0.6"])
+    conn = audit_env._get_audit_db()
+    rows = conn.execute("SELECT * FROM tool_invocations ORDER BY id ASC").fetchall()
+    conn.close()
+    assert len(rows) == 2
+    expected_second = audit_env._compute_row_hash(
+        rows[0]["row_hash"], rows[1]["ts"], rows[1]["binary"], rows[1]["args"], rows[1]["mode"],
+        rows[1]["duration_ms"], rows[1]["outcome"], rows[1]["detail"], rows[1]["engagement_id"], rows[1]["raw_log_path"],
+    )
+    assert rows[1]["row_hash"] == expected_second
+    assert rows[1]["row_hash"] != rows[0]["row_hash"]
+
+
+def test_compute_row_hash_is_deterministic(audit_env):
+    args = (
+        "prevhash", 1000.0, "nmap", '["nmap", "-sV"]', "container",
+        500, "ok", "", "eng-1", None,
+    )
+    assert audit_env._compute_row_hash(*args) == audit_env._compute_row_hash(*args)
+
+
+def test_compute_row_hash_changes_with_any_field(audit_env):
+    base = ("prevhash", 1000.0, "nmap", '["nmap"]', "container", 500, "ok", "", "eng-1", None)
+    baseline = audit_env._compute_row_hash(*base)
+    changed = ("prevhash", 1000.0, "nmap", '["nmap"]', "container", 500, "error", "", "eng-1", None)
+    assert audit_env._compute_row_hash(*changed) != baseline
+
+
 # ---- Raw log capture (export feature) ---------------------------------------
 
 

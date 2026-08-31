@@ -65,3 +65,22 @@ def test_permissions_policy_locks_camera_and_geolocation_but_allows_self_microph
     # would also block the app's own same-origin voice/STT button.
     assert "microphone=()" not in policy
     assert "microphone=(self)" in policy
+
+
+def test_cross_origin_opener_policy_is_same_origin():
+    response = _client().get("/")
+    assert response.headers["cross-origin-opener-policy"] == "same-origin"
+
+
+def test_cross_origin_resource_policy_is_same_origin():
+    response = _client().get("/")
+    assert response.headers["cross-origin-resource-policy"] == "same-origin"
+
+
+def test_cross_origin_embedder_policy_is_deliberately_absent():
+    """require-corp would block the CSP's own allowed cross-origin
+    resources (arbitrary https: images, the jsdelivr-hosted script) --
+    see core/middleware.py's own comment for why this is intentional,
+    not an oversight."""
+    response = _client().get("/")
+    assert "cross-origin-embedder-policy" not in response.headers

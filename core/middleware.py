@@ -103,6 +103,24 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"
+        # Cross-Origin-Opener-Policy: isolates this app's browsing context
+        # group from cross-origin popups/tabs it opens or is opened by
+        # (defense against some cross-origin-window-reference attacks) --
+        # safe to set unconditionally, doesn't affect same-origin
+        # navigation or any of this app's own CDN/image loading.
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        # Cross-Origin-Resource-Policy: stops *other* sites from directly
+        # embedding this app's own responses (images, JSON, etc.) --
+        # doesn't affect this app loading resources FROM elsewhere, so it's
+        # safe alongside the CSP's own https: image-src / CDN allowances.
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        # Cross-Origin-Embedder-Policy is deliberately NOT set here.
+        # `require-corp` would block every cross-origin resource this app
+        # actually depends on (the CSP above allows arbitrary https: images
+        # and a jsdelivr-hosted script) unless each one opts in with its
+        # own CORP header, which they don't -- setting it would break real,
+        # working functionality rather than add protection this app can
+        # actually afford yet.
 
         is_https = (
             request.url.scheme == "https"

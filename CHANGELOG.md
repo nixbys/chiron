@@ -11,9 +11,11 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 ## [Unreleased]
 
 ### Added
-- **Security/encryption hardening pass** (Phases 1-3 of 7 — see the plan this shipped under
-  for the rest). Two research passes over the whole app (not just the security-MCP overlay)
-  found: encryption-at-rest already existed and was solid where used
+- **Security/encryption hardening pass** (all 7 phases — see
+  [ADR 009](docs/adr/009-encryption-at-rest.md) for the encryption-at-rest policy this
+  settled on, and [ADR 001](docs/adr/001-toolchain-sidecar-isolation.md) for the corrected
+  toolchain exec API mechanism). Two research passes over the whole app (not just the
+  security-MCP overlay) found: encryption-at-rest already existed and was solid where used
   (`src/secret_storage.py`, Fernet, `data/.app_key`), but was applied inconsistently, a
   second weaker duplicate key did the same job, one field of real user content was fully
   plaintext, session tokens were stored raw (unlike API tokens), and the arbitrary-command-
@@ -63,6 +65,36 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
     (`confirm=true` required), deleting findings/audit-trail-and-raw-logs/assets-services/
     watchlist-entries/timeline across every store that has no SQLite foreign-key cascade
     actually enforced (child rows are deleted explicitly).
+  - **Audit trail tamper-evidence** (`mcp_servers/common.py`/`audit_server.py`): every
+    `tool_invocations` row now carries a `row_hash` folding in the previous row's hash (by
+    insertion order) plus its own columns, keyed by the same app-wide secret
+    (`secret_storage.hmac_hex()`) — editing or deleting a row breaks every hash from that
+    point forward, and reproducing a valid replacement chain needs the same key an attacker
+    with only filesystem access to `audit.db` doesn't have. New `audit_verify` MCP tool walks
+    the chain and reports it intact, or the exact row where it first breaks. Rows written
+    before this shipped (no `row_hash`) are treated as a legacy boundary, not a false
+    tamper report.
+  - **Optional in-app TLS**: set `SSL_KEYFILE`/`SSL_CERTFILE` (both, or neither) to have
+    uvicorn terminate HTTPS itself instead of relying on a reverse proxy — additive, the
+    existing proxy-fronted model (`docs/reverse-proxy.md`, still the recommended default)
+    is unchanged when they're unset. See new `docs/TLS.md` for a self-signed-cert quickstart
+    and an mkcert path for a browser-trusted LAN cert. Wired into `app.py`'s own
+    `uvicorn.run()` (native installs) and `docker/entrypoint.sh` (the real container startup
+    path, which never runs that `__main__` block).
+  - **Two more security response headers**: `Cross-Origin-Opener-Policy: same-origin` and
+    `Cross-Origin-Resource-Policy: same-origin`, added to `SecurityHeadersMiddleware`.
+    `Cross-Origin-Embedder-Policy` is deliberately *not* set — `require-corp` would break
+    this app's own CSP-allowed cross-origin resources (arbitrary `https:` images, a
+    jsdelivr-hosted script) unless each one opted in with its own CORP header, which they
+    don't; the tradeoff is documented in code rather than silently applied or silently
+    skipped.
+  - **Supply-chain**: gitleaks now also runs at pre-commit (same pinned version CI's own
+    secret-scan workflow uses, so the two can't drift), and the toolchain Trivy CI scan now
+    genuinely blocks on fixable CRITICAL vulnerabilities in what this project's own Dockerfile
+    builds — confirmed against the real current image (a false-positive secret match against
+    nuclei's own bundled detection-rule templates, and two CVEs baked into pre-built upstream
+    Go binaries this project doesn't control, are both explicitly excluded with a documented
+    reason and a re-check plan in `docker/toolchain/.trivyignore`, not silently ignored).
 
 ### Fixed
 - (See the hardening pass above — several of those are fixes for real, live gaps, not just

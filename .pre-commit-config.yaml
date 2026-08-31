@@ -1,4 +1,13 @@
 repos:
+  # Same version .github/workflows/secret-scan.yml pins for CI (keep these
+  # two in sync) -- catches a secret before it's ever committed, not just
+  # before it's merged. CI's own full-history scan stays the backstop for
+  # anything that slips past a contributor who skipped pre-commit.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.4.10
     hooks:

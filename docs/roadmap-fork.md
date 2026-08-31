@@ -19,11 +19,21 @@ Update this file at the end of every phase/checkpoint, same discipline as `CHANG
   invocation (not just findings) is also audited and rate-limited. Chat sessions can be
   linked to an engagement ("Project") and get real-time scope enforcement (block by default,
   audited override) on every tool call with a network target.
-- **Bulk export**, per-engagement or everything at once: one `.zip` with findings, the full
-  audit trail (including every call's complete raw tool output, not just a capped error
-  message), engagement metadata/timeline, assets/services, watchlist entries, detection
-  rules, and the PDF report — `Export`/`Export Everything` in the Security Hub's Engagements
-  tab, or `GET /api/security/export/engagement/{id}` / `/all` directly.
+- **Bulk export**, per-engagement or everything at once: one `.zip` (optionally passphrase-
+  encrypted) with findings, the full audit trail (every call's complete raw tool output, not
+  just a capped error message), engagement metadata/timeline, assets/services, watchlist
+  entries, detection rules, the PDF report, and a `SUMMARY.md` narrative — `Export`/`Export
+  Everything` in the Security Hub's Engagements tab, or `POST /api/security/export/
+  engagement/{id}` / `/all` directly. A completed export can optionally wipe the live data
+  it just archived (`DELETE` on the same paths, `confirm=true` required).
+- **Encryption at rest, one key/one convention** (`docs/adr/009-encryption-at-rest.md`):
+  every secret this app stores — provider API keys, OAuth tokens, IMAP/SMTP passwords,
+  webhook signing secrets, note/checklist content, session tokens (hashed, never stored raw),
+  toolchain raw-output logs — goes through `src/secret_storage.py`'s single Fernet key, not a
+  patchwork of per-feature schemes. The toolchain exec API (`docker/toolchain/exec_api.py`)
+  refuses to start without a real `EXEC_API_TOKEN` and compares it in constant time. The
+  audit trail is tamper-evident (a hash chain over every row, `audit_verify` MCP tool to
+  check it). Optional in-app TLS (`docs/TLS.md`) alongside the existing reverse-proxy path.
 - A from-scratch dark-first design system (Chakra Petch / IBM Plex Sans / IBM Plex Mono,
   the "Duality" blue/crimson palette, a sharper/flatter shape language) applied app-wide,
   not just the security surfaces.
