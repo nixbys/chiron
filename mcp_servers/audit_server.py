@@ -72,8 +72,81 @@ def _get_db() -> sqlite3.Connection:
             if "engagement_id" not in cols:
                 conn.execute("ALTER TABLE tool_invocations ADD COLUMN engagement_id TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_engagement ON tool_invocations(engagement_id);")
+            # Checkpoint state for the scope_violation_check scheduled
+            # action (src/builtin_actions.py) -- "how far into
+            # tool_invocations has this task already reminded about",
+            # same (task_id -> state) shape as monitor_server.py's
+            # monitor_state table, just one row per task instead of one
+            # per (task_id, target, check_type).
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS audit_checkpoints (
+                    task_id TEXT PRIMARY KEY,
+                    last_id INTEGER NOT NULL DEFAULT 0,
+                    updated_at REAL
+                );
+            """)
         _db_initialized = True
     return conn
+
+
+def _get_checkpoint(task_id: str) -> int:
+    """Highest tool_invocations.id this task has already reminded about,
+    or 0 if it has never run (the caller then treats *every* existing
+    violation as new -- see action_scope_violation_check's own baseline
+    handling for why that's deliberately guarded against there, not
+    here)."""
+    conn = _get_db()
+    try:
+        row = conn.execute("SELECT last_id FROM audit_checkpoints WHERE task_id=?", (task_id,)).fetchone()
+        return row["last_id"] if row else 0
+    finally:
+        conn.close()
+
+
+def _save_checkpoint(task_id: str, last_id: int) -> None:
+    conn = _get_db()
+    try:
+        conn.execute(
+            "INSERT INTO audit_checkpoints (task_id, last_id, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(task_id) DO UPDATE SET last_id=excluded.last_id, updated_at=excluded.updated_at",
+            (task_id, last_id, time.time()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_SCOPE_VIOLATION_OUTCOMES = ("blocked_out_of_scope", "scope_override")
+
+
+def _list_scope_violations_since(after_id: int, engagement_id: str | None = None, limit: int = 200) -> list[dict]:
+    """Scope-enforcement rows (mcp_servers/common.py's check_scope()) with
+    id > after_id, oldest first -- for action_scope_violation_check
+    (src/builtin_actions.py) to summarize into one reminder per run."""
+    conn = _get_db()
+    try:
+        query = (
+            "SELECT id, ts, binary, args, outcome, detail, engagement_id FROM tool_invocations "
+            "WHERE id>? AND outcome IN (?, ?)"
+        )
+        params: list = [after_id, *_SCOPE_VIOLATION_OUTCOMES]
+        if engagement_id:
+            query += " AND engagement_id=?"
+            params.append(engagement_id)
+        query += " ORDER BY id ASC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["args"] = json.loads(d["args"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+            out.append(d)
+        return out
+    finally:
+        conn.close()
 
 
 def _list_invocations(

@@ -3809,6 +3809,82 @@ async def action_watchlist_check(owner: str, **kwargs) -> Tuple[str, bool]:
     return summary, True
 
 
+async def action_scope_violation_check(owner: str, **kwargs) -> Tuple[str, bool]:
+    """Check the toolchain audit trail (mcp_servers/audit_server.py) for new
+    engagement-scope violations -- mcp_servers/common.py's check_scope()
+    logging `blocked_out_of_scope` (a call was blocked) or `scope_override`
+    (a block was overridden, itself always flagged, never silent) -- and
+    send one batched reminder covering everything new since this task's
+    own last run.
+
+    check_scope() runs inside an MCP server subprocess, reached only over
+    stdio, so it cannot call dispatch_reminder() itself (that's core-app
+    code tied to the main process's event loop/DB) -- same reason
+    watchlist_check/scheduled_recon/sigma_sweep are all *polling* actions
+    rather than a push from inside the MCP server that noticed the change.
+    This follows that exact precedent rather than inventing a different
+    shape for this one case.
+
+    kwargs:
+      task_id: str  -- this ScheduledTask's own id; checkpoint state
+                        (audit_server.py's audit_checkpoints table) is
+                        keyed per-task, same reasoning as
+                        action_scheduled_recon's per-task drift state.
+      prompt: str    -- optional JSON config, e.g. {"engagement_id": "..."}
+                        to watch one engagement only; omit/`{}` to watch
+                        every engagement.
+    """
+    import mcp_servers.audit_server as audit_mod
+
+    task_id = kwargs.get("task_id") or ""
+    raw_prompt = kwargs.get("prompt") or "{}"
+    try:
+        config = json.loads(raw_prompt) if raw_prompt.strip() else {}
+    except (TypeError, ValueError):
+        return 'scope_violation_check: prompt must be JSON, e.g. {"engagement_id": "..."}', False
+    engagement_id = config.get("engagement_id") or None
+
+    last_id = audit_mod._get_checkpoint(task_id)
+    first_run = last_id == 0
+    violations = audit_mod._list_scope_violations_since(last_id, engagement_id=engagement_id)
+    if not violations:
+        raise TaskNoop("scope_violation_check: no new scope violations")
+
+    # Same "first check establishes the baseline silently" precedent as
+    # action_scheduled_recon/action_watchlist_check: a brand-new task
+    # shouldn't immediately re-alert on an engagement's entire pre-existing
+    # violation history, only on what happens from here on.
+    audit_mod._save_checkpoint(task_id, violations[-1]["id"])
+    if first_run:
+        raise TaskNoop(f"scope_violation_check: baseline established ({len(violations)} pre-existing rows)")
+
+    lines = [f"{len(violations)} engagement-scope event(s) since the last check:", ""]
+    for v in violations:
+        when = datetime.fromtimestamp(v["ts"]).strftime("%Y-%m-%d %H:%M")
+        target = v["args"][-1] if isinstance(v["args"], list) and v["args"] else str(v.get("args") or "")
+        eng = v.get("engagement_id") or "(no engagement)"
+        line = f"[{when}] {v['outcome']} — {v['binary']} on {target} ({eng})"
+        if v["outcome"] == "scope_override" and v.get("detail"):
+            line += f" — reason: {v['detail']}"
+        lines.append(line)
+    summary = "\n".join(lines)
+
+    try:
+        from routes.note_routes import dispatch_reminder
+        note_id_seed = "|".join(str(v["id"]) for v in violations)
+        note_id = f"scope-violation-{hashlib.sha256(note_id_seed.encode()).hexdigest()[:12]}"
+        await dispatch_reminder(
+            title="Engagement scope violation(s) detected",
+            note_body=summary,
+            note_id=note_id,
+            owner=owner or "",
+        )
+    except Exception as e:
+        logger.warning(f"scope_violation_check: reminder dispatch failed: {e}")
+
+    return summary, True
+
+
 _SIGMA_LEVEL_TO_SEVERITY = {
     "critical": "critical",
     "high": "high",
@@ -4418,6 +4494,7 @@ BUILTIN_ACTIONS = {
     "yara_sweep": action_yara_sweep,
     "host_monitor": action_host_monitor,
     "verify_remediation": action_verify_remediation,
+    "scope_violation_check": action_scope_violation_check,
     # ping_notes removed from the registry — runs only inside `_note_pings_loop`.
 }
 
@@ -4445,4 +4522,5 @@ BUILTIN_ACTION_INFO = {
     "yara_sweep": "Run yara_scan against a configured target in the Kali toolchain container; files a finding and sends a reminder only when matches changed since the last sweep. Configure via this task's prompt as JSON, e.g. {\"target\": \"case-123/evidence\"}.",
     "host_monitor": "Re-check host telemetry (processes/listening ports/logged-in users, plus opt-in cron/packages) on the host Odysseus itself runs in; files a finding and sends a reminder only when something changed since the last run. Configure via this task's prompt as JSON, e.g. {\"checks\": [\"processes\", \"listening_ports\"]}.",
     "verify_remediation": "Re-check every 'remediated' finding scheduled_recon filed to confirm the issue is actually still gone; reopens it and sends a reminder if it's back, otherwise logs a confirming engagement event. Configure via this task's prompt as JSON, e.g. {\"limit\": 20}.",
+    "scope_violation_check": "Watch the toolchain audit trail for new engagement-scope violations (a blocked out-of-scope call, or an overridden block) and send one batched reminder per run. Configure via this task's prompt as JSON, e.g. {\"engagement_id\": \"...\"} to watch one engagement only; omit to watch every engagement.",
 }
