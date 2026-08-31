@@ -368,7 +368,23 @@ _ENGAGEMENT_SCOPED_MCP_TOOLS = {
     "shodan_host", "censys_host",
     "watchlist_add",
     "yara_scan",
+    "secrets_scan",
 }
+
+
+# Phase K: sessions already nudged once about running a scope-enforceable
+# tool unscoped, this process's lifetime -- in-memory and best-effort by
+# design (a soft advisory, not a correctness guarantee; a process restart
+# re-nudging a long-lived session once more is an acceptable trade-off for
+# not needing a persisted flag for something this low-stakes).
+_nudged_unscoped_sessions: set[str] = set()
+
+_UNSCOPED_NUDGE_TEXT = (
+    "\n\n[Note: this chat isn't linked to a Project (Engagement), so scope "
+    "isn't being enforced for this call. Attach one in the Security Hub if "
+    "this work needs guardrails -- this notice won't repeat for the rest of "
+    "this chat.]"
+)
 
 
 def _session_engagement_id(session_id: Optional[str]) -> Optional[str]:
@@ -1200,11 +1216,17 @@ async def _execute_tool_block_impl(
                     args = dict(args)
                     args[_EMAIL_MCP_OWNER_ARG] = owner
                 _mcp_tool_name = tool.split("__", 2)[-1] if tool.count("__") >= 2 else ""
+                _needs_unscoped_nudge = False
                 if _mcp_tool_name in _ENGAGEMENT_SCOPED_MCP_TOOLS and "engagement_id" not in args:
                     if _eng_id := _session_engagement_id(session_id):
                         args = dict(args)
                         args["engagement_id"] = _eng_id
+                    elif session_id and session_id not in _nudged_unscoped_sessions:
+                        _nudged_unscoped_sessions.add(session_id)
+                        _needs_unscoped_nudge = True
                 result = await mcp.call_tool(tool, args)
+                if _needs_unscoped_nudge and isinstance(result, dict) and not result.get("error"):
+                    result["stdout"] = (result.get("stdout") or "") + _UNSCOPED_NUDGE_TEXT
         else:
             desc = f"mcp: {tool}"
             result = {"error": "MCP manager not available", "exit_code": 1}

@@ -132,6 +132,18 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
   under the threshold, count including them is at or over it"), not on every subsequent poll
   once an engagement is already over. New `audit_server._count_scope_violations_in_window()`
   helper backs the rolling count.
+- **A soft nudge for unscoped sessions, on top of the chat-header Project badge (Phase K of
+  the same plan).** The complementary case to the badge (Phase G): the first time a session
+  with no linked engagement runs a scope-enforceable tool, its result now carries one small
+  notice ("this chat isn't linked to a Project...") — then never repeats for the rest of that
+  chat. Nudge, not a gate: unscoped execution stays fully allowed, exactly as before. In-
+  memory and best-effort by design (a process restart can re-nudge a long-lived session once
+  more — an accepted trade-off for something this low-stakes, not worth a persisted column).
+  Also fixed a real gap found while wiring this: `secrets_scan` (Phase H) was added to
+  `osint_server.py`'s own `check_scope_from_args` call but never to `src/tool_execution.py`'s
+  `_ENGAGEMENT_SCOPED_MCP_TOOLS` set, so a linked session's `engagement_id` was silently never
+  auto-injected into it — the tool worked, but only ever as if called from an unscoped session
+  unless the model happened to pass `engagement_id` explicitly.
 - **Toolchain invocation audit trail + rate limiting**, both enforced at `mcp_servers/
   common.py`'s `exec_in_toolchain()` — the one chokepoint every red-team MCP server's tool
   calls pass through, so no changes were needed in any of the other 20 server modules. Every
