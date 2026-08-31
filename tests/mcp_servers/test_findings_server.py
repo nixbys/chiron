@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import mcp_servers.findings_server as findings_mod
@@ -76,3 +78,38 @@ def test_ensure_index_head_real_error_is_reported():
     with patch.object(findings_mod.requests, "request", return_value=_fake_response(500, b"")):
         err = findings_mod._ensure_index()
     assert err is not None
+
+
+@pytest.mark.asyncio
+async def test_finding_index_omits_ip_when_not_provided():
+    """Regression: `ip` is mapped as OpenSearch type "ip", which rejects
+    "" outright. finding_index must omit the field entirely when the
+    caller doesn't provide one, not default it to an empty string."""
+    captured = {}
+
+    def _fake_req(method, path, body=None):
+        captured["doc"] = body
+        return {"_id": "1", "result": "created"}
+
+    with patch.object(findings_mod, "_ensure_index", return_value=None), \
+         patch.object(findings_mod, "_req", side_effect=_fake_req):
+        await findings_mod.call_tool("finding_index", {"title": "t", "severity": "low"})
+
+    assert "ip" not in captured["doc"]
+
+
+@pytest.mark.asyncio
+async def test_finding_index_includes_ip_when_provided():
+    captured = {}
+
+    def _fake_req(method, path, body=None):
+        captured["doc"] = body
+        return {"_id": "1", "result": "created"}
+
+    with patch.object(findings_mod, "_ensure_index", return_value=None), \
+         patch.object(findings_mod, "_req", side_effect=_fake_req):
+        await findings_mod.call_tool(
+            "finding_index", {"title": "t", "severity": "low", "ip": "10.0.0.5"}
+        )
+
+    assert captured["doc"]["ip"] == "10.0.0.5"

@@ -10,7 +10,51 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 
 ## [Unreleased]
 
+### Added
+- **`scripts/demo_full_stack.py`** — a single guided-tour script exercising all 22 fork
+  security MCP servers (and, through them, every sidecar: the Kali toolchain, SpiderFoot,
+  OpenSearch, BentoPDF, CyberChef) under one Engagement, speaking the real MCP stdio protocol
+  directly to each server rather than depending on the chat/LLM tool-calling layer. Run it
+  inside the app container with `python3 scripts/demo_full_stack.py`.
+
 ### Fixed
+- **Five real bugs found while building and live-testing the new demo script above** —
+  each confirmed against the running stack, not just reasoned about:
+  - `mcp_servers/common.py`'s `_target_matches()` (Phase A/I scope enforcement) never
+    extracted a bare hostname from a URL-shaped target before comparing, so a scope entry
+    declared as e.g. `"odysseus-cyberchef"` could never match a `web_vuln_server` tool's
+    full-URL target (`"http://odysseus-cyberchef:8000"`) — every such call was wrongly
+    blocked as out-of-scope. Fixed by also trying `urlparse(value).hostname` when the target
+    looks like a URL.
+  - `findings_server.py`'s `finding_index` defaulted a missing `ip` argument to `""`, which
+    OpenSearch's `ip`-typed field mapping rejects outright (`mapper_parsing_exception`) —
+    every finding indexed without an IP failed. Fixed to omit the field entirely when the
+    caller doesn't provide one.
+  - `spiderfoot_server.py`'s `_start_scan()` posted to `/startscan` without `typelist`/
+    `modulelist`, which this SpiderFoot build 404s on ("Missing parameters") even with
+    `usecase` set — every scan start failed. Fixed by including both, empty, alongside
+    `usecase`. On success this build also returns the scan-list HTML page as the response
+    body instead of the new scan's ID; added a fallback lookup by scan name via `/scanlist`.
+  - `spiderfoot_server.py`'s `_get_status()` treated `/scanstatus/<id>`'s response as a
+    list-of-rows and indexed `data[0]` — but it's actually one flat row directly. `data[0]`
+    silently picked off the scan's *name string* and indexed into its individual characters,
+    so the parsed "status" could never equal `"FINISHED"`/`"ABORTED"`/`"ERROR-FAILED"` and
+    `_wait_for_scan()`'s poll loop ran until timeout no matter how fast the scan actually
+    finished. Fixed to read the flat row directly.
+  - `spiderfoot_server.py`'s `_get_results()` called `/scaneventresults/<id>` as a path
+    segment (404s — SpiderFoot takes `id`/`eventType` as query params) with a wrong field
+    mapping (`type` assumed to be the row's first element; it's actually the last, per
+    SpiderFoot's own `sfwebui.py`). Fixed both the request shape and the field indices.
+- **The env-passthrough bug the demo script itself needed fixing for**: `mcp.
+  StdioServerParameters(env=None)` does NOT mean "inherit the parent process's environment"
+  — the `mcp` package's `stdio_client` treats `None` as "use only a hardcoded safe-inherit
+  allowlist" (`HOME`/`LOGNAME`/`PATH`/`SHELL`/`TERM`/`USER`), silently dropping
+  `EXEC_API_TOKEN`, `SHODAN_API_KEY`, `OPENSEARCH_URL`, `SPIDERFOOT_URL`, `BENTOPDF_URL`, and
+  every other secret/URL the spawned MCP server subprocess actually needs. This produced two
+  distinct, initially-confusing failures — every toolchain-backed tool call 401ing, and
+  `shodan_host` reporting `SHODAN_API_KEY not set` despite the key being correctly set in the
+  parent container's own environment — both traced to the same root cause and both fixed by
+  passing `env=dict(os.environ)` explicitly.
 - **Ollama unreachable from the app container (`Cannot reach http://odysseus-ollama:11434`)**,
   plus a real, separate bug found while chasing it: `docker-compose.security.yml`'s `odysseus`
   service hardcoded `OLLAMA_BASE_URL`/`LLM_HOST` with no `.env` interpolation at all, so the

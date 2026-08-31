@@ -195,7 +195,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:  # noqa: C
                 "title": arguments["title"],
                 "severity": arguments["severity"],
                 "engagement": arguments.get("engagement", "default"),
-                "ip": arguments.get("ip", ""),
                 "port": arguments.get("port"),
                 "cve_id": arguments.get("cve_id", ""),
                 "cvss": arguments.get("cvss"),
@@ -207,6 +206,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:  # noqa: C
                 "created_at": now,
                 "updated_at": now,
             }
+            # "ip" is mapped as OpenSearch type "ip" (see _ensure_index below),
+            # which rejects "" outright -- omit the field entirely rather than
+            # defaulting to empty string when the caller doesn't provide one.
+            if ip := arguments.get("ip"):
+                doc["ip"] = ip
             resp = _req("POST", f"/{_INDEX}/_doc", doc)
             result = f"Finding indexed. ID: {resp.get('_id', '?')}  Result: {resp.get('result', '?')}"
 

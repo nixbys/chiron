@@ -64,17 +64,65 @@ def test_start_scan_connection_error():
     assert "odysseus-spiderfoot" in result["error"]
 
 
+def test_start_scan_falls_back_to_scanlist_lookup_when_response_is_html():
+    """Regression: SpiderFoot v2.12's /startscan renders the scan-list HTML
+    page directly as its response body on success (confirmed live) --
+    carries no scan ID at all. _start_scan must fall back to looking the
+    new scan up by name via /scanlist rather than returning the raw HTML
+    as if it were the ID."""
+    html_resp = _mock_response(text="<!DOCTYPE html><html>...</html>")
+    html_resp.headers = {"content-type": "text/html;charset=utf-8"}
+    html_resp.json.side_effect = ValueError("not json")
+    scanlist_rows = [
+        ["NEWEST01", "quick: example.com", "example.com", "t", "t", "t", "FINISHED", 3],
+        ["OLDER02", "some other scan", "example.com", "t", "t", "t", "FINISHED", 1],
+    ]
+    with patch("mcp_servers.spiderfoot_server.requests.post", return_value=html_resp), \
+         patch("mcp_servers.spiderfoot_server.requests.get",
+               return_value=_mock_response(json_data=scanlist_rows)):
+        result = sf._start_scan("example.com", "quick: example.com", "passive")
+    assert result == {"scan_id": "NEWEST01"}
+
+
+def test_start_scan_html_response_and_no_scanlist_match_is_reported_as_error():
+    html_resp = _mock_response(text="<!DOCTYPE html><html>...</html>")
+    html_resp.headers = {"content-type": "text/html;charset=utf-8"}
+    html_resp.json.side_effect = ValueError("not json")
+    with patch("mcp_servers.spiderfoot_server.requests.post", return_value=html_resp), \
+         patch("mcp_servers.spiderfoot_server.requests.get", return_value=_mock_response(json_data=[])):
+        result = sf._start_scan("example.com", "quick: example.com", "passive")
+    assert "error" in result
+
+
+def test_start_scan_posts_typelist_and_modulelist():
+    """Regression: SpiderFoot's /startscan 404s with "Missing parameters:
+    typelist,modulelist" unless both are present in the POST body, even
+    when empty -- usecase alone is not enough."""
+    with _patch_post(return_value=None, text="SCAN-ID-XYZ\n") as mock_post:
+        sf._start_scan("example.com", "test", "passive")
+    posted = mock_post.call_args.kwargs["data"]
+    assert posted["typelist"] == ""
+    assert posted["modulelist"] == ""
+    assert posted["usecase"] == "passive"
+
+
 # ---------------------------------------------------------------------------
 # _get_status
 # ---------------------------------------------------------------------------
 
-def test_get_status_list_format():
-    """SpiderFoot returns status as a list-of-lists."""
-    row = ["SCAN-001", "my scan", "example.com", "2026-06-20", "", "RUNNING", 42]
-    with _patch_get([row]):
+def test_get_status_flat_row_format():
+    """/scanstatus/<id> returns ONE flat row directly (confirmed live):
+    [name, target, created, started, ended, status] -- NOT a list of rows
+    like /scanlist. Regression: treating it as a list-of-rows picked off
+    the scan's *name string* as the "row" and indexed into its
+    characters, so status could never equal "FINISHED" and polling in
+    _wait_for_scan never terminated."""
+    row = ["my scan", "example.com", "2026-06-20", "2026-06-20", "", "RUNNING"]
+    with _patch_get(row):
         status = sf._get_status("SCAN-001")
     assert status["status"] == "RUNNING"
-    assert status["result_count"] == 42
+    assert status["scan_id"] == "SCAN-001"
+    assert status["name"] == "my scan"
     assert status["target"] == "example.com"
 
 
@@ -84,31 +132,61 @@ def test_get_status_unknown_on_empty():
     assert status.get("status") == "UNKNOWN"
 
 
+def test_wait_for_scan_terminates_on_finished_status():
+    """End-to-end regression for the _get_status flat-row bug: a scan that
+    is already FINISHED on the very first poll must return immediately,
+    not loop until timeout."""
+    row = ["my scan", "example.com", "2026-06-20", "2026-06-20", "2026-06-20", "FINISHED"]
+    with _patch_get(row), patch("mcp_servers.spiderfoot_server.time.sleep") as mock_sleep:
+        status = sf._wait_for_scan("SCAN-001", timeout=30)
+    assert status["status"] == "FINISHED"
+    mock_sleep.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # _get_results
 # ---------------------------------------------------------------------------
 
 def test_get_results_parses_rows():
+    # Real shape (confirmed against SpiderFoot's own sfwebui.py and live):
+    # [lastseen, data, source, module, confidence, visibility, risk, hash, ?, ?, type]
     rows = [
-        ["EMAILADDR", "sfp_hunter", "example.com", "admin@example.com", 100, 5, 0, "", "SCAN-001", "hash1"],
-        ["IP_ADDRESS", "sfp_dns", "example.com", "93.184.216.34", 100, 5, 0, "", "SCAN-001", "hash2"],
+        ["2026-06-20", "admin@example.com", "example.com", "sfp_hunter", 100, 5, 0, "hash1", 0, 0, "EMAILADDR"],
+        ["2026-06-20", "93.184.216.34", "example.com", "sfp_dns", 100, 5, 0, "hash2", 0, 0, "IP_ADDRESS"],
     ]
     with _patch_get(rows):
         results = sf._get_results("SCAN-001")
     assert len(results) == 2
     assert results[0]["type"] == "EMAILADDR"
+    assert results[0]["module"] == "sfp_hunter"
+    assert results[0]["source"] == "example.com"
     assert results[0]["data"] == "admin@example.com"
     assert results[1]["type"] == "IP_ADDRESS"
 
 
 def test_get_results_limit():
     rows = [
-        ["DOMAIN_NAME", "sfp_dns", "example.com", f"sub{i}.example.com", 100, 5, 0, "", "S", "h"]
+        ["2026-06-20", f"sub{i}.example.com", "example.com", "sfp_dns", 100, 5, 0, "h", 0, 0, "DOMAIN_NAME"]
         for i in range(50)
     ]
     with _patch_get(rows):
         results = sf._get_results("SCAN-001", limit=10)
     assert len(results) == 10
+
+
+def test_get_results_uses_id_and_eventtype_query_params():
+    """Regression: /scaneventresults takes id/eventType as query params,
+    not path segments -- the old `/scaneventresults/{scan_id}` path
+    404'd every time."""
+    with _patch_get([]) as mock_get:
+        sf._get_results("SCAN-001", event_type="EMAILADDR")
+    assert mock_get.call_args.kwargs["params"] == {"id": "SCAN-001", "eventType": "EMAILADDR"}
+
+
+def test_get_results_defaults_eventtype_to_all():
+    with _patch_get([]) as mock_get:
+        sf._get_results("SCAN-001")
+    assert mock_get.call_args.kwargs["params"] == {"id": "SCAN-001", "eventType": "ALL"}
 
 
 def test_get_results_empty():
@@ -192,7 +270,7 @@ async def test_call_tool_sf_scan_status():
 @pytest.mark.asyncio
 async def test_call_tool_sf_scan_results():
     rows = [
-        ["EMAILADDR", "sfp_hunter", "example.com", "ceo@example.com", 100, 5, 0, "", "S1", "h1"],
+        ["2026-06-20", "ceo@example.com", "example.com", "sfp_hunter", 100, 5, 0, "h1", 0, 0, "EMAILADDR"],
     ]
     with _patch_get(rows):
         results = await sf.call_tool("sf_scan_results", {"scan_id": "SCAN-001"})
