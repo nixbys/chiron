@@ -77,6 +77,10 @@ async def test_secrets_scan_clones_then_scans(mock_post):
     assert sent_argvs[1][-1] == "/workspaces/secrets_scan_repo"
     assert sent_argvs[2][:2] == ["gitleaks", "detect"]
     assert "--redact" in sent_argvs[2]
+    # Confirmed against a real gitleaks 8.30.1 binary: it emits raw ANSI
+    # color codes by default even when stdout isn't a TTY, which would
+    # otherwise litter the chat/LLM-visible output with escape sequences.
+    assert "--no-color" in sent_argvs[2]
 
 
 @pytest.mark.asyncio

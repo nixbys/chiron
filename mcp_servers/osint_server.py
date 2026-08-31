@@ -239,7 +239,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = clone_out
         else:
             scan_out = exec_in_toolchain(
-                ["gitleaks", "detect", "--source", _SECRETS_SCAN_WORKDIR, "--no-banner", "--redact", "-v"],
+                ["gitleaks", "detect", "--source", _SECRETS_SCAN_WORKDIR, "--no-banner", "--no-color", "--redact", "-v"],
                 timeout=timeout, engagement_id=engagement_id,
             )
             result = f"[git clone]\n{clone_out}\n\n[gitleaks]\n{scan_out}"
