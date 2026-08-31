@@ -258,6 +258,16 @@ def test_target_matches_domain_suffix():
     assert not common._target_matches("evilexample.com", ["example.com"])
 
 
+def test_target_matches_url_extracts_hostname():
+    # web_vuln_server-style tools pass a full URL as `target` -- a scope
+    # entry declared as a bare hostname must still match it, not only the
+    # literal scheme+host+port+path string.
+    assert common._target_matches("http://odysseus-cyberchef:8000", ["odysseus-cyberchef"])
+    assert common._target_matches("https://api.example.com/v1/login", ["example.com"])
+    assert common._target_matches("http://10.0.0.5:8080/", ["10.0.0.0/24"])
+    assert not common._target_matches("http://evil.com:8000/", ["odysseus-cyberchef"])
+
+
 def test_check_scope_no_engagement_id_is_unenforced(audit_env):
     """Back-compat: every call site that predates this feature keeps working."""
     assert audit_env.check_scope(None, "8.8.8.8", "nmap_scan") is None

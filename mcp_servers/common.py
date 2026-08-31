@@ -304,25 +304,40 @@ def _target_matches(value: str, patterns: list[str]) -> bool:
     """True if `value` matches any of `patterns`, via exact string match,
     CIDR/IP containment (either side may be a bare IP or a CIDR range), or
     domain/subdomain suffix match (e.g. "api.example.com" matches a
-    declared "example.com")."""
+    declared "example.com").
+
+    `value` may also be a full URL (e.g. a web_vuln_server target like
+    "http://host:8000/path") rather than a bare host/IP -- in that case the
+    URL's own hostname is also tried against every pattern, so scope
+    declared as a bare hostname still matches a URL-shaped target instead
+    of only ever matching the literal scheme+host+port+path string."""
     value = (value or "").strip().lower().rstrip(".")
     if not value:
         return False
+    candidates = [value]
+    if "://" in value:
+        try:
+            hostname = urlparse(value).hostname
+        except ValueError:
+            hostname = None
+        if hostname and hostname not in candidates:
+            candidates.append(hostname)
     for raw in patterns:
         pattern = (raw or "").strip().lower().rstrip(".")
         if not pattern:
             continue
-        if value == pattern:
-            return True
-        try:
-            value_net = ipaddress.ip_network(value, strict=False)
-            pattern_net = ipaddress.ip_network(pattern, strict=False)
-            if value_net.version == pattern_net.version and value_net.subnet_of(pattern_net):
+        for candidate in candidates:
+            if candidate == pattern:
                 return True
-        except ValueError:
-            pass  # not both IP/CIDR -- fall through to domain-suffix check
-        if value.endswith("." + pattern):
-            return True
+            try:
+                value_net = ipaddress.ip_network(candidate, strict=False)
+                pattern_net = ipaddress.ip_network(pattern, strict=False)
+                if value_net.version == pattern_net.version and value_net.subnet_of(pattern_net):
+                    return True
+            except ValueError:
+                pass  # not both IP/CIDR -- fall through to domain-suffix check
+            if candidate.endswith("." + pattern):
+                return True
     return False
 
 

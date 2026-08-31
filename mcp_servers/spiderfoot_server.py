@@ -210,35 +210,75 @@ def _post(path: str, data: dict) -> dict | str:
 # SpiderFoot API operations
 # ---------------------------------------------------------------------------
 
+def _find_scan_id_by_name(scan_name: str) -> str | None:
+    """Look up a just-started scan's real ID from /scanlist by its scanname
+    -- the fallback used when /startscan's own response doesn't carry the
+    ID directly (see _start_scan). Each row is
+    [scan_id, name, target, created, started, finished, status, count];
+    scan_name is unique enough for this script's own timestamped names,
+    and /scanlist is newest-first, so the first match is the right one."""
+    rows = _get("/scanlist")
+    if isinstance(rows, list):
+        for row in rows:
+            if len(row) > 1 and row[1] == scan_name:
+                return row[0]
+    return None
+
+
 def _start_scan(target: str, scan_name: str, usecase: str) -> dict:
     result = _post("/startscan", {
         "scanname": scan_name,
         "scantarget": target,
         "usecase": usecase,
+        # SpiderFoot's /startscan 404s with "Missing parameters:
+        # typelist,modulelist" unless both are present, even empty --
+        # `usecase` alone (e.g. "passive"/"footprint"/"investigate")
+        # is how SpiderFoot itself picks the actual module set when
+        # these are blank, so leaving them "" preserves that behavior.
+        "typelist": "",
+        "modulelist": "",
     })
+    if isinstance(result, dict) and "error" in result:
+        return result  # propagate error dict
+    scan_id = None
     if isinstance(result, str):
-        # SpiderFoot returns the scan ID as a plain string on success
-        return {"scan_id": result.strip()}
-    if isinstance(result, dict) and "error" not in result:
-        # Some versions return {"id": "..."} or the id directly
-        scan_id = result.get("id") or result.get("scan_id") or str(result)
-        return {"scan_id": scan_id}
-    return result  # propagate error dict
+        text = result.strip()
+        # Some SpiderFoot builds return the scan ID as a short plain
+        # string on success; others (confirmed on v2.12) render the full
+        # scan-list HTML page instead and carry no ID in the response body
+        # at all -- in that case fall back to looking it up by name.
+        if text and "<" not in text and len(text) < 64:
+            scan_id = text
+    elif isinstance(result, dict):
+        scan_id = result.get("id") or result.get("scan_id")
+    if not scan_id:
+        scan_id = _find_scan_id_by_name(scan_name)
+    if not scan_id:
+        return {"error": f"Scan '{scan_name}' was started but its ID could not be determined from /scanlist."}
+    return {"scan_id": scan_id}
 
 
 def _get_status(scan_id: str) -> dict:
     data = _get(f"/scanstatus/{scan_id}")
     if isinstance(data, list) and data:
-        # SpiderFoot returns a list of [id, name, target, started, ended, status, count]
-        row = data[0]
+        # /scanstatus/<id> returns ONE flat row directly -- confirmed live:
+        # [name, target, created, started, ended, status] -- unlike
+        # /scanlist, which returns a *list* of such rows (with an extra
+        # leading scan_id and trailing result_count). Indexing data[0]
+        # here silently picked off the scan's *name string* and then
+        # indexed into individual characters of it -- status ended up
+        # being some character of the name, which could never equal
+        # "FINISHED"/"ABORTED"/"ERROR-FAILED", so _wait_for_scan polled
+        # forever no matter how fast the scan actually finished.
+        row = data
         return {
-            "scan_id": row[0] if len(row) > 0 else scan_id,
-            "name": row[1] if len(row) > 1 else "",
-            "target": row[2] if len(row) > 2 else "",
+            "scan_id": scan_id,
+            "name": row[0] if len(row) > 0 else "",
+            "target": row[1] if len(row) > 1 else "",
+            "created": row[2] if len(row) > 2 else "",
             "started": row[3] if len(row) > 3 else "",
             "ended": row[4] if len(row) > 4 else "",
             "status": row[5] if len(row) > 5 else "UNKNOWN",
-            "result_count": row[6] if len(row) > 6 else 0,
         }
     if isinstance(data, dict):
         return data
@@ -246,25 +286,28 @@ def _get_status(scan_id: str) -> dict:
 
 
 def _get_results(scan_id: str, event_type: str = "", limit: int = 100) -> list[dict]:
-    path = f"/scaneventresults/{scan_id}"
-    if event_type:
-        path += f"/{event_type}"
-    data = _get(path)
+    # /scaneventresults takes id/eventType as QUERY params, not path
+    # segments (confirmed against SpiderFoot's own sfwebui.py) -- it
+    # requires eventType to be present at all (SpiderFoot's convention for
+    # "no filter" is the literal string "ALL", not an omitted/empty param).
+    data = _get("/scaneventresults", params={"id": scan_id, "eventType": event_type or "ALL"})
     if not isinstance(data, list):
         return [{"error": str(data)}]
     rows = data
     if limit > 0:
         rows = rows[:limit]
-    # Each row: [type, module, source_data, data, confidence, visibility, risk, note, scan_id, hash]
+    # Row shape per sfwebui.py's scaneventresults(): [lastseen, data,
+    # source, module, confidence, visibility, risk, hash, ?, ?, type] --
+    # type is the LAST element, not the first.
     parsed = []
     for row in rows:
-        if not isinstance(row, list) or len(row) < 4:
+        if not isinstance(row, list) or len(row) < 11:
             continue
         parsed.append({
-            "type": row[0],
-            "module": row[1],
+            "type": row[10],
+            "module": row[3],
             "source": row[2],
-            "data": row[3],
+            "data": row[1],
         })
     return parsed
 
