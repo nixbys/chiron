@@ -95,8 +95,16 @@ def _write_raw_log(binary: str, text: str) -> str | None:
         name = f"{int(time.time() * 1000)}_{binary}_{uuid.uuid4().hex[:8]}.log"
         (_RAW_LOGS_DIR / name).write_text(encrypt(text[:_MAX_RAW_LOG_BYTES]), encoding="utf-8")
         return f"audit_logs/{name}"
-    except Exception:  # noqa: BLE001
-        logger.warning("Failed to write raw log file for %r", binary, exc_info=True)
+    except Exception as exc:  # noqa: BLE001
+        # Exception TYPE only, never exc_info/str(exc) -- this try block's
+        # only failing operation is encrypting `text`, which is real tool
+        # output and can itself contain secrets (a gitleaks finding IS a
+        # credential). A library's own exception message occasionally
+        # echoes back the value it choked on; logging only the class name
+        # gives enough operator signal ("what kind of error") without ever
+        # risking that in this specific, secret-adjacent path (CodeQL
+        # py/clear-text-logging-sensitive-data).
+        logger.warning("Failed to write raw log file for %r: %s", binary, type(exc).__name__)
         return None
 
 
@@ -248,8 +256,14 @@ def _log_invocation(
                 )
         finally:
             conn.close()
-    except Exception:  # noqa: BLE001
-        logger.warning("Failed to write audit log entry for %r", binary, exc_info=True)
+    except Exception as exc:  # noqa: BLE001
+        # Exception TYPE only, not exc_info/str(exc) -- `args`/`detail`
+        # being persisted here can carry secrets (a tool's command-line
+        # arguments, or an error message quoting them); see
+        # _write_raw_log's own comment for why exc_info is avoided
+        # specifically in these secret-adjacent paths (CodeQL
+        # py/clear-text-logging-sensitive-data).
+        logger.warning("Failed to write audit log entry for %r: %s", binary, type(exc).__name__)
 
 
 def _rate_limit_for(binary: str) -> int:
@@ -285,8 +299,14 @@ def _check_rate_limit(binary: str) -> str | None:
             count = row["n"] if row else 0
         finally:
             conn.close()
-    except Exception:  # noqa: BLE001
-        logger.warning("Rate-limit check failed for %r -- failing open", binary, exc_info=True)
+    except Exception as exc:  # noqa: BLE001
+        # Exception TYPE only, not exc_info/str(exc) -- same rationale as
+        # _write_raw_log/_log_invocation just above: this touches the same
+        # audit DB those secret-adjacent writes go through (CodeQL
+        # py/clear-text-logging-sensitive-data), so the same discipline
+        # applies here too even though this specific query only reads a
+        # COUNT.
+        logger.warning("Rate-limit check failed for %r -- failing open: %s", binary, type(exc).__name__)
         return None
     if count >= limit:
         return mcp_error(
