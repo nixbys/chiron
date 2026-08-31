@@ -68,6 +68,46 @@ async def test_update(tmp_data_dir):
     assert "New Client" in results[0].text
 
 
+# ---- Temporal scope fields (Phase I) -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_with_temporal_scope_fields(tmp_data_dir):
+    mod = tmp_data_dir
+    engagement_id = await _create(
+        mod, authorized_hours="09:00-17:00", blackout_dates=["2026-12-25"],
+    )
+    results = await mod.call_tool("engagement_get", {"engagement_id": engagement_id})
+    text = results[0].text
+    assert "09:00-17:00" in text
+    assert "2026-12-25" in text
+
+
+@pytest.mark.asyncio
+async def test_create_without_temporal_scope_fields_defaults_to_no_restriction(tmp_data_dir):
+    mod = tmp_data_dir
+    engagement_id = await _create(mod)
+    results = await mod.call_tool("engagement_get", {"engagement_id": engagement_id})
+    text = results[0].text
+    assert "no restriction" in text
+    assert "Blackout dates: (none)" in text
+
+
+@pytest.mark.asyncio
+async def test_update_temporal_scope_fields(tmp_data_dir):
+    mod = tmp_data_dir
+    engagement_id = await _create(mod)
+    await mod.call_tool("engagement_update", {
+        "engagement_id": engagement_id,
+        "authorized_hours": "22:00-02:00",
+        "blackout_dates": ["2026-01-01"],
+    })
+    results = await mod.call_tool("engagement_get", {"engagement_id": engagement_id})
+    text = results[0].text
+    assert "22:00-02:00" in text
+    assert "2026-01-01" in text
+
+
 @pytest.mark.asyncio
 async def test_close(tmp_data_dir):
     mod = tmp_data_dir

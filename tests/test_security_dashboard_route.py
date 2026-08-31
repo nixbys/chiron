@@ -218,6 +218,22 @@ def test_get_engagement_route_parses_json_fields(monkeypatch):
     assert body["timeline"][0]["summary"] == "hi"
 
 
+def test_get_engagement_route_parses_blackout_dates(monkeypatch):
+    import mcp_servers.engagement_server as engagement_mod
+    row = {
+        "id": "eng-1", "name": "Acme", "scope": "[]", "out_of_scope": "[]", "tags": "[]",
+        "authorized_hours": "09:00-17:00", "blackout_dates": '["2026-12-25"]',
+    }
+    monkeypatch.setattr(engagement_mod, "_get_engagement", lambda eid: dict(row))
+    monkeypatch.setattr(engagement_mod, "_get_timeline", lambda eid, limit: [])
+    client = _hub_client(monkeypatch)
+    r = client.get("/api/security/engagements/eng-1")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["engagement"]["blackout_dates"] == ["2026-12-25"]
+    assert body["engagement"]["authorized_hours"] == "09:00-17:00"
+
+
 @pytest.mark.asyncio
 async def test_create_engagement_route_returns_id(monkeypatch):
     import mcp_servers.engagement_server as engagement_mod
@@ -292,6 +308,55 @@ def test_extract_candidate_targets_filters_denylisted_footer_artifacts():
 
 def test_extract_candidate_targets_empty_text_returns_empty_list():
     assert secdash._extract_candidate_targets("") == []
+
+
+# ---- Temporal scope extraction (Phase I) --------------------------------
+
+
+def test_extract_candidate_temporal_scope_finds_time_window():
+    text = "Testing is authorized daily from 09:00 to 17:00, server-local time."
+    got = secdash._extract_candidate_temporal_scope(text)
+    assert got["authorized_hours"] == "09:00-17:00"
+    assert got["blackout_dates"] == []
+
+
+def test_extract_candidate_temporal_scope_normalizes_single_digit_hour():
+    got = secdash._extract_candidate_temporal_scope("Window: 9:00-17:00.")
+    assert got["authorized_hours"] == "09:00-17:00"
+
+
+def test_extract_candidate_temporal_scope_finds_blackout_date_near_keyword():
+    text = "No testing during the blackout period on 2026-12-25 (Christmas)."
+    got = secdash._extract_candidate_temporal_scope(text)
+    assert got["blackout_dates"] == ["2026-12-25"]
+
+
+def test_extract_candidate_temporal_scope_ignores_dates_unrelated_to_blackout():
+    # A best-effort heuristic (proximity to the word "blackout" in the same
+    # sentence) -- dates in an unrelated sentence about the engagement's
+    # own start/end aren't picked up as blackout candidates.
+    text = "Engagement runs from 2026-08-01 through 2026-09-01. Scope is app.example.com."
+    got = secdash._extract_candidate_temporal_scope(text)
+    assert got["blackout_dates"] == []
+
+
+def test_extract_candidate_temporal_scope_empty_text():
+    assert secdash._extract_candidate_temporal_scope("") == {"authorized_hours": "", "blackout_dates": []}
+
+
+def test_parse_roe_scope_route_includes_temporal_candidates(monkeypatch):
+    import mcp_servers.pdf_server as pdf_mod
+    monkeypatch.setattr(pdf_mod, "_PYPDF_AVAILABLE", True)
+    monkeypatch.setattr(
+        pdf_mod, "_pdf_extract_text",
+        lambda file_path, pages, max_chars: "In scope: 10.0.0.0/24. Testing window 09:00-17:00. Blackout: 2026-12-25.",
+    )
+    client = _hub_client(monkeypatch)
+    r = client.post("/api/security/roe/parse-scope", files={"file": ("roe.pdf", b"%PDF-1.4 fake", "application/pdf")})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["authorized_hours"] == "09:00-17:00"
+    assert body["blackout_dates"] == ["2026-12-25"]
 
 
 def test_parse_roe_scope_route_requires_admin(monkeypatch):

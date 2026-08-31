@@ -23,6 +23,7 @@ import shutil
 import sqlite3
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -325,6 +326,52 @@ def _target_matches(value: str, patterns: list[str]) -> bool:
     return False
 
 
+_AUTHORIZED_HOURS_RE = re.compile(r"^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$")
+
+
+def _check_temporal_window(authorized_hours: str, blackout_dates_json: str) -> tuple[bool, str]:
+    """Independent second check alongside target scope: is *now* inside
+    the engagement's authorized testing window? Both fields are optional
+    (Phase I of the engagement-scope-enforcement plan, extracted from an
+    uploaded RoE/SOW document -- see routes/security_dashboard_routes.py's
+    roe/parse-scope) -- absent means no temporal restriction, same
+    back-compat default as an engagement with no target scope declared.
+
+    Server-local date/time -- this fork has no per-engagement timezone
+    concept anywhere else (every scheduled-reminder check elsewhere in the
+    codebase makes the same simplification), so a distributed team
+    spanning timezones should express authorized_hours generously or rely
+    on blackout_dates instead.
+
+    Returns (violation, reason) -- reason is empty when violation is False.
+    """
+    now = datetime.now()
+    try:
+        blackout = json.loads(blackout_dates_json or "[]")
+    except (json.JSONDecodeError, TypeError):
+        blackout = []
+    today = now.strftime("%Y-%m-%d")
+    if today in blackout:
+        return True, f"{today} is a blackout date for this engagement"
+
+    hours = (authorized_hours or "").strip()
+    if hours:
+        m = _AUTHORIZED_HOURS_RE.match(hours)
+        if m:
+            start_h, start_m, end_h, end_m = (int(g) for g in m.groups())
+            start = start_h * 60 + start_m
+            end = end_h * 60 + end_m
+            now_minutes = now.hour * 60 + now.minute
+            # end < start means the window crosses midnight (e.g. "22:00-02:00").
+            in_window = (start <= now_minutes <= end) if start <= end else (now_minutes >= start or now_minutes <= end)
+            if not in_window:
+                return True, (
+                    f"current time {now.strftime('%H:%M')} is outside the authorized "
+                    f"testing window ({hours}, server-local)"
+                )
+    return False, ""
+
+
 def check_scope(
     engagement_id: str | None,
     target: str,
@@ -340,10 +387,14 @@ def check_scope(
       - the engagement_id doesn't resolve to a real engagement, or
       - the engagement has no scope declared and target isn't in
         out_of_scope, or
-      - target matches the declared scope and isn't in out_of_scope, or
-      - target is out of scope but `override=True` was supplied -- this is
-        always audit-logged as its own flagged outcome (`scope_override`),
-        never a silent pass-through.
+      - target matches the declared scope and isn't in out_of_scope, and
+        *now* is inside the engagement's authorized testing window (Phase
+        I -- see _check_temporal_window; independent of target scope, an
+        in-scope target run outside authorized hours or on a blackout
+        date is still a violation), or
+      - target/time is out of scope but `override=True` was supplied --
+        this is always audit-logged as its own flagged outcome
+        (`scope_override`), never a silent pass-through.
 
     Returns an mcp_error() string (telling the caller exactly how to
     override) if the call must be blocked -- also always logged, as
@@ -359,7 +410,7 @@ def check_scope(
         conn = _get_engagement_db()
         try:
             row = conn.execute(
-                "SELECT scope, out_of_scope FROM engagements WHERE id=?",
+                "SELECT scope, out_of_scope, authorized_hours, blackout_dates FROM engagements WHERE id=?",
                 (engagement_id,),
             ).fetchone()
         finally:
@@ -375,7 +426,16 @@ def check_scope(
     except (json.JSONDecodeError, TypeError):
         return None
 
-    violation = _target_matches(target, out_of_scope) or (bool(scope) and not _target_matches(target, scope))
+    target_violation = _target_matches(target, out_of_scope) or (bool(scope) and not _target_matches(target, scope))
+    # sqlite3.Row supports mapping-style access but not .get() -- these two
+    # columns may also be absent on a Row fetched before the Phase I
+    # migration ran in this same process (a brand-new connection always
+    # sees the migrated schema, but be defensive rather than assume).
+    try:
+        temporal_violation, temporal_reason = _check_temporal_window(row["authorized_hours"], row["blackout_dates"])
+    except (IndexError, KeyError):
+        temporal_violation, temporal_reason = False, ""
+    violation = target_violation or temporal_violation
     if not violation:
         return None
 
@@ -386,10 +446,17 @@ def check_scope(
         )
         return None
 
+    detail = temporal_reason if temporal_violation and not target_violation else ""
     _log_invocation(
-        tool_name, [target], "n/a", None, "blocked_out_of_scope", "",
+        tool_name, [target], "n/a", None, "blocked_out_of_scope", detail,
         engagement_id=engagement_id,
     )
+    if temporal_violation and not target_violation:
+        return mcp_error(
+            "out_of_scope",
+            f"{temporal_reason}. Pass override_scope=true and override_reason=\"...\" "
+            "to proceed anyway (always logged to the audit trail).",
+        )
     return mcp_error(
         "out_of_scope",
         f"{target!r} is outside engagement {engagement_id!r}'s authorized scope. "
