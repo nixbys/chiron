@@ -244,8 +244,13 @@ function _renderEngagementForm() {
         <button type="submit" class="sec-hub-btn sec-hub-btn-primary">Create Project + Open Chat</button>
         ${_smallBtn('Cancel', 'toggle-new-project-form', '')}
       </form>
-      <div style="font-size:11px;color:var(--fg-muted);margin:0 0 12px;">
+      <div style="font-size:11px;color:var(--fg-muted);margin:0 0 8px;">
         Creates the engagement, then a new chat session already linked to it and scoped by it -- pick a model once the chat opens.
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+        <input type="file" id="roe-pdf-input" accept="application/pdf" style="font-size:12px;max-width:220px;">
+        ${_smallBtn('Extract scope from RoE/SOW PDF', 'parse-roe-pdf', '')}
+        <span id="roe-pdf-status" style="font-size:11px;color:var(--fg-muted);"></span>
       </div>`;
   }
   if (!_state.engagements.formOpen) {
@@ -662,6 +667,45 @@ async function _onBodyClick(e) {
     await _loadWatchlistTab();
   } else if (action === 'view-rule') {
     await _loadRuleContent(target.dataset.kind, id);
+  } else if (action === 'parse-roe-pdf') {
+    const fileInput = document.getElementById('roe-pdf-input');
+    const status = document.getElementById('roe-pdf-status');
+    const file = fileInput && fileInput.files && fileInput.files[0];
+    if (!file) {
+      if (status) status.textContent = 'Choose a PDF first.';
+      return;
+    }
+    if (status) status.textContent = 'Extracting…';
+    target.disabled = true;
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      const res = await fetch(`${API_BASE}/api/security/roe/parse-scope`, {
+        method: 'POST', credentials: 'same-origin', body,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (status) status.textContent = `Failed: ${data.detail || res.status}`;
+        return;
+      }
+      const candidates = data.candidates || [];
+      if (!candidates.length) {
+        if (status) status.textContent = 'No IP/CIDR/domain-looking targets found in the document.';
+        return;
+      }
+      // Pre-fill, never auto-commit -- the scope field stays a plain
+      // editable text input the user reviews before Create is pressed.
+      const scopeInput = document.querySelector('[data-action="create-new-project"] [name="scope"]');
+      if (scopeInput) {
+        const existing = scopeInput.value.split(',').map(s => s.trim()).filter(Boolean);
+        scopeInput.value = Array.from(new Set([...existing, ...candidates])).join(', ');
+      }
+      if (status) status.textContent = `Found ${candidates.length} candidate target${candidates.length === 1 ? '' : 's'} -- review before creating.`;
+    } catch (err) {
+      if (status) status.textContent = `Failed: ${err.message || String(err)}`;
+    } finally {
+      target.disabled = false;
+    }
   } else if (action === 'link-current-chat') {
     if (!_CURRENT_SESSION_ID) return;
     const res = await fetch(`${API_BASE}/api/session/${encodeURIComponent(_CURRENT_SESSION_ID)}`, {
