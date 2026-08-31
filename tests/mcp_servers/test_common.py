@@ -143,6 +143,46 @@ def test_exec_in_toolchain_logs_timeout_outcome(audit_env):
     assert row["outcome"] == "timeout"
 
 
+# ---- Raw log capture (export feature) ---------------------------------------
+
+
+def test_exec_in_toolchain_persists_full_raw_output_and_links_it(audit_env):
+    """The audit DB row's own `detail` field only ever holds a capped
+    error message (see _log_invocation) -- successful calls got nothing
+    persisted at all before raw_log_path existed. Every call, success or
+    not, should now have its full output recoverable via that path."""
+    full_output = "PORT     STATE SERVICE\n22/tcp   open  ssh\n" + ("x" * 5000)
+    with patch.object(audit_env, "_exec_container", return_value=full_output):
+        audit_env.exec_in_toolchain(["nmap", "-sV", "10.0.0.5"])
+    conn = audit_env._get_audit_db()
+    row = conn.execute("SELECT * FROM tool_invocations WHERE binary='nmap'").fetchone()
+    conn.close()
+    assert row["raw_log_path"]
+    saved = (audit_env._DATA_DIR / row["raw_log_path"]).read_text(encoding="utf-8")
+    assert saved == full_output
+
+
+def test_write_raw_log_returns_none_for_empty_text(audit_env):
+    assert audit_env._write_raw_log("nmap", "") is None
+
+
+def test_write_raw_log_truncates_to_max_bytes(audit_env, monkeypatch):
+    monkeypatch.setattr(audit_env, "_MAX_RAW_LOG_BYTES", 100)
+    path = audit_env._write_raw_log("nmap", "x" * 5000)
+    saved = (audit_env._DATA_DIR / path).read_text(encoding="utf-8")
+    assert len(saved) == 100
+
+
+def test_write_raw_log_failure_is_best_effort(audit_env, monkeypatch):
+    """A logging bug must never break an actual scan -- same discipline
+    _log_invocation() itself already follows."""
+    monkeypatch.setattr(
+        audit_env.Path, "mkdir",
+        MagicMock(side_effect=OSError("disk full")),
+    )
+    assert audit_env._write_raw_log("nmap", "some output") is None
+
+
 def test_audit_log_write_failure_does_not_break_the_call(audit_env, monkeypatch):
     """A logging bug must never break an actual scan."""
     monkeypatch.setattr(audit_env, "_get_audit_db", MagicMock(side_effect=RuntimeError("disk full")))

@@ -234,6 +234,7 @@ function _engagementRow(e) {
         <span style="flex:1;font-size:12.5px;">${_escape(e.name)}</span>
         <span style="font-size:11.5px;color:var(--fg-muted);">${_escape(e.client || '')}</span>
         ${statusBadge}
+        ${_smallBtn('Export', 'export-engagement', e.id)}
         ${e.status !== 'closed' ? _smallBtn('Close', 'close-engagement', e.id) : ''}
       </div>
       ${detailHtml}
@@ -270,6 +271,7 @@ function _renderEngagementForm() {
     return `<div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;">
       ${_smallBtn('+ New Project (Engagement + Chat)', 'toggle-new-project-form', '')}
       ${_smallBtn('+ New Engagement', 'toggle-engagement-form', '')}
+      ${_smallBtn('⤓ Export Everything', 'export-all', '')}
     </div>`;
   }
   return `
@@ -668,6 +670,14 @@ async function _onBodyClick(e) {
       _state.engagements.expandedId = id;
       await _loadEngagementDetail(id);
     }
+  } else if (action === 'export-engagement') {
+    // Plain navigation, not fetch+blob: the session cookie rides along
+    // automatically on a same-origin GET, and Content-Disposition:
+    // attachment (routes/export_routes.py) is exactly what triggers the
+    // browser's own save dialog with no extra JS plumbing needed.
+    window.location.href = `${API_BASE}/api/security/export/engagement/${encodeURIComponent(id)}`;
+  } else if (action === 'export-all') {
+    window.location.href = `${API_BASE}/api/security/export/all`;
   } else if (action === 'close-engagement') {
     if (!confirm('Close this engagement? This records an end date and stops treating it as active.')) return;
     await fetch(`${API_BASE}/api/security/engagements/${encodeURIComponent(id)}/close`, {

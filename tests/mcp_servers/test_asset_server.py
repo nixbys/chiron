@@ -192,3 +192,42 @@ async def test_module_import_survives_unwritable_data_dir(tmp_path, monkeypatch)
     results = await asset_mod.call_tool("asset_add", {"ip": "10.0.0.9"})
     assert results
     assert "[error:" in results[0].text
+
+
+# ---- _export_data (export feature) -----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_export_data_returns_assets_services_and_findings(tmp_data_dir):
+    mod = tmp_data_dir
+    await mod.call_tool("asset_add", {"ip": "10.0.0.10", "hostname": "host10"})
+    await mod.call_tool("service_add", {"ip": "10.0.0.10", "port": 22, "service_name": "ssh"})
+    await mod.call_tool("finding_add", {"ip": "10.0.0.10", "title": "Open SSH", "severity": "low"})
+
+    data = mod._export_data()
+    assert len(data["assets"]) == 1
+    assert data["assets"][0]["ip"] == "10.0.0.10"
+    assert len(data["services"]) == 1
+    assert data["services"][0]["asset_ip"] == "10.0.0.10"
+    assert len(data["findings"]) == 1
+    assert data["findings"][0]["title"] == "Open SSH"
+
+
+@pytest.mark.asyncio
+async def test_export_data_filters_by_engagement_id(tmp_data_dir):
+    mod = tmp_data_dir
+    await mod.call_tool("asset_add", {"ip": "10.0.0.11", "engagement_id": "eng-1"})
+    await mod.call_tool("asset_add", {"ip": "10.0.0.12", "engagement_id": "eng-2"})
+
+    scoped = mod._export_data(engagement_id="eng-1")
+    assert len(scoped["assets"]) == 1
+    assert scoped["assets"][0]["ip"] == "10.0.0.11"
+
+    unscoped = mod._export_data()
+    assert len(unscoped["assets"]) == 2
+
+
+def test_export_data_empty_store(tmp_data_dir):
+    mod = tmp_data_dir
+    data = mod._export_data()
+    assert data == {"assets": [], "services": [], "findings": []}

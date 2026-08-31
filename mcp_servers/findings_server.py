@@ -96,6 +96,37 @@ def _ensure_index() -> str | None:
         return str(exc)
 
 
+def _export_findings(engagement: str | None = None, size: int = 5000) -> list[dict]:
+    """Full documents (not the finding_search tool's formatted text table),
+    for direct import by routes/export_routes.py -- same structured-JSON
+    convention every other server's own _list_*/_export_* helper follows.
+    OpenSearch caps a single query at index.max_result_window (10000 by
+    default); `size` should stay under that for a normal engagement-scoped
+    export, and a caller wanting a true full-index dump should paginate
+    with search_after instead -- not needed yet at this fork's data scale."""
+    if err := _ensure_index():
+        return [{"error": err}]
+    body: dict = {
+        "size": min(size, 10000),
+        "sort": [{"created_at": {"order": "desc", "unmapped_type": "date"}}],
+    }
+    if engagement:
+        body["query"] = {"term": {"engagement": engagement}}
+    else:
+        body["query"] = {"match_all": {}}
+    try:
+        resp = _req("POST", f"/{_INDEX}/_search", body)
+    except Exception as exc:  # noqa: BLE001
+        return [{"error": str(exc)}]
+    hits = resp.get("hits", {}).get("hits", [])
+    out = []
+    for h in hits:
+        doc = dict(h.get("_source") or {})
+        doc["_id"] = h.get("_id")
+        out.append(doc)
+    return out
+
+
 TOOLS = [
     Tool(
         name="finding_index",

@@ -20,6 +20,7 @@ import json
 import os
 import sqlite3
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -38,55 +39,85 @@ _DB_PATH = _DATA_DIR / "audit.db"
 _OUTCOMES = ("ok", "error", "timeout", "rate_limited", "blocked_out_of_scope", "scope_override")
 
 _db_initialized = False
+# Guards the check-and-set on _db_initialized below -- without it, several
+# threads hitting _get_db() concurrently on a brand-new audit.db can all
+# see _db_initialized == False and each run the CREATE TABLE/ALTER TABLE
+# block itself; CREATE TABLE IF NOT EXISTS tolerates that, but ALTER TABLE
+# ADD COLUMN does not ("duplicate column name") once a second migration
+# joined the first (see test_concurrent_first_access_does_not_deadlock).
+_db_init_lock = threading.Lock()
+
+
+def _new_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(_DB_PATH), timeout=10)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
 
 
 def _get_db() -> sqlite3.Connection:
     global _db_initialized
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH), timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     if not _db_initialized:
-        # Same table common.py's _get_audit_db() creates -- CREATE TABLE IF
-        # NOT EXISTS here too so this server works standalone (e.g. before
-        # any tool has ever run yet) rather than assuming common.py's
-        # process created the file first.
-        with conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS tool_invocations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts REAL NOT NULL,
-                    binary TEXT NOT NULL,
-                    args TEXT NOT NULL,
-                    mode TEXT NOT NULL,
-                    duration_ms INTEGER,
-                    outcome TEXT NOT NULL,
-                    detail TEXT DEFAULT '',
-                    engagement_id TEXT
-                );
-            """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_binary_ts ON tool_invocations(binary, ts);")
-            # Same migration guard as common.py's _get_audit_db() -- this
-            # server may be the first process to open audit.db.
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(tool_invocations)").fetchall()]
-            if "engagement_id" not in cols:
-                conn.execute("ALTER TABLE tool_invocations ADD COLUMN engagement_id TEXT")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_engagement ON tool_invocations(engagement_id);")
-            # Checkpoint state for the scope_violation_check scheduled
-            # action (src/builtin_actions.py) -- "how far into
-            # tool_invocations has this task already reminded about",
-            # same (task_id -> state) shape as monitor_server.py's
-            # monitor_state table, just one row per task instead of one
-            # per (task_id, target, check_type).
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS audit_checkpoints (
-                    task_id TEXT PRIMARY KEY,
-                    last_id INTEGER NOT NULL DEFAULT 0,
-                    updated_at REAL
-                );
-            """)
-        _db_initialized = True
-    return conn
+        with _db_init_lock:
+            if not _db_initialized:
+                # The connection used for schema setup is opened *inside*
+                # the lock, after the double-checked flag -- not before it.
+                # An earlier version opened every thread's connection
+                # unconditionally up front, so on a brand-new audit.db
+                # several already-open (idle) connections could coexist
+                # with the one running ALTER TABLE, and SQLite's schema
+                # lock requirements for DDL turned that into a real,
+                # reproducible "database is locked" (not the "duplicate
+                # column name" this lock alone already fixed) --
+                # see test_concurrent_first_access_does_not_deadlock.
+                # Serializing connection creation itself for the *first*
+                # caller means no other connection exists yet while DDL
+                # runs.
+                conn = _new_connection()
+                # Same table common.py's _get_audit_db() creates -- CREATE TABLE IF
+                # NOT EXISTS here too so this server works standalone (e.g. before
+                # any tool has ever run yet) rather than assuming common.py's
+                # process created the file first.
+                with conn:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS tool_invocations (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            ts REAL NOT NULL,
+                            binary TEXT NOT NULL,
+                            args TEXT NOT NULL,
+                            mode TEXT NOT NULL,
+                            duration_ms INTEGER,
+                            outcome TEXT NOT NULL,
+                            detail TEXT DEFAULT '',
+                            engagement_id TEXT
+                        );
+                    """)
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_binary_ts ON tool_invocations(binary, ts);")
+                    # Same migration guard as common.py's _get_audit_db() -- this
+                    # server may be the first process to open audit.db.
+                    cols = [r[1] for r in conn.execute("PRAGMA table_info(tool_invocations)").fetchall()]
+                    if "engagement_id" not in cols:
+                        conn.execute("ALTER TABLE tool_invocations ADD COLUMN engagement_id TEXT")
+                    if "raw_log_path" not in cols:
+                        conn.execute("ALTER TABLE tool_invocations ADD COLUMN raw_log_path TEXT")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_engagement ON tool_invocations(engagement_id);")
+                    # Checkpoint state for the scope_violation_check scheduled
+                    # action (src/builtin_actions.py) -- "how far into
+                    # tool_invocations has this task already reminded about",
+                    # same (task_id -> state) shape as monitor_server.py's
+                    # monitor_state table, just one row per task instead of one
+                    # per (task_id, target, check_type).
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS audit_checkpoints (
+                            task_id TEXT PRIMARY KEY,
+                            last_id INTEGER NOT NULL DEFAULT 0,
+                            updated_at REAL
+                        );
+                    """)
+                _db_initialized = True
+                return conn
+    return _new_connection()
 
 
 def _get_checkpoint(task_id: str) -> int:
@@ -179,7 +210,7 @@ def _list_invocations(
     the security dashboard's Audit Log tab."""
     conn = _get_db()
     try:
-        query = "SELECT id, ts, binary, args, mode, duration_ms, outcome, detail, engagement_id FROM tool_invocations WHERE 1=1"
+        query = "SELECT id, ts, binary, args, mode, duration_ms, outcome, detail, engagement_id, raw_log_path FROM tool_invocations WHERE 1=1"
         params: list = []
         if binary:
             query += " AND binary=?"

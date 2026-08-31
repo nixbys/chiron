@@ -19,6 +19,11 @@ Update this file at the end of every phase/checkpoint, same discipline as `CHANG
   invocation (not just findings) is also audited and rate-limited. Chat sessions can be
   linked to an engagement ("Project") and get real-time scope enforcement (block by default,
   audited override) on every tool call with a network target.
+- **Bulk export**, per-engagement or everything at once: one `.zip` with findings, the full
+  audit trail (including every call's complete raw tool output, not just a capped error
+  message), engagement metadata/timeline, assets/services, watchlist entries, detection
+  rules, and the PDF report — `Export`/`Export Everything` in the Security Hub's Engagements
+  tab, or `GET /api/security/export/engagement/{id}` / `/all` directly.
 - A from-scratch dark-first design system (Chakra Petch / IBM Plex Sans / IBM Plex Mono,
   the "Duality" blue/crimson palette, a sharper/flatter shape language) applied app-wide,
   not just the security surfaces.

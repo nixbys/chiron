@@ -840,6 +840,11 @@ from routes.security_dashboard_routes import setup_security_dashboard_routes
 app.include_router(setup_security_dashboard_routes())
 logger.info("Security dashboard routes initialized")
 
+from routes.export_routes import setup_export_routes
+
+app.include_router(setup_export_routes())
+logger.info("Security export routes initialized")
+
 from routes.toolchain_routes import setup_toolchain_routes
 
 app.include_router(setup_toolchain_routes())
