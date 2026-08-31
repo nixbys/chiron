@@ -3,6 +3,8 @@
 #
 # Services added:
 #   ollama      — local LLM runtime (AMD ROCm / RX 6950 XT); API at http://localhost:11434
+#   ollama-pull — one-shot init: pulls DEFAULT_OLLAMA_MODEL (default llama3.2:3b) into
+#                 ollama on every `up`, idempotent; exits once done, not a long-running service
 #   toolchain   — Kali sidecar exposing an internal exec API on :8088 (never published
 #                 to the host — arbitrary command execution surface, internal-network only)
 #   spiderfoot  — SpiderFoot OSINT server; web UI + REST API at http://localhost:5001
@@ -38,9 +40,15 @@ services:
   # ── extend upstream odysseus with security + LLM env vars ────────────────
   odysseus:
     environment:
-      # Ollama inside the compose stack
-      OLLAMA_BASE_URL: "http://odysseus-ollama:11434/v1"
-      LLM_HOST: "odysseus-ollama"
+      # Ollama inside the compose stack -- ${...:-default} so a user can
+      # actually override these from .env (e.g. to point at a host Ollama
+      # instance for GPU passthrough, per the `ollama` service's own
+      # comment below) without hand-editing this file. Previously
+      # hardcoded with no interpolation, which silently ignored .env's
+      # OLLAMA_BASE_URL entirely -- the exact override that comment
+      # instructs the user to set.
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://odysseus-ollama:11434/v1}"
+      LLM_HOST: "${LLM_HOST:-odysseus-ollama}"
       # Toolchain exec API — MCP servers call this instead of podman exec
       ODYSSEUS_TOOLCHAIN_API: "http://odysseus-toolchain:8088"
       # Shared bearer token for exec API auth (must match toolchain service below)
@@ -86,6 +94,42 @@ services:
     restart: unless-stopped
     environment:
       OLLAMA_HOST: "0.0.0.0:11434"
+    security_opt:
+      - no-new-privileges:true
+
+  # One-shot init: pulls a default model into the ollama service above so a
+  # fresh install has something to chat with immediately, without a manual
+  # `ollama pull`. Talks to the long-running `ollama` service over the
+  # network (OLLAMA_HOST) rather than sharing its volume -- the *server*
+  # performs the actual download into its own storage either way, this
+  # container never touches ollama-models directly. `ollama pull` is
+  # idempotent (a no-op re-check against the local manifest if the model's
+  # already present), so this runs on every `up` and exits in well under a
+  # second once the model is there. The base image ships no curl/wget/nc,
+  # so readiness is a plain retry loop around the real command rather than
+  # a separate health probe.
+  ollama-pull:
+    image: docker.io/ollama/ollama:latest
+    container_name: odysseus-ollama-pull
+    depends_on:
+      - ollama
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        i=0
+        until ollama pull "$$DEFAULT_OLLAMA_MODEL"; do
+          i=$$((i + 1))
+          if [ "$$i" -ge 30 ]; then
+            echo "ollama-pull: giving up on $$DEFAULT_OLLAMA_MODEL after 30 attempts (~60s) -- is the ollama service healthy?" >&2
+            exit 1
+          fi
+          sleep 2
+        done
+        echo "ollama-pull: $$DEFAULT_OLLAMA_MODEL ready"
+    environment:
+      OLLAMA_HOST: "http://odysseus-ollama:11434"
+      DEFAULT_OLLAMA_MODEL: "${DEFAULT_OLLAMA_MODEL:-llama3.2:3b}"
+    restart: "no"
     security_opt:
       - no-new-privileges:true
 
