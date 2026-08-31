@@ -31,7 +31,15 @@ services:
       # Optional in-app TLS cert/key (see docs/TLS.md) -- only read when
       # SSL_KEYFILE/SSL_CERTFILE below point inside this directory. Absent
       # by default; mounting an empty/missing host dir here is harmless.
-      - ${APP_TLS_DIR:-./certs}:/app/certs:z,ro
+      # Not mounted read-only: rootless Podman/Docker can bind-mount host
+      # files owned by a UID the container can't map to a readable owner
+      # inside its own namespace (confirmed live -- a 0600 host key file
+      # showed up owned by root inside the container, unreadable by the
+      # PUID/PGID app user) -- entrypoint.sh's existing ownership-repair
+      # loop (same one /app/data and friends already go through) needs
+      # write access to `chown` it to the right owner. The app itself
+      # never writes into this directory.
+      - ${APP_TLS_DIR:-./certs}:/app/certs:z
     extra_hosts:
       # Lets the container reach local services on the Docker host, including
       # Ollama at http://host.docker.internal:11434.
