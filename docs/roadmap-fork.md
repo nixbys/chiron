@@ -122,15 +122,20 @@ Update this file at the end of every phase/checkpoint, same discipline as `CHANG
       default, both tunable via env vars) files a real `findings_server` finding instead of
       only ever being a dismissible reminder. Fires once per crossing. Full details in
       `CHANGELOG.md`'s Unreleased section.
+- [x] **Engagement-scoped Projects, Phase K (second-order addendum, on top of Phase G).** A
+      soft, once-per-session in-chat nudge the first time an unscoped session runs a scope-
+      enforceable tool; unscoped execution stays fully allowed. Also fixed a real gap found
+      along the way: `secrets_scan` (Phase H) was never added to `src/tool_execution.py`'s
+      auto-injection set, so a linked session's `engagement_id` was silently never passed to
+      it. Full details in `CHANGELOG.md`'s Unreleased section.
 
 ## Near-Term
 
-The same plan's remaining second-order addenda (Phase K: a first-run unscoped-session nudge;
-Phase L: wiring `secrets_scan` findings into the correlation fabric) are approved but not
-started — see the durable copy at `/home/nixbys/.claude/projects/-var-home-nixbys-source-repos-
-odysseus-red/memory/engagement_scope_enforcement_plan.md` for full design detail. Otherwise
-nothing else is queued; see "Ideas, Not Commitments" below for what's next if this fork keeps
-growing.
+The same plan's last remaining second-order addendum (Phase L: wiring `secrets_scan` findings
+into the correlation fabric) is approved but not started — see the durable copy at
+`/home/nixbys/.claude/projects/-var-home-nixbys-source-repos-odysseus-red/memory/
+engagement_scope_enforcement_plan.md` for full design detail. Otherwise nothing else is
+queued; see "Ideas, Not Commitments" below for what's next if this fork keeps growing.
 
 ## Ideas, Not Commitments
 
