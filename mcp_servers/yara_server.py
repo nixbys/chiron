@@ -17,6 +17,11 @@ from mcp.types import TextContent, Tool
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mcp_servers.common import exec_in_toolchain, mcp_error
 
+# yara_scan's target is a filesystem path, not a host -- no check_scope()
+# call (there's no meaningful "in scope"/"out of scope" for a path), but it
+# still accepts an engagement_id to tag onto the audit trail so a scan can
+# be attributed to a project, same as every other toolchain-backed tool.
+
 server = Server("yara")
 
 _RULES_DIR = "/workspaces/yara_rules"
@@ -84,6 +89,10 @@ TOOLS = [
                     "default": True,
                 },
                 "timeout": {"type": "integer", "default": 120},
+                "engagement_id": {
+                    "type": "string",
+                    "description": "Engagement (\"Project\") to tag this scan with in the audit trail (no scope check -- a filesystem path has no in/out-of-scope concept).",
+                },
             },
             "required": ["target"],
         },
@@ -146,7 +155,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if recursive:
             cmd.append("-r")
         cmd += [rules_arg, target]
-        result = exec_in_toolchain(cmd, timeout=timeout)
+        result = exec_in_toolchain(cmd, timeout=timeout, engagement_id=arguments.get("engagement_id"))
 
     elif name == "yara_rule_write":
         rule_name = arguments["name"]

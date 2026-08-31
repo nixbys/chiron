@@ -187,7 +187,10 @@ class Session(TimestampMixin, Base):
     endpoint_url = Column(String, nullable=False)
     model = Column(String, nullable=False)
     owner = Column(String, nullable=True, index=True)  # username; null = legacy/shared
-    
+    # Engagement (fork "Project") this chat is scoped to, if any -- see
+    # mcp_servers/common.py's check_scope(). Null = unscoped, no enforcement.
+    engagement_id = Column(String, nullable=True, index=True)
+
     # Configuration flags
     rag = Column(Boolean, default=False)
     archived = Column(Boolean, default=False)
@@ -950,6 +953,30 @@ def _migrate_add_owner_column():
             conn.execute("CREATE INDEX IF NOT EXISTS ix_sessions_owner ON sessions(owner)")
             conn.commit()
             logging.getLogger(__name__).info("Migrated: added 'owner' column to sessions")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Migration check failed: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+def _migrate_add_session_engagement_id_column():
+    """Add engagement_id column to sessions table if it doesn't exist."""
+    import sqlite3
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    if not os.path.exists(db_path):
+        return
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("PRAGMA table_info(sessions)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "engagement_id" not in columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN engagement_id TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_sessions_engagement_id ON sessions(engagement_id)")
+            conn.commit()
+            logging.getLogger(__name__).info("Migrated: added 'engagement_id' column to sessions")
     except Exception as e:
         logging.getLogger(__name__).warning(f"Migration check failed: {e}")
     finally:
@@ -2111,6 +2138,7 @@ def init_db():
     _migrate_add_supports_tools_column()
     _migrate_add_task_run_model_column()
     _migrate_add_owner_column()
+    _migrate_add_session_engagement_id_column()
     _migrate_add_document_archived_column()
     _migrate_add_last_message_at_column()
     _migrate_add_folder_column()

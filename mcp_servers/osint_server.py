@@ -15,7 +15,13 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from mcp_servers.common import exec_in_toolchain, mcp_error, validate_domain
+from mcp_servers.common import (
+    SCOPE_ARG_PROPERTIES,
+    check_scope_from_args,
+    exec_in_toolchain,
+    mcp_error,
+    validate_domain,
+)
 
 server = Server("osint")
 
@@ -36,6 +42,7 @@ TOOLS = [
                     "default": "bing,google,dnsdumpster,crtsh",
                 },
                 "limit": {"type": "integer", "default": 200},
+                **SCOPE_ARG_PROPERTIES,
             },
             "required": ["domain"],
         },
@@ -64,6 +71,7 @@ TOOLS = [
                     "description": "Space-separated record types",
                     "default": "A MX NS TXT CNAME SOA",
                 },
+                **SCOPE_ARG_PROPERTIES,
             },
             "required": ["domain"],
         },
@@ -73,7 +81,7 @@ TOOLS = [
         description="Perform a WHOIS lookup on a domain or IP address.",
         inputSchema={
             "type": "object",
-            "properties": {"target": {"type": "string"}},
+            "properties": {"target": {"type": "string"}, **SCOPE_ARG_PROPERTIES},
             "required": ["target"],
         },
     ),
@@ -93,6 +101,7 @@ TOOLS = [
                     "default": True,
                 },
                 "timeout": {"type": "integer", "default": 120},
+                **SCOPE_ARG_PROPERTIES,
             },
             "required": ["domain"],
         },
@@ -111,11 +120,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         domain = arguments["domain"]
         if err := validate_domain(domain):
             return [TextContent(type="text", text=err)]
+        if err := check_scope_from_args(arguments, domain, "harvester"):
+            return [TextContent(type="text", text=err)]
         sources = arguments.get("sources", "bing,google,dnsdumpster,crtsh")
         limit = str(arguments.get("limit", 200))
         result = exec_in_toolchain(
             ["theHarvester", "-d", domain, "-b", sources, "-l", limit],
             timeout=180,
+            engagement_id=arguments.get("engagement_id"),
         )
 
     elif name == "username_search":
@@ -127,26 +139,33 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         domain = arguments["domain"]
         if err := validate_domain(domain):
             return [TextContent(type="text", text=err)]
+        if err := check_scope_from_args(arguments, domain, "dns_enum"):
+            return [TextContent(type="text", text=err)]
         record_types = arguments.get("record_types", "A MX NS TXT CNAME SOA").split()
         lines = []
         for rtype in record_types:
-            out = exec_in_toolchain(["dig", "+short", rtype, domain], timeout=10)
+            out = exec_in_toolchain(["dig", "+short", rtype, domain], timeout=10, engagement_id=arguments.get("engagement_id"))
             lines.append(f"[{rtype}]\n{out}")
         result = "\n\n".join(lines)
 
     elif name == "whois_lookup":
-        result = exec_in_toolchain(["whois", arguments["target"]], timeout=30)
+        target = arguments["target"]
+        if err := check_scope_from_args(arguments, target, "whois_lookup"):
+            return [TextContent(type="text", text=err)]
+        result = exec_in_toolchain(["whois", target], timeout=30, engagement_id=arguments.get("engagement_id"))
 
     elif name == "subdomain_enum":
         domain = arguments["domain"]
         if err := validate_domain(domain):
+            return [TextContent(type="text", text=err)]
+        if err := check_scope_from_args(arguments, domain, "subdomain_enum"):
             return [TextContent(type="text", text=err)]
         passive = arguments.get("passive", True)
         timeout = int(arguments.get("timeout", 120))
         cmd = ["amass", "enum", "-d", domain, "-silent"]
         if passive:
             cmd.append("-passive")
-        result = exec_in_toolchain(cmd, timeout=timeout)
+        result = exec_in_toolchain(cmd, timeout=timeout, engagement_id=arguments.get("engagement_id"))
 
     else:
         result = mcp_error("unknown_tool", name)

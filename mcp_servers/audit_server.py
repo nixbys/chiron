@@ -35,7 +35,7 @@ server = Server("audit")
 _DATA_DIR = Path(os.environ.get("ODYSSEUS_DATA_DIR", "./data"))
 _DB_PATH = _DATA_DIR / "audit.db"
 
-_OUTCOMES = ("ok", "error", "timeout", "rate_limited")
+_OUTCOMES = ("ok", "error", "timeout", "rate_limited", "blocked_out_of_scope", "scope_override")
 
 _db_initialized = False
 
@@ -61,20 +61,32 @@ def _get_db() -> sqlite3.Connection:
                     mode TEXT NOT NULL,
                     duration_ms INTEGER,
                     outcome TEXT NOT NULL,
-                    detail TEXT DEFAULT ''
+                    detail TEXT DEFAULT '',
+                    engagement_id TEXT
                 );
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_binary_ts ON tool_invocations(binary, ts);")
+            # Same migration guard as common.py's _get_audit_db() -- this
+            # server may be the first process to open audit.db.
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(tool_invocations)").fetchall()]
+            if "engagement_id" not in cols:
+                conn.execute("ALTER TABLE tool_invocations ADD COLUMN engagement_id TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_engagement ON tool_invocations(engagement_id);")
         _db_initialized = True
     return conn
 
 
-def _list_invocations(binary: str | None = None, outcome: str | None = None, limit: int = 50) -> list[dict]:
+def _list_invocations(
+    binary: str | None = None,
+    outcome: str | None = None,
+    engagement_id: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
     """Structured (not text-table) invocation list, for direct import by
     the security dashboard's Audit Log tab."""
     conn = _get_db()
     try:
-        query = "SELECT id, ts, binary, args, mode, duration_ms, outcome, detail FROM tool_invocations WHERE 1=1"
+        query = "SELECT id, ts, binary, args, mode, duration_ms, outcome, detail, engagement_id FROM tool_invocations WHERE 1=1"
         params: list = []
         if binary:
             query += " AND binary=?"
@@ -82,6 +94,9 @@ def _list_invocations(binary: str | None = None, outcome: str | None = None, lim
         if outcome:
             query += " AND outcome=?"
             params.append(outcome)
+        if engagement_id:
+            query += " AND engagement_id=?"
+            params.append(engagement_id)
         query += " ORDER BY ts DESC LIMIT ?"
         params.append(limit)
         rows = conn.execute(query, params).fetchall()
@@ -131,6 +146,7 @@ TOOLS = [
             "properties": {
                 "binary": {"type": "string", "description": "e.g. 'nmap', 'sqlmap' -- omit for all"},
                 "outcome": {"type": "string", "enum": list(_OUTCOMES)},
+                "engagement_id": {"type": "string", "description": "Filter to invocations tagged with this engagement (\"Project\") -- omit for all"},
                 "limit": {"type": "integer", "default": 50},
             },
         },
@@ -158,18 +174,20 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             rows = _list_invocations(
                 binary=arguments.get("binary"),
                 outcome=arguments.get("outcome"),
+                engagement_id=arguments.get("engagement_id"),
                 limit=arguments.get("limit", 50),
             )
             if not rows:
                 result = "No invocations recorded yet."
             else:
-                lines = [f"{'Time':<17} {'Binary':<14} {'Mode':<10} {'Outcome':<13} {'ms':<7} Args"]
-                lines.append("-" * 100)
+                lines = [f"{'Time':<17} {'Binary':<14} {'Mode':<10} {'Outcome':<19} {'ms':<7} {'Engagement':<20} Args"]
+                lines.append("-" * 120)
                 for r in rows:
                     stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["ts"]))
                     args = r["args"] if isinstance(r["args"], str) else " ".join(str(a) for a in r["args"])
                     dur = str(r["duration_ms"]) if r["duration_ms"] is not None else "-"
-                    lines.append(f"{stamp:<17} {r['binary']:<14} {r['mode']:<10} {r['outcome']:<13} {dur:<7} {args}")
+                    eng = r["engagement_id"] or "-"
+                    lines.append(f"{stamp:<17} {r['binary']:<14} {r['mode']:<10} {r['outcome']:<19} {dur:<7} {eng:<20} {args}")
                 result = "\n".join(lines)
 
         elif name == "audit_stats":

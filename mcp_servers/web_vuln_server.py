@@ -14,7 +14,13 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from mcp_servers.common import exec_in_toolchain, mcp_error, validate_url
+from mcp_servers.common import (
+    SCOPE_ARG_PROPERTIES,
+    check_scope_from_args,
+    exec_in_toolchain,
+    mcp_error,
+    validate_url,
+)
 
 server = Server("web_vuln")
 
@@ -30,6 +36,7 @@ TOOLS = [
             "properties": {
                 "url": {"type": "string", "description": "Full target URL (e.g. http://target.com)"},
                 "timeout": {"type": "integer", "default": 300},
+                **SCOPE_ARG_PROPERTIES,
             },
             "required": ["url"],
         },
@@ -52,6 +59,7 @@ TOOLS = [
                     "default": "",
                 },
                 "threads": {"type": "integer", "default": 20},
+                **SCOPE_ARG_PROPERTIES,
             },
             "required": ["url"],
         },
@@ -69,6 +77,7 @@ TOOLS = [
                 "data": {"type": "string", "description": "POST data string (optional)"},
                 "level": {"type": "integer", "default": 1, "description": "1-5"},
                 "risk": {"type": "integer", "default": 1, "description": "1-3"},
+                **SCOPE_ARG_PROPERTIES,
             },
             "required": ["url"],
         },
@@ -90,6 +99,7 @@ TOOLS = [
                 },
                 "tags": {"type": "string", "description": "Comma-separated template tags (optional)"},
                 "timeout": {"type": "integer", "default": 300},
+                **SCOPE_ARG_PROPERTIES,
             },
             "required": ["url"],
         },
@@ -118,6 +128,7 @@ TOOLS = [
                 },
                 "threads": {"type": "integer", "default": 40},
                 "timeout": {"type": "integer", "default": 300},
+                **SCOPE_ARG_PROPERTIES,
             },
             "required": ["url"],
         },
@@ -136,23 +147,29 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         url = arguments["url"]
         if err := validate_url(url):
             return [TextContent(type="text", text=err)]
+        if err := check_scope_from_args(arguments, url, "nikto_scan"):
+            return [TextContent(type="text", text=err)]
         timeout = int(arguments.get("timeout", 300))
-        result = exec_in_toolchain(["nikto", "-h", url, "-nointeractive"], timeout=timeout)
+        result = exec_in_toolchain(["nikto", "-h", url, "-nointeractive"], timeout=timeout, engagement_id=arguments.get("engagement_id"))
 
     elif name == "gobuster_dir":
         url = arguments["url"]
         if err := validate_url(url):
+            return [TextContent(type="text", text=err)]
+        if err := check_scope_from_args(arguments, url, "gobuster_dir"):
             return [TextContent(type="text", text=err)]
         wordlist = arguments.get("wordlist", "/usr/share/wordlists/dirb/common.txt")
         threads = str(arguments.get("threads", 20))
         cmd = ["gobuster", "dir", "-u", url, "-w", wordlist, "-t", threads, "-q"]
         if ext := arguments.get("extensions", ""):
             cmd += ["-x", ext]
-        result = exec_in_toolchain(cmd, timeout=600)
+        result = exec_in_toolchain(cmd, timeout=600, engagement_id=arguments.get("engagement_id"))
 
     elif name == "sqlmap_scan":
         url = arguments["url"]
         if err := validate_url(url):
+            return [TextContent(type="text", text=err)]
+        if err := check_scope_from_args(arguments, url, "sqlmap_scan"):
             return [TextContent(type="text", text=err)]
         level = str(arguments.get("level", 1))
         risk = str(arguments.get("risk", 1))
@@ -160,18 +177,20 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                "--batch", "--output-dir=/tmp/sqlmap"]
         if data := arguments.get("data"):
             cmd += ["--data", data]
-        result = exec_in_toolchain(cmd, timeout=600)
+        result = exec_in_toolchain(cmd, timeout=600, engagement_id=arguments.get("engagement_id"))
 
     elif name == "nuclei_scan":
         url = arguments["url"]
         if err := validate_url(url):
+            return [TextContent(type="text", text=err)]
+        if err := check_scope_from_args(arguments, url, "nuclei_scan"):
             return [TextContent(type="text", text=err)]
         severity = arguments.get("severity", "critical,high")
         timeout = int(arguments.get("timeout", 300))
         cmd = ["nuclei", "-u", url, "-severity", severity, "-silent"]
         if tags := arguments.get("tags"):
             cmd += ["-tags", tags]
-        result = exec_in_toolchain(cmd, timeout=timeout)
+        result = exec_in_toolchain(cmd, timeout=timeout, engagement_id=arguments.get("engagement_id"))
 
     elif name == "ffuf_fuzz":
         url = arguments["url"]
@@ -181,12 +200,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         base = url.replace("FUZZ", "test")
         if err := validate_url(base):
             return [TextContent(type="text", text=err)]
+        if err := check_scope_from_args(arguments, base, "ffuf_fuzz"):
+            return [TextContent(type="text", text=err)]
         wordlist = arguments.get("wordlist", "/usr/share/wordlists/dirb/common.txt")
         fc = arguments.get("filter_code", "404")
         threads = str(arguments.get("threads", 40))
         timeout = int(arguments.get("timeout", 300))
         cmd = ["ffuf", "-u", url, "-w", wordlist, "-t", threads, "-fc", fc, "-s"]
-        result = exec_in_toolchain(cmd, timeout=timeout)
+        result = exec_in_toolchain(cmd, timeout=timeout, engagement_id=arguments.get("engagement_id"))
 
     else:
         result = mcp_error("unknown_tool", name)

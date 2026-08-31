@@ -12,7 +12,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 def tmp_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("ODYSSEUS_DATA_DIR", str(tmp_path))
     import importlib
+    import mcp_servers.common as common_mod
     import mcp_servers.watchlist_server as watchlist_mod
+    # Reload common.py too, not just watchlist_server.py -- watchlist_add's
+    # new check_scope_from_args() call reads common's module-level
+    # _ENGAGEMENT_DB_PATH, which must point at *this* test's tmp_path, not
+    # whatever another test file's own reload last left it pointing at.
+    importlib.reload(common_mod)
     importlib.reload(watchlist_mod)
     yield watchlist_mod
 

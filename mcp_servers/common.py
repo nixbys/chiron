@@ -81,15 +81,31 @@ def _get_audit_db() -> sqlite3.Connection:
                     mode TEXT NOT NULL,
                     duration_ms INTEGER,
                     outcome TEXT NOT NULL,
-                    detail TEXT DEFAULT ''
+                    detail TEXT DEFAULT '',
+                    engagement_id TEXT
                 );
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_binary_ts ON tool_invocations(binary, ts);")
+            # Migrate in engagement_id for a pre-existing audit.db (added
+            # alongside check_scope() -- see below) -- CREATE TABLE IF NOT
+            # EXISTS above is a no-op against an already-existing table.
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(tool_invocations)").fetchall()]
+            if "engagement_id" not in cols:
+                conn.execute("ALTER TABLE tool_invocations ADD COLUMN engagement_id TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_invocations_engagement ON tool_invocations(engagement_id);")
         _audit_db_initialized = True
     return conn
 
 
-def _log_invocation(binary: str, args: list[str], mode: str, duration_ms: int | None, outcome: str, detail: str = "") -> None:
+def _log_invocation(
+    binary: str,
+    args: list[str],
+    mode: str,
+    duration_ms: int | None,
+    outcome: str,
+    detail: str = "",
+    engagement_id: str | None = None,
+) -> None:
     """Best-effort audit write -- a logging bug must never break an actual
     scan, so any failure here is swallowed (and reported to the module
     logger, not raised)."""
@@ -98,8 +114,8 @@ def _log_invocation(binary: str, args: list[str], mode: str, duration_ms: int | 
         conn = _get_audit_db()
         try:
             conn.execute(
-                "INSERT INTO tool_invocations (ts, binary, args, mode, duration_ms, outcome, detail) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (time.time(), binary, args_json, mode, duration_ms, outcome, detail[:500]),
+                "INSERT INTO tool_invocations (ts, binary, args, mode, duration_ms, outcome, detail, engagement_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (time.time(), binary, args_json, mode, duration_ms, outcome, detail[:500], engagement_id),
             )
             conn.commit()
         finally:
@@ -221,6 +237,7 @@ def exec_in_toolchain(
     cmd: list[str],
     timeout: int = 300,
     stdin: str | None = None,
+    engagement_id: str | None = None,
 ) -> str:
     """Execute a command in the Kali sidecar, or locally if TOOLCHAIN_EXEC_MODE
     (globally or per-binary via TOOLCHAIN_EXEC_MODE_<BINARY>) selects "local".
@@ -229,13 +246,17 @@ def exec_in_toolchain(
     <BINARY>, see _check_rate_limit) and logged to the shared audit trail
     (mcp_servers/audit_server.py reads it back) -- this is the one chokepoint
     every red-team MCP server's tool calls pass through, so it's the one
-    place to add both without touching 15+ individual server modules."""
+    place to add both without touching 15+ individual server modules.
+    `engagement_id`, if given, is tagged onto the audit row only (scope
+    *enforcement* happens earlier, via check_scope() -- see below) so every
+    invocation, not just the ones that hit a scope check, can be filtered
+    by project in the Audit Log."""
     if not cmd:
         return mcp_error("invalid_command", "No command given")
     binary = cmd[0]
 
     if err := _check_rate_limit(binary):
-        _log_invocation(binary, cmd, "n/a", None, "rate_limited")
+        _log_invocation(binary, cmd, "n/a", None, "rate_limited", engagement_id=engagement_id)
         return err
 
     mode = _resolve_exec_mode(binary)
@@ -249,7 +270,7 @@ def exec_in_toolchain(
         outcome, detail = "error", result
     else:
         outcome, detail = "ok", ""
-    _log_invocation(binary, cmd, mode, duration_ms, outcome, detail)
+    _log_invocation(binary, cmd, mode, duration_ms, outcome, detail, engagement_id=engagement_id)
 
     return result
 
@@ -257,6 +278,166 @@ def exec_in_toolchain(
 def mcp_error(code: str, message: str) -> str:
     """Return a standardized MCP tool error string."""
     return f"[error:{code}] {message}"
+
+
+# ── Engagement scope enforcement ─────────────────────────────────────────
+#
+# engagement_server.py already stores a scope/out_of_scope declaration per
+# engagement (the fork's "Project" concept); this is what actually enforces
+# it against a real tool call. Same duplicate-read-access pattern as every
+# other cross-server read in this fork (e.g. sigma_server.py duplicating
+# findings_server.py's OpenSearch connection) -- MCP servers never import
+# each other, so this reads engagement_server's SQLite file directly rather
+# than calling into it.
+
+_ENGAGEMENT_DB_PATH = _DATA_DIR / "engagements.db"
+
+
+def _get_engagement_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(_ENGAGEMENT_DB_PATH), timeout=10)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _target_matches(value: str, patterns: list[str]) -> bool:
+    """True if `value` matches any of `patterns`, via exact string match,
+    CIDR/IP containment (either side may be a bare IP or a CIDR range), or
+    domain/subdomain suffix match (e.g. "api.example.com" matches a
+    declared "example.com")."""
+    value = (value or "").strip().lower().rstrip(".")
+    if not value:
+        return False
+    for raw in patterns:
+        pattern = (raw or "").strip().lower().rstrip(".")
+        if not pattern:
+            continue
+        if value == pattern:
+            return True
+        try:
+            value_net = ipaddress.ip_network(value, strict=False)
+            pattern_net = ipaddress.ip_network(pattern, strict=False)
+            if value_net.version == pattern_net.version and value_net.subnet_of(pattern_net):
+                return True
+        except ValueError:
+            pass  # not both IP/CIDR -- fall through to domain-suffix check
+        if value.endswith("." + pattern):
+            return True
+    return False
+
+
+def check_scope(
+    engagement_id: str | None,
+    target: str,
+    tool_name: str,
+    override: bool = False,
+    override_reason: str = "",
+) -> str | None:
+    """Enforce an engagement's declared scope against `target`.
+
+    Returns None if the call may proceed:
+      - no engagement_id given (back-compat -- every existing call site
+        that predates this feature keeps working unscoped/unenforced), or
+      - the engagement_id doesn't resolve to a real engagement, or
+      - the engagement has no scope declared and target isn't in
+        out_of_scope, or
+      - target matches the declared scope and isn't in out_of_scope, or
+      - target is out of scope but `override=True` was supplied -- this is
+        always audit-logged as its own flagged outcome (`scope_override`),
+        never a silent pass-through.
+
+    Returns an mcp_error() string (telling the caller exactly how to
+    override) if the call must be blocked -- also always logged, as
+    `blocked_out_of_scope`.
+
+    A failure to read the engagement DB fails *open* (same policy as
+    _check_rate_limit): a scope-check outage must never itself become a
+    denial-of-service against real engagement work.
+    """
+    if not engagement_id:
+        return None
+    try:
+        conn = _get_engagement_db()
+        try:
+            row = conn.execute(
+                "SELECT scope, out_of_scope FROM engagements WHERE id=?",
+                (engagement_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        logger.warning("check_scope: could not read engagement %r -- failing open", engagement_id, exc_info=True)
+        return None
+    if row is None:
+        return None
+    try:
+        scope = json.loads(row["scope"] or "[]")
+        out_of_scope = json.loads(row["out_of_scope"] or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    violation = _target_matches(target, out_of_scope) or (bool(scope) and not _target_matches(target, scope))
+    if not violation:
+        return None
+
+    if override:
+        _log_invocation(
+            tool_name, [target], "n/a", None, "scope_override",
+            override_reason or "(no reason given)", engagement_id=engagement_id,
+        )
+        return None
+
+    _log_invocation(
+        tool_name, [target], "n/a", None, "blocked_out_of_scope", "",
+        engagement_id=engagement_id,
+    )
+    return mcp_error(
+        "out_of_scope",
+        f"{target!r} is outside engagement {engagement_id!r}'s authorized scope. "
+        "Pass override_scope=true and override_reason=\"...\" to proceed anyway "
+        "(always logged to the audit trail).",
+    )
+
+
+# The three inputSchema properties every scope-enforced tool adds, shared so
+# the description text (and its meaning) stays identical across every
+# server rather than drifting copy-by-copy.
+SCOPE_ARG_PROPERTIES = {
+    "engagement_id": {
+        "type": "string",
+        "description": (
+            "Engagement (\"Project\") this call is scoped to -- its declared "
+            "scope/out_of_scope is enforced against the target, if set. "
+            "Auto-injected for sessions linked to a Project; pass explicitly "
+            "to target a different engagement within the same session."
+        ),
+    },
+    "override_scope": {
+        "type": "boolean",
+        "default": False,
+        "description": "Proceed even if the target is outside the engagement's declared scope. Always logged as its own flagged audit outcome (scope_override), never silent.",
+    },
+    "override_reason": {
+        "type": "string",
+        "default": "",
+        "description": "Why this override is authorized -- recorded in the audit log alongside the scope_override outcome.",
+    },
+}
+
+
+def check_scope_from_args(arguments: dict, target: str, tool_name: str) -> str | None:
+    """Convenience wrapper over check_scope() for the common case: pull
+    engagement_id/override_scope/override_reason out of a tool's raw
+    `arguments` dict. Every scope-enforced tool handler's check is one line:
+        if err := check_scope_from_args(arguments, target, "nmap_scan"):
+            return [TextContent(type="text", text=err)]
+    """
+    return check_scope(
+        arguments.get("engagement_id"),
+        target,
+        tool_name,
+        override=bool(arguments.get("override_scope", False)),
+        override_reason=arguments.get("override_reason", ""),
+    )
 
 
 def validate_ip(value: str) -> str | None:

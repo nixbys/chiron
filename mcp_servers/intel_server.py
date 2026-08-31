@@ -18,7 +18,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from mcp_servers.common import mcp_error
+from mcp_servers.common import SCOPE_ARG_PROPERTIES, check_scope_from_args, mcp_error
 
 server = Server("intel")
 
@@ -37,7 +37,7 @@ TOOLS = [
         description="Look up a host IP on Shodan. Returns open ports, banners, CVEs, and org info.",
         inputSchema={
             "type": "object",
-            "properties": {"ip": {"type": "string", "description": "IPv4 address to look up"}},
+            "properties": {"ip": {"type": "string", "description": "IPv4 address to look up"}, **SCOPE_ARG_PROPERTIES},
             "required": ["ip"],
         },
     ),
@@ -100,6 +100,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "ip": {"type": "string", "description": "IPv4 address to look up"},
+                **SCOPE_ARG_PROPERTIES,
             },
             "required": ["ip"],
         },
@@ -344,6 +345,8 @@ async def list_tools() -> list[Tool]:
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "shodan_host":
+        if err := check_scope_from_args(arguments, arguments["ip"], "shodan_host"):
+            return [TextContent(type="text", text=err)]
         result = _shodan_host(arguments["ip"])
     elif name == "virustotal_lookup":
         result = _vt_lookup(arguments["indicator"], arguments["kind"])
@@ -352,6 +355,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     elif name == "otx_indicator":
         result = _otx_lookup(arguments["indicator"], arguments["kind"])
     elif name == "censys_host":
+        if err := check_scope_from_args(arguments, arguments["ip"], "censys_host"):
+            return [TextContent(type="text", text=err)]
         result = _censys_host(arguments["ip"])
     elif name == "censys_search":
         result = _censys_search(arguments["query"], int(arguments.get("limit", 10)))
