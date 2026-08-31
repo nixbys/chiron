@@ -11,6 +11,29 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
 ## [Unreleased]
 
 ### Fixed
+- **Ollama unreachable from the app container (`Cannot reach http://odysseus-ollama:11434`)**,
+  plus a real, separate bug found while chasing it: `docker-compose.security.yml`'s `odysseus`
+  service hardcoded `OLLAMA_BASE_URL`/`LLM_HOST` with no `.env` interpolation at all, so the
+  var's own neighboring `.env` comment ("change this to point at a host Ollama instead") was
+  never actually true — editing `.env` had zero effect whenever this overlay was in use.
+  Fixed both to `${VAR:-default}`, matching every other overlay var's own pattern. The
+  unreachable-container symptom itself was a leftover from re-running `podman-compose up`
+  under this repo's new "chiron" project name (after the local rename from odysseus-red):
+  podman found the sidecars' fixed `container_name`s already claimed by *stopped* containers
+  from the old "odysseus-red" project and just started those instead of creating fresh ones —
+  landing them on the old `odysseus-red_default` network while the freshly built `chiron_*`
+  containers sat on a different `chiron_default` network, so they could never resolve each
+  other by hostname despite all being "up." Recreating the affected containers (stop, `rm`,
+  re-`up`) put everything on one network again; the 19GB of already-pulled Ollama models
+  living in the orphaned `odysseus-red_ollama-models` volume were copied over rather than
+  re-downloaded.
+- **Ollama now pulls a default model automatically.** New `ollama-pull` one-shot init service
+  in `docker-compose.security.yml` (not gated behind any profile, like `ollama` itself):  pulls
+  `DEFAULT_OLLAMA_MODEL` (default `llama3.2:3b`, `.env`-configurable) into the `ollama` sidecar
+  on every `up`. `ollama pull` is idempotent against an already-present model (confirmed: a
+  second run completes in well under a second, vs. a real multi-second transfer on the first),
+  so this doesn't meaningfully slow down a normal `up` once the model's there — a fresh install
+  now has a usable local model without a manual `ollama pull` step.
 - Phase 2.4's own `yara_server.py` additions were broken against the real toolchain sidecar
   (only ever exercised through mocked tests until this session actually got the container
   stack running): `_list_rule_names()` used `sh -c "ls ... 2>/dev/null"`, but the exec API's
