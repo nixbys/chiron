@@ -121,6 +121,17 @@ Releases in progress may be tagged `vX.Y.Z-alpha.N` / `-beta.N` / `-rc.N` before
   actually failed). `POST /api/security/roe/parse-scope` also extracts a candidate time
   window and blackout dates from the uploaded document now, pre-filling both new form fields
   the same reviewed-not-auto-committed way target candidates already work.
+- **Escalation, on top of the scope_violation_check reminders above (Phase J of the same
+  plan).** A single override is normal pentest work (scope sometimes legitimately expands
+  mid-engagement); a *pattern* is a signal worth a permanent record. `scope_violation_check`
+  now also tracks each engagement's rolling violation count and, once
+  `SCOPE_VIOLATION_ESCALATION_THRESHOLD` (default 3) is crossed within
+  `SCOPE_VIOLATION_ESCALATION_WINDOW_HOURS` (default 24), files one `findings_server` finding
+  (severity `medium`, tagged `process`/`scope-deviation`) plus an `engagement_server` timeline
+  event — fires exactly once per crossing (computed as "count before this run's new rows was
+  under the threshold, count including them is at or over it"), not on every subsequent poll
+  once an engagement is already over. New `audit_server._count_scope_violations_in_window()`
+  helper backs the rolling count.
 - **Toolchain invocation audit trail + rate limiting**, both enforced at `mcp_servers/
   common.py`'s `exec_in_toolchain()` — the one chokepoint every red-team MCP server's tool
   calls pass through, so no changes were needed in any of the other 20 server modules. Every

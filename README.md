@@ -436,6 +436,8 @@ Findings persistence (`findings_server`) covers *results*; this covers *actions*
 
 **Rate limiting**: also enforced inside `exec_in_toolchain()`, using this same audit table as its own source of truth (a true cross-process limit, since every MCP server is a separate subprocess — an in-memory counter would only ever throttle one server's own calls). `TOOLCHAIN_RATE_LIMIT` caps invocations of any one binary per `TOOLCHAIN_RATE_LIMIT_WINDOW` seconds (defaults: 20 per 60s); `TOOLCHAIN_RATE_LIMIT_<BINARY>` overrides the cap for one binary specifically, same override shape as `TOOLCHAIN_EXEC_MODE_<BINARY>`. Set `TOOLCHAIN_RATE_LIMIT_WINDOW=0` to disable entirely. A rejected call returns `[error:rate_limited]` immediately (never reaches the toolchain) and is itself logged with that outcome, so it shows up in the Audit Log tab too.
 
+Backs the `scope_violation_check` scheduled-task action (`src/builtin_actions.py`): on a cron schedule, polls this same audit table for new `blocked_out_of_scope`/`scope_override` rows (`mcp_servers/common.py`'s `check_scope()` logging) and sends one batched reminder per run — the same polling shape every other drift-detection action here uses, since `check_scope()` runs inside an MCP server subprocess and has no way to call the reminder-dispatch path directly. A *pattern* of `SCOPE_VIOLATION_ESCALATION_THRESHOLD` (default 3) or more violations on one engagement within `SCOPE_VIOLATION_ESCALATION_WINDOW_HOURS` (default 24) also files a real `findings_server` finding (severity `medium`, tagged `process`/`scope-deviation`) — fires once per crossing, not on every subsequent poll. Configure the task's prompt as JSON, e.g. `{"engagement_id": "..."}` to watch one engagement only.
+
 ---
 
 ## Security Hub
