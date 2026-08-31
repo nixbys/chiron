@@ -32,6 +32,7 @@ import unittest.mock as mock
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import text
 
 
 # ── OAuth state signing ──────────────────────────────────────────
@@ -216,13 +217,23 @@ def test_refresh_token_stored_encrypted_not_raw():
         result = _refresh_google_token("acct-r")
 
     verify_db = Factory()
+    # Raw on-disk bytes (bypasses EncryptedText's transparent auto-decrypt,
+    # which is exactly what a stolen-DB-file attacker would see) --
+    # oauth_access_token is an EncryptedText column now, so the ORM
+    # attribute itself is *always* plaintext once loaded; that's the whole
+    # point of that column type, so it's no longer what this test needs to
+    # check "not raw" against.
+    stored_raw = verify_db.execute(
+        text("SELECT oauth_access_token FROM email_accounts WHERE id = :id"), {"id": "acct-r"},
+    ).scalar()
     row = verify_db.query(EmailAccount).filter(EmailAccount.id == "acct-r").first()
-    stored = row.oauth_access_token
+    stored_via_orm = row.oauth_access_token
     verify_db.close()
 
     assert result == raw_token, "function should return the plain access token to callers"
-    assert stored != raw_token, "raw token must not be stored directly in the DB"
-    assert _dec(stored) == raw_token, "stored value must decrypt back to the raw token"
+    assert stored_raw != raw_token, "raw token must not be stored directly in the DB"
+    assert _dec(stored_raw) == raw_token, "raw on-disk value must decrypt back to the raw token"
+    assert stored_via_orm == raw_token, "the ORM (EncryptedText) must transparently decrypt on read"
 
 
 def test_refresh_stores_encrypted_expiry_not_token():
@@ -413,12 +424,20 @@ async def test_callback_valid_owner_writes_encrypted_tokens_to_intended_account(
     verify_db = Factory()
     target = verify_db.query(EmailAccount).filter(EmailAccount.id == "acct-v").first()
     other = verify_db.query(EmailAccount).filter(EmailAccount.id == "acct-other").first()
+    # Raw on-disk bytes -- see test_refresh_token_stored_encrypted_not_raw's
+    # comment: oauth_access_token is an EncryptedText column, so the ORM
+    # attribute is always plaintext once loaded; "stored encrypted" has to
+    # be checked against the raw row instead.
+    raw_stored_access = verify_db.execute(
+        text("SELECT oauth_access_token FROM email_accounts WHERE id = :id"), {"id": "acct-v"},
+    ).scalar()
     verify_db.close()
 
     assert target.oauth_provider == "google"
-    assert target.oauth_access_token != raw_access, "access token must be stored encrypted"
-    assert _dec(target.oauth_access_token) == raw_access
-    assert _dec(target.oauth_refresh_token) == raw_refresh
+    assert raw_stored_access != raw_access, "access token must be stored encrypted"
+    assert _dec(raw_stored_access) == raw_access
+    assert target.oauth_access_token == raw_access, "the ORM (EncryptedText) must transparently decrypt on read"
+    assert target.oauth_refresh_token == raw_refresh
     assert other.oauth_access_token is None, "tokens must only touch the intended account"
 
 

@@ -78,21 +78,39 @@ _MAX_RAW_LOG_BYTES = 2 * 1024 * 1024  # 2MB/call -- generous, bounded against a 
 
 
 def _write_raw_log(binary: str, text: str) -> str | None:
-    """Persist one call's full output to its own file, returning a path
-    relative to _DATA_DIR to store on the audit row, or None on any
-    failure -- best-effort, same swallow-and-log discipline as
-    _log_invocation() itself: a logging bug must never break an actual
-    scan."""
+    """Persist one call's full output to its own file, encrypted at rest
+    (same secret_storage key/`enc:` convention as every other secret in
+    this app -- deferred import, matching every other mcp_servers/*.py
+    caller of secret_storage, since this module has no sys.path bootstrap
+    of its own and relies on whichever server script imported it first
+    having already inserted the repo root). Returns a path relative to
+    _DATA_DIR to store on the audit row, or None on any failure --
+    best-effort, same swallow-and-log discipline as _log_invocation()
+    itself: a logging bug must never break an actual scan."""
     if not text:
         return None
     try:
+        from src.secret_storage import encrypt
         _RAW_LOGS_DIR.mkdir(parents=True, exist_ok=True)
         name = f"{int(time.time() * 1000)}_{binary}_{uuid.uuid4().hex[:8]}.log"
-        (_RAW_LOGS_DIR / name).write_text(text[:_MAX_RAW_LOG_BYTES], encoding="utf-8")
+        (_RAW_LOGS_DIR / name).write_text(encrypt(text[:_MAX_RAW_LOG_BYTES]), encoding="utf-8")
         return f"audit_logs/{name}"
     except Exception:  # noqa: BLE001
         logger.warning("Failed to write raw log file for %r", binary, exc_info=True)
         return None
+
+
+def _read_raw_log(rel_path: str) -> str:
+    """Read back a raw log file written by _write_raw_log(), decrypting
+    it. Plaintext (pre-encryption) files read fine too --
+    secret_storage.decrypt() passes through anything not `enc:`-prefixed
+    unchanged, so a file written before this encryption was added is
+    still readable rather than raising. Raises the same OSError a plain
+    .read_text() would on a missing/unreadable file -- callers (e.g.
+    routes/export_routes.py's _add_raw_logs) already handle that."""
+    from src.secret_storage import decrypt
+    raw = (_DATA_DIR / rel_path).read_text(encoding="utf-8", errors="replace")
+    return decrypt(raw)
 
 
 _audit_db_init_lock = threading.Lock()

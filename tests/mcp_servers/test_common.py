@@ -158,8 +158,28 @@ def test_exec_in_toolchain_persists_full_raw_output_and_links_it(audit_env):
     row = conn.execute("SELECT * FROM tool_invocations WHERE binary='nmap'").fetchone()
     conn.close()
     assert row["raw_log_path"]
-    saved = (audit_env._DATA_DIR / row["raw_log_path"]).read_text(encoding="utf-8")
-    assert saved == full_output
+    assert audit_env._read_raw_log(row["raw_log_path"]) == full_output
+
+
+def test_raw_log_file_is_encrypted_at_rest(audit_env):
+    """The whole point of encrypting these: the raw bytes on disk must
+    not be the plaintext tool output an attacker with filesystem access
+    (stolen backup, leaked image) could just read directly."""
+    from src.secret_storage import is_encrypted
+    path = audit_env._write_raw_log("nmap", "22/tcp open ssh -- sensitive scan output")
+    on_disk = (audit_env._DATA_DIR / path).read_text(encoding="utf-8")
+    assert is_encrypted(on_disk)
+    assert "sensitive scan output" not in on_disk
+
+
+def test_read_raw_log_handles_pre_encryption_plaintext_file(audit_env):
+    """A raw log file written before this encryption shipped is still
+    readable -- secret_storage.decrypt() passes plaintext through
+    unchanged rather than failing on the missing enc: prefix."""
+    audit_env._RAW_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    legacy_path = audit_env._RAW_LOGS_DIR / "legacy.log"
+    legacy_path.write_text("old unencrypted output", encoding="utf-8")
+    assert audit_env._read_raw_log("audit_logs/legacy.log") == "old unencrypted output"
 
 
 def test_write_raw_log_returns_none_for_empty_text(audit_env):
@@ -169,7 +189,7 @@ def test_write_raw_log_returns_none_for_empty_text(audit_env):
 def test_write_raw_log_truncates_to_max_bytes(audit_env, monkeypatch):
     monkeypatch.setattr(audit_env, "_MAX_RAW_LOG_BYTES", 100)
     path = audit_env._write_raw_log("nmap", "x" * 5000)
-    saved = (audit_env._DATA_DIR / path).read_text(encoding="utf-8")
+    saved = audit_env._read_raw_log(path)
     assert len(saved) == 100
 
 
