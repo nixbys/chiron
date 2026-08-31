@@ -1,7 +1,9 @@
 """Unit tests for mcp_servers/common.py's local/container exec-mode branching,
-audit trail, and rate limiting."""
+audit trail, rate limiting, and engagement scope enforcement."""
 
 import importlib
+import json
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -213,3 +215,126 @@ def test_rate_limit_check_fails_open_on_db_error(audit_env, monkeypatch):
     with patch.object(audit_env, "_exec_container", return_value="ok"):
         result = audit_env.exec_in_toolchain(["nmap", "10.0.0.5"])
     assert result == "ok"
+
+
+# ---- Engagement scope enforcement --------------------------------------------
+#
+# check_scope() reads engagement_server.py's own engagements.db directly
+# (see that module's docstring on the "no cross-import between MCP servers"
+# pattern) -- these tests seed a minimal engagements table by hand rather
+# than importing engagement_server, matching that same isolation.
+
+
+def _seed_engagement(data_dir, engagement_id, scope=None, out_of_scope=None):
+    conn = sqlite3.connect(str(Path(data_dir) / "engagements.db"))
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS engagements (id TEXT PRIMARY KEY, scope TEXT, out_of_scope TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO engagements (id, scope, out_of_scope) VALUES (?, ?, ?)",
+        (engagement_id, json.dumps(scope or []), json.dumps(out_of_scope or [])),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_target_matches_exact_string():
+    assert common._target_matches("10.0.0.5", ["10.0.0.5"])
+    assert not common._target_matches("10.0.0.6", ["10.0.0.5"])
+
+
+def test_target_matches_cidr_containment():
+    assert common._target_matches("10.0.0.5", ["10.0.0.0/24"])
+    assert not common._target_matches("10.0.1.5", ["10.0.0.0/24"])
+
+
+def test_target_matches_domain_suffix():
+    assert common._target_matches("api.example.com", ["example.com"])
+    assert not common._target_matches("evilexample.com", ["example.com"])
+
+
+def test_check_scope_no_engagement_id_is_unenforced(audit_env):
+    """Back-compat: every call site that predates this feature keeps working."""
+    assert audit_env.check_scope(None, "8.8.8.8", "nmap_scan") is None
+
+
+def test_check_scope_unknown_engagement_is_unenforced(audit_env):
+    assert audit_env.check_scope("does-not-exist", "8.8.8.8", "nmap_scan") is None
+
+
+def test_check_scope_in_scope_target_passes(audit_env, tmp_path):
+    _seed_engagement(tmp_path, "eng-1", scope=["10.0.0.0/24"])
+    assert audit_env.check_scope("eng-1", "10.0.0.5", "nmap_scan") is None
+
+
+def test_check_scope_target_outside_declared_scope_blocks(audit_env, tmp_path):
+    _seed_engagement(tmp_path, "eng-1", scope=["10.0.0.0/24"])
+    result = audit_env.check_scope("eng-1", "8.8.8.8", "nmap_scan")
+    assert result is not None
+    assert "[error:out_of_scope]" in result
+
+
+def test_check_scope_explicit_out_of_scope_blocks_with_no_positive_scope(audit_env, tmp_path):
+    _seed_engagement(tmp_path, "eng-1", scope=[], out_of_scope=["10.0.0.9"])
+    result = audit_env.check_scope("eng-1", "10.0.0.9", "nmap_scan")
+    assert result is not None
+    assert "[error:out_of_scope]" in result
+
+
+def test_check_scope_no_scope_declared_allows_anything_not_excluded(audit_env, tmp_path):
+    _seed_engagement(tmp_path, "eng-1", scope=[])
+    assert audit_env.check_scope("eng-1", "8.8.8.8", "nmap_scan") is None
+
+
+def test_check_scope_block_is_audit_logged(audit_env, tmp_path):
+    _seed_engagement(tmp_path, "eng-1", scope=["10.0.0.0/24"])
+    audit_env.check_scope("eng-1", "8.8.8.8", "nmap_scan")
+    conn = audit_env._get_audit_db()
+    row = conn.execute("SELECT * FROM tool_invocations WHERE outcome='blocked_out_of_scope'").fetchone()
+    conn.close()
+    assert row is not None
+    assert row["engagement_id"] == "eng-1"
+    assert "8.8.8.8" in row["args"]
+
+
+def test_check_scope_override_bypasses_block_and_is_flagged_not_silent(audit_env, tmp_path):
+    _seed_engagement(tmp_path, "eng-1", scope=["10.0.0.0/24"])
+    result = audit_env.check_scope(
+        "eng-1", "8.8.8.8", "nmap_scan", override=True, override_reason="client approved expansion"
+    )
+    assert result is None
+    conn = audit_env._get_audit_db()
+    row = conn.execute("SELECT * FROM tool_invocations WHERE outcome='scope_override'").fetchone()
+    conn.close()
+    assert row is not None
+    assert row["engagement_id"] == "eng-1"
+    assert "client approved expansion" in row["detail"]
+
+
+def test_check_scope_fails_open_on_db_error(audit_env, monkeypatch):
+    monkeypatch.setattr(audit_env, "_get_engagement_db", MagicMock(side_effect=RuntimeError("disk full")))
+    assert audit_env.check_scope("eng-1", "8.8.8.8", "nmap_scan") is None
+
+
+def test_check_scope_from_args_reads_the_three_standard_args(audit_env, tmp_path):
+    _seed_engagement(tmp_path, "eng-1", scope=["10.0.0.0/24"])
+    blocked = audit_env.check_scope_from_args({"engagement_id": "eng-1"}, "8.8.8.8", "nmap_scan")
+    assert blocked is not None and "[error:out_of_scope]" in blocked
+
+    overridden = audit_env.check_scope_from_args(
+        {"engagement_id": "eng-1", "override_scope": True, "override_reason": "test"},
+        "8.8.8.8",
+        "nmap_scan",
+    )
+    assert overridden is None
+
+
+def test_exec_in_toolchain_tags_engagement_id_on_every_invocation(audit_env):
+    """Not just scope violations -- every audit row is filterable by
+    project, per Phase A's design (see exec_in_toolchain's docstring)."""
+    with patch.object(audit_env, "_exec_container", return_value="ok"):
+        audit_env.exec_in_toolchain(["nmap", "10.0.0.5"], engagement_id="eng-1")
+    conn = audit_env._get_audit_db()
+    row = conn.execute("SELECT * FROM tool_invocations WHERE binary='nmap'").fetchone()
+    conn.close()
+    assert row["engagement_id"] == "eng-1"

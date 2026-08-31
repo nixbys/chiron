@@ -23,12 +23,12 @@ def tmp_data_dir(tmp_path, monkeypatch):
     yield audit_mod, common_mod
 
 
-def _seed(common_mod, binary="nmap", outcome="ok", ts=None, duration_ms=100, args=None):
+def _seed(common_mod, binary="nmap", outcome="ok", ts=None, duration_ms=100, args=None, engagement_id=None):
     conn = common_mod._get_audit_db()
     try:
         conn.execute(
-            "INSERT INTO tool_invocations (ts, binary, args, mode, duration_ms, outcome, detail) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (ts if ts is not None else time.time(), binary, str(args or [binary, "127.0.0.1"]), "container", duration_ms, outcome, ""),
+            "INSERT INTO tool_invocations (ts, binary, args, mode, duration_ms, outcome, detail, engagement_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts if ts is not None else time.time(), binary, str(args or [binary, "127.0.0.1"]), "container", duration_ms, outcome, "", engagement_id),
         )
         conn.commit()
     finally:
@@ -153,6 +153,60 @@ async def test_module_import_survives_unwritable_data_dir(tmp_path, monkeypatch)
 
     results = await audit_mod.call_tool("audit_list", {})
     assert "[error:" in results[0].text
+
+
+# ---- Engagement scope enforcement (Phase A) ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_audit_list_shows_scope_outcomes(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    _seed(common_mod, binary="nmap_scan", outcome="blocked_out_of_scope", engagement_id="eng-1")
+    _seed(common_mod, binary="nmap_scan", outcome="scope_override", engagement_id="eng-1")
+    results = await mod.call_tool("audit_list", {})
+    text = results[0].text
+    assert "blocked_out_of_scope" in text
+    assert "scope_override" in text
+    assert "eng-1" in text
+
+
+@pytest.mark.asyncio
+async def test_audit_list_filters_by_outcome_scope_override(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    _seed(common_mod, binary="nmap_scan", outcome="ok")
+    _seed(common_mod, binary="nmap_scan", outcome="scope_override", engagement_id="eng-1")
+    results = await mod.call_tool("audit_list", {"outcome": "scope_override"})
+    text = results[0].text
+    assert "scope_override" in text
+    assert len(text.splitlines()) == 3  # header + separator + exactly one data row
+
+
+@pytest.mark.asyncio
+async def test_audit_list_filters_by_engagement_id(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    _seed(common_mod, binary="nmap_scan", engagement_id="eng-1")
+    _seed(common_mod, binary="sqlmap_scan", engagement_id="eng-2")
+    _seed(common_mod, binary="nikto_scan")  # unscoped
+    results = await mod.call_tool("audit_list", {"engagement_id": "eng-1"})
+    text = results[0].text
+    assert "nmap_scan" in text
+    assert "sqlmap_scan" not in text
+    assert "nikto_scan" not in text
+
+
+def test_list_invocations_helper_filters_by_engagement_id(tmp_data_dir):
+    mod, common_mod = tmp_data_dir
+    common_mod._log_invocation("nmap", ["nmap"], "container", 1, "ok", engagement_id="eng-1")
+    common_mod._log_invocation("nmap", ["nmap"], "container", 1, "ok", engagement_id="eng-2")
+    common_mod._log_invocation("nmap", ["nmap"], "container", 1, "ok")
+    assert len(mod._list_invocations(engagement_id="eng-1")) == 1
+    assert len(mod._list_invocations()) == 3
+
+
+def test_new_scope_outcomes_are_in_outcomes_tuple(tmp_data_dir):
+    mod, _ = tmp_data_dir
+    assert "blocked_out_of_scope" in mod._OUTCOMES
+    assert "scope_override" in mod._OUTCOMES
 
 
 def test_concurrent_first_access_does_not_deadlock(tmp_data_dir):

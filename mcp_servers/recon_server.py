@@ -15,7 +15,13 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from mcp_servers.common import exec_in_toolchain, mcp_error, validate_ip
+from mcp_servers.common import (
+    SCOPE_ARG_PROPERTIES,
+    check_scope_from_args,
+    exec_in_toolchain,
+    mcp_error,
+    validate_ip,
+)
 
 server = Server("recon")
 
@@ -43,6 +49,7 @@ TOOLS = [
                     "description": "Max seconds to wait for scan completion",
                     "default": 300,
                 },
+                **SCOPE_ARG_PROPERTIES,
             },
             "required": ["target"],
         },
@@ -63,6 +70,7 @@ TOOLS = [
                     "default": "1-1000",
                 },
                 "rate": {"type": "integer", "description": "Packets per second", "default": 1000},
+                **SCOPE_ARG_PROPERTIES,
             },
             "required": ["target"],
         },
@@ -79,6 +87,7 @@ TOOLS = [
             "properties": {
                 "host": {"type": "string", "description": "IP address or hostname (authorized targets only)"},
                 "port": {"type": "integer", "default": 443},
+                **SCOPE_ARG_PROPERTIES,
             },
             "required": ["host"],
         },
@@ -97,29 +106,37 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         target = arguments["target"]
         if err := validate_ip(target):
             return [TextContent(type="text", text=err)]
+        if err := check_scope_from_args(arguments, target, "nmap_scan"):
+            return [TextContent(type="text", text=err)]
         flags = arguments.get("flags", "-sV -T4 --open").split()
         timeout = int(arguments.get("timeout", 300))
-        result = exec_in_toolchain(["nmap"] + flags + [target], timeout=timeout)
+        result = exec_in_toolchain(["nmap"] + flags + [target], timeout=timeout, engagement_id=arguments.get("engagement_id"))
 
     elif name == "masscan_scan":
         target = arguments["target"]
         if err := validate_ip(target):
+            return [TextContent(type="text", text=err)]
+        if err := check_scope_from_args(arguments, target, "masscan_scan"):
             return [TextContent(type="text", text=err)]
         ports = arguments.get("ports", "1-1000")
         rate = int(arguments.get("rate", 1000))
         result = exec_in_toolchain(
             ["masscan", target, "-p", ports, "--rate", str(rate), "--output-format", "list"],
             timeout=600,
+            engagement_id=arguments.get("engagement_id"),
         )
 
     elif name == "tls_cert_info":
         host = arguments["host"]
         if err := validate_ip(host):
             return [TextContent(type="text", text=err)]
+        if err := check_scope_from_args(arguments, host, "tls_cert_info"):
+            return [TextContent(type="text", text=err)]
         port = int(arguments.get("port", 443))
         result = exec_in_toolchain(
             ["nmap", "-p", str(port), "--script", "ssl-cert", "-Pn", host],
             timeout=60,
+            engagement_id=arguments.get("engagement_id"),
         )
 
     else:

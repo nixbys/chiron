@@ -27,7 +27,14 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from mcp_servers.common import mcp_error, validate_domain, validate_ip, validate_url
+from mcp_servers.common import (
+    SCOPE_ARG_PROPERTIES,
+    check_scope_from_args,
+    mcp_error,
+    validate_domain,
+    validate_ip,
+    validate_url,
+)
 
 server = Server("watchlist")
 
@@ -189,9 +196,9 @@ TOOLS = [
             "properties": {
                 "indicator": {"type": "string"},
                 "kind": {"type": "string", "enum": list(_KINDS)},
-                "engagement_id": {"type": "string"},
                 "notes": {"type": "string", "default": ""},
                 "source": {"type": "string", "default": "manual"},
+                **SCOPE_ARG_PROPERTIES,
             },
             "required": ["indicator", "kind"],
         },
@@ -262,6 +269,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:  # noqa: C
             indicator = arguments["indicator"]
             kind = arguments["kind"]
             if err := _validate_indicator(indicator, kind):
+                result = err
+            elif kind in ("ip", "domain", "url") and (err := check_scope_from_args(arguments, indicator, "watchlist_add")):
                 result = err
             else:
                 try:
