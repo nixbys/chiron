@@ -74,3 +74,8 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # fastembed's dependencies don't resolve on Python 3.15 yet, so the
+      # image stays on 3.14 until they do.
+      - dependency-name: "python"
+        versions: [">=3.15"]
