@@ -15,5 +15,5 @@
 # Only the `dev`-reachable SHA is what CI's checkout (fetch-depth: 0 on the
 # pushed ref) actually scans, so that's the one that matters going forward;
 # the tag-only SHA is kept in case that ref is ever scanned directly.
-36edb229e342b627114ed20b0efee61c0feb5053:tests/mcp_servers/test_transform_server.py:jwt:86
-6a7ce65492a164978d9546ef126d8a9054152107:tests/mcp_servers/test_transform_server.py:jwt:86
+819776066b26605e29a04bbbdafba57119bc5563:tests/mcp_servers/test_transform_server.py:jwt:86
+aa718ec2cae1237d97058501ccf4548055356706:tests/mcp_servers/test_transform_server.py:jwt:86
