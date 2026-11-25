@@ -149,17 +149,6 @@ When route/API behavior changes, check whether a matching CLI script depends on 
 
 `CONTRIBUTING.md` owns the branch model: PRs target `dev`; `main` is the curated user-running branch fast-forwarded from stable `dev` commits. Contributors who accidentally target `main` should retarget the PR base without rebasing.
 
-PR description checks:
-
-- run on `pull_request_target`;
-- check out only base-branch `.github/scripts`;
-- skip bot PRs;
-- require Summary, Linked Issue, Type of Change, duplicate-search checklist, and substantive How to Test content as the hard description gate;
-- classify changed paths as docs-only, tooling, backend/runtime, or UI-sensitive from GitHub's file API while executing only base-branch checker code;
-- treat app-run and screenshot/clip checkboxes as author attestations, require an actual media link/attachment for UI-sensitive changes, and report runtime/visual evidence gaps separately from malformed descriptions;
-- serialize mergeability labeling behind description validation and avoid granting `ready for review` to drafts or changes with outstanding runtime/visual evidence;
-- update a bot comment and reconcile `ready for review`, `needs work`, `needs runtime validation`, and `needs visual evidence` labels where those labels exist.
-
 Issue description checks:
 
 - validate bug or feature sections based on labels;
